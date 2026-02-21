@@ -124,8 +124,9 @@ venv/
 ENV/
 
 images/
-Images/*
-!Images/.gitkeep
+Images/
+Output/
+*.skill
 trpg_data/
 trpg_rule/
 
