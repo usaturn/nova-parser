@@ -12,6 +12,7 @@ dependencies = [
     "google-genai",
     "python-dotenv",
     "pydantic",
+    "pydantic-ai",
 ]
 
 [project.scripts]
