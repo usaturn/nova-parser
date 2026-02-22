@@ -2,7 +2,7 @@
 
 書籍からゲームデータを Gemini で抽出する OCR アプリケーション。
 
-`Images/` ディレクトリに配置した画像を Gemini (`gemini-3.1-pro-preview`) で処理し、Markdown テキストまたは構造化 JSON として `Output/` に出力します。
+`Images/` ディレクトリに配置した画像を Gemini で処理し、Markdown テキストまたは構造化 JSON として `Output/` に出力します。
 
 ## セットアップ
 
@@ -35,11 +35,17 @@ uv run nova-parser
 # 構造化抽出モード（JSON 出力）
 uv run nova-parser --mode structured Images/NAN_067.tif
 
+# ゲームデータ動的抽出モード（JSON 出力）
+uv run nova-parser --mode gamedata Images/TNX_OFC_020.tif
+
+# スキーマ抽出モード（型名・フィールド名のみ、TSV 出力）
+uv run nova-parser --mode schema Images/TNX_OFC_020.tif
+
 # 特定のファイルを指定して処理
 uv run nova-parser path/to/image.png
 ```
 
-`Output/` ディレクトリに各画像に対応する `.md` または `.json` ファイルが出力されます。
+`Output/` ディレクトリに各画像に対応する `.plain.md`、`.structured.json`、`.gamedata.json`、`.schema.tsv` ファイルが出力されます。
 
 ## ドキュメント
 

@@ -104,15 +104,73 @@ def run_structured(images: list[Path]) -> None:
         print(f"完了 -> {output_file}")
 
 
+def run_gamedata(images: list[Path]) -> None:
+    """gamedata モード: 画像からゲームデータを動的に抽出して JSON 出力する。"""
+    import json
+
+    from nova_parser.gamedata import extract_gamedata
+
+    for img in images:
+        output_file = OUTPUT_DIR / f"{img.stem}.gamedata.json"
+        if output_file.exists():
+            print(f"スキップ: {output_file}（既に存在します）")
+            continue
+        print(f"処理中: {img.name} ... ", end="", flush=True)
+        for attempt in range(MAX_RETRIES):
+            try:
+                result = extract_gamedata(img)
+                break
+            except Exception as exc:
+                if not _is_rate_limit_error(exc) or attempt == MAX_RETRIES - 1:
+                    raise
+                wait = INITIAL_WAIT * (2**attempt)
+                print(f"\n  レート制限 - {wait}秒後にリトライ ({attempt + 1}/{MAX_RETRIES}) ... ", end="", flush=True)
+                time.sleep(wait)
+        output_file.write_text(
+            json.dumps(result, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        print(f"完了 -> {output_file}")
+
+
+def run_schema(images: list[Path]) -> None:
+    """schema モード: 画像からゲームデータの型名とフィールド名のみを抽出して TSV 出力する。"""
+    from nova_parser.gamedata import extract_schema
+
+    for img in images:
+        output_file = OUTPUT_DIR / f"{img.stem}.schema.tsv"
+        if output_file.exists():
+            print(f"スキップ: {output_file}（既に存在します）")
+            continue
+        print(f"処理中: {img.name} ... ", end="", flush=True)
+        for attempt in range(MAX_RETRIES):
+            try:
+                result = extract_schema(img)
+                break
+            except Exception as exc:
+                if not _is_rate_limit_error(exc) or attempt == MAX_RETRIES - 1:
+                    raise
+                wait = INITIAL_WAIT * (2**attempt)
+                print(f"\n  レート制限 - {wait}秒後にリトライ ({attempt + 1}/{MAX_RETRIES}) ... ", end="", flush=True)
+                time.sleep(wait)
+        lines = []
+        for t in result.get("types", []):
+            fields = [t["type_name"], *t["fields"]]
+            lines.append("\t".join(fields))
+        output_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        print(f"完了 -> {output_file}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="画像ファイルを Gemini で OCR / 構造化抽出する。",
     )
     parser.add_argument(
         "--mode",
-        choices=["plain", "structured"],
+        choices=["plain", "structured", "gamedata", "schema"],
         default="plain",
-        help="出力モード: plain=Markdown OCR, structured=JSON 構造化抽出（デフォルト: plain）",
+        help="出力モード: plain=Markdown OCR, structured=JSON 構造化抽出, "
+        "gamedata=動的ゲームデータ抽出, schema=型名・フィールド名のみ抽出（デフォルト: plain）",
     )
     parser.add_argument(
         "files",
@@ -133,8 +191,12 @@ def main():
 
     if args.mode == "plain":
         run_plain(images)
-    else:
+    elif args.mode == "structured":
         run_structured(images)
+    elif args.mode == "gamedata":
+        run_gamedata(images)
+    else:
+        run_schema(images)
 
     print(f"\n全ての結果を {OUTPUT_DIR}/ に保存しました。")
 
