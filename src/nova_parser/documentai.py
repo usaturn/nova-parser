@@ -61,7 +61,10 @@ def ocr_with_documentai(image_path: Path) -> str:
     )
 
     result = client.process_document(request=request)
-    return result.document.text
+    text = result.document.text
+    # Document AI は「N◎VA」を「NOVA」として認識するため補正する
+    text = text.replace("NOVA", "N◎VA")
+    return text
 
 
 def extract_gamedata_from_text(ocr_text: str) -> dict:
