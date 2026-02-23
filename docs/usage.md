@@ -279,6 +279,78 @@ gcloud auth application-default login
 
 該当するゲームデータがない画像の場合、出力ファイルは空になります。
 
+#### Document AI OCR レスポンスの出力形式
+
+Document AI の OCR プロセッサが返すレスポンス (`Document`) は、テキストを複数の粒度で構造化して提供します。nova-parser では現在 `document.text`（プレーンテキスト全文）のみを使用していますが、以下のデータも取得可能です。
+
+##### トップレベル構造
+
+| フィールド | 型 | 説明 |
+|---|---|---|
+| `text` | `str` | ページ全体の OCR テキスト（改行含む） |
+| `pages` | `list[Page]` | ページごとの詳細情報（画像1枚につき1ページ） |
+| `mime_type` | `str` | 入力ドキュメントの MIME タイプ |
+| `entities` | `list[Entity]` | 抽出されたエンティティ（OCR プロセッサでは空、カスタムプロセッサで使用） |
+| `document_layout` | `DocumentLayout` | レイアウト解析結果（Layout Parser プロセッサで使用） |
+| `chunked_document` | `ChunkedDocument` | チャンク分割結果（Layout Parser プロセッサで使用） |
+
+##### Page の階層構造
+
+各ページは以下の4階層でテキスト要素を保持します。上位から下位に向かって粒度が細かくなります。
+
+| 階層 | フィールド | 説明 | 実測件数（NAN_067.tif） |
+|---|---|---|---|
+| Block | `page.blocks` | 意味的にまとまったテキストブロック | 41 |
+| Paragraph | `page.paragraphs` | 段落単位のテキスト | 64 |
+| Line | `page.lines` | 行単位のテキスト | 140 |
+| Token | `page.tokens` | 単語（形態素）単位のテキスト | 935 |
+
+各要素は共通の `Layout` オブジェクトを持ちます:
+
+| Layout のフィールド | 型 | 説明 |
+|---|---|---|
+| `text_anchor.text_segments` | `list[TextSegment]` | `document.text` 内の開始・終了インデックス |
+| `confidence` | `float` | OCR の信頼度（0.0〜1.0） |
+| `bounding_poly.normalized_vertices` | `list[NormalizedVertex]` | 画像上の正規化座標（左上原点、0.0〜1.0） |
+| `orientation` | `int` | テキストの向き（1=横書き） |
+
+##### Token の追加情報
+
+| フィールド | 型 | 説明 |
+|---|---|---|
+| `detected_break.type_` | `int` | 後続の区切り種別（1=スペース、2=改行） |
+| `detected_languages` | `list[DetectedLanguage]` | 検出された言語（`language_code`, `confidence`） |
+| `style_info` | `StyleInfo` | フォント情報（`font_size`, `bold`, `font_type`） |
+
+##### Page のメタ情報
+
+| フィールド | 型 | 説明 | NAN_067.tif での値 |
+|---|---|---|---|
+| `dimension` | `Dimension` | 画像サイズ（幅・高さ・単位） | 1659x2409 pixels |
+| `detected_languages` | `list[DetectedLanguage]` | ページ全体の検出言語 | ja: 0.907, en: 0.022, zh: 0.018 |
+| `image_quality_scores` | `ImageQualityScores` | 画像品質スコア | — |
+
+##### OCR プロセッサで空になるフィールド
+
+以下は OCR プロセッサ (`OCR_PROCESSOR`) では値が返されません。カスタムプロセッサや専用プロセッサで利用可能です。
+
+| フィールド | 利用可能なプロセッサ |
+|---|---|
+| `page.tables` | Form Parser、Table プロセッサ |
+| `page.form_fields` | Form Parser プロセッサ |
+| `page.visual_elements` | 特殊プロセッサ |
+| `document.entities` | Custom Extraction プロセッサ |
+| `document.document_layout` | Layout Parser プロセッサ |
+| `document.chunked_document` | Layout Parser プロセッサ |
+
+##### 後処理
+
+Document AI の OCR はプレーンテキスト認識のため、特殊文字が標準文字に置き換えられることがあります。nova-parser では以下の後処理を行っています:
+
+| OCR 出力 | 補正後 | 理由 |
+|---|---|---|
+| `NOVA` | `N◎VA` | ゲームタイトル「トーキョーN◎VA」の特殊表記 |
+
 ## エラー処理
 
 | 状況 | 動作 |
