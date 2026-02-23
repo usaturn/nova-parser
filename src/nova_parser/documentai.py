@@ -44,10 +44,27 @@ def get_processor_name() -> str:
     return name
 
 
+def _get_documentai_client() -> documentai.DocumentProcessorServiceClient:
+    """Document AI クライアントを初期化する（OAuth2 / ADC 認証）。
+
+    GOOGLE_APPLICATION_CREDENTIALS が存在しないファイルを指している場合は
+    一時的に無視して gcloud ADC にフォールバックする。
+    """
+    creds_file = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    if creds_file and not Path(creds_file).exists():
+        saved = os.environ.pop("GOOGLE_APPLICATION_CREDENTIALS")
+        try:
+            return documentai.DocumentProcessorServiceClient()
+        except Exception:
+            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = saved
+            raise
+    return documentai.DocumentProcessorServiceClient()
+
+
 def ocr_with_documentai(image_path: Path) -> str:
     """Document AI で画像を OCR し、テキストを返す。"""
     processor_name = get_processor_name()
-    client = documentai.DocumentProcessorServiceClient()
+    client = _get_documentai_client()
     mime_type = MIME_TYPES[image_path.suffix.lower()]
     image_content = image_path.read_bytes()
 
