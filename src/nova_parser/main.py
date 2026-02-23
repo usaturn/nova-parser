@@ -161,16 +161,64 @@ def run_schema(images: list[Path]) -> None:
         print(f"完了 -> {output_file}")
 
 
+def _gamedata_to_tsv(result: dict) -> str:
+    """ゲームデータ dict を同種パターンごとの TSV 文字列に変換する。"""
+    blocks: list[str] = []
+    for t in result.get("types", []):
+        type_name = t["type_name"]
+        items = t.get("items", [])
+        if not items:
+            continue
+        # 全アイテムからフィールド名を収集（出現順を保持）
+        field_names: list[str] = []
+        seen: set[str] = set()
+        for item in items:
+            for key in item:
+                if key not in seen:
+                    field_names.append(key)
+                    seen.add(key)
+        header = f"## {type_name}\n" + "\t".join(field_names)
+        rows = ["\t".join(str(item.get(f, "")) for f in field_names) for item in items]
+        blocks.append(header + "\n" + "\n".join(rows))
+    return "\n\n".join(blocks) + "\n" if blocks else ""
+
+
+def run_docai(images: list[Path]) -> None:
+    """docai モード: Document AI で OCR → Gemini で構造化抽出 → TSV 出力。"""
+    from nova_parser.documentai import extract_docai
+
+    for img in images:
+        output_file = OUTPUT_DIR / f"{img.stem}.docai.tsv"
+        if output_file.exists():
+            print(f"スキップ: {output_file}（既に存在します）")
+            continue
+        print(f"処理中: {img.name} ... ", end="", flush=True)
+        for attempt in range(MAX_RETRIES):
+            try:
+                result = extract_docai(img)
+                break
+            except Exception as exc:
+                if not _is_rate_limit_error(exc) or attempt == MAX_RETRIES - 1:
+                    raise
+                wait = INITIAL_WAIT * (2**attempt)
+                print(f"\n  レート制限 - {wait}秒後にリトライ ({attempt + 1}/{MAX_RETRIES}) ... ", end="", flush=True)
+                time.sleep(wait)
+        tsv_text = _gamedata_to_tsv(result)
+        output_file.write_text(tsv_text, encoding="utf-8")
+        print(f"完了 -> {output_file}")
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="画像ファイルを Gemini で OCR / 構造化抽出する。",
+        description="画像ファイルを Gemini / Document AI で OCR / 構造化抽出する。",
     )
     parser.add_argument(
         "--mode",
-        choices=["plain", "structured", "gamedata", "schema"],
+        choices=["plain", "structured", "gamedata", "schema", "docai"],
         default="plain",
         help="出力モード: plain=Markdown OCR, structured=JSON 構造化抽出, "
-        "gamedata=動的ゲームデータ抽出, schema=型名・フィールド名のみ抽出（デフォルト: plain）",
+        "gamedata=動的ゲームデータ抽出, schema=型名・フィールド名のみ抽出, "
+        "docai=Document AI OCR+構造化TSV（デフォルト: plain）",
     )
     parser.add_argument(
         "files",
@@ -195,6 +243,8 @@ def main():
         run_structured(images)
     elif args.mode == "gamedata":
         run_gamedata(images)
+    elif args.mode == "docai":
+        run_docai(images)
     else:
         run_schema(images)
 

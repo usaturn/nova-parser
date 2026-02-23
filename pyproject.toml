@@ -13,6 +13,7 @@ dependencies = [
     "python-dotenv",
     "pydantic",
     "pydantic-ai",
+    "google-cloud-documentai>=3.10.0",
 ]
 
 [project.scripts]

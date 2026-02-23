@@ -1,8 +1,8 @@
 # nova-parser
 
-書籍からゲームデータを Gemini で抽出する OCR アプリケーション。
+書籍からゲームデータを Gemini / Document AI で抽出する OCR アプリケーション。
 
-`Images/` ディレクトリに配置した画像を Gemini で処理し、Markdown テキストまたは構造化 JSON として `Output/` に出力します。
+`Images/` ディレクトリに配置した画像を Gemini または Document AI で処理し、Markdown テキスト、構造化 JSON、TSV として `Output/` に出力します。
 
 ## セットアップ
 
@@ -25,6 +25,7 @@ uv sync
 |--------|------|------|
 | `GOOGLE_GENAI_USE_VERTEXAI` | `true` に設定 | Yes |
 | `VERTEX_AI_API_KEY` | Vertex AI API キー | Yes |
+| `DOCUMENT_AI_PROCESSOR` | Document AI OCR プロセッサのリソース名 | docai モードのみ |
 
 ## クイックスタート
 
@@ -41,11 +42,14 @@ uv run nova-parser --mode gamedata Images/TNX_OFC_020.tif
 # スキーマ抽出モード（型名・フィールド名のみ、TSV 出力）
 uv run nova-parser --mode schema Images/TNX_OFC_020.tif
 
+# Document AI OCR + 構造化 TSV 出力
+uv run nova-parser --mode docai Images/NAN_067.tif
+
 # 特定のファイルを指定して処理
 uv run nova-parser path/to/image.png
 ```
 
-`Output/` ディレクトリに各画像に対応する `.plain.md`、`.structured.json`、`.gamedata.json`、`.schema.tsv` ファイルが出力されます。
+`Output/` ディレクトリに各画像に対応する `.plain.md`、`.structured.json`、`.gamedata.json`、`.schema.tsv`、`.docai.tsv` ファイルが出力されます。
 
 ## ドキュメント
 
