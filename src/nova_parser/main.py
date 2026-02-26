@@ -183,6 +183,90 @@ def _gamedata_to_tsv(result: dict) -> str:
     return "\n\n".join(blocks) + "\n" if blocks else ""
 
 
+def _structured_to_tsv(extraction: "PageExtraction") -> str:
+    """PageExtraction を TSV 文字列に変換する。"""
+    blocks: list[str] = []
+
+    if extraction.organizations:
+        header = "## 組織\nname\tclassification\tsub_organizations\theadquarters\tdescription"
+        rows = []
+        for o in extraction.organizations:
+            rows.append(
+                "\t".join([
+                    o.name,
+                    o.classification,
+                    ", ".join(o.sub_organizations),
+                    o.headquarters,
+                    o.description,
+                ])
+            )
+        blocks.append(header + "\n" + "\n".join(rows))
+
+    if extraction.skills:
+        fields = [
+            "name", "ruby", "prerequisite", "max_level", "timing",
+            "target", "range", "target_value", "opposed", "description",
+        ]
+        header = "## 技能\n" + "\t".join(fields)
+        rows = [
+            "\t".join(str(getattr(s, f) if getattr(s, f) is not None else "") for f in fields)
+            for s in extraction.skills
+        ]
+        blocks.append(header + "\n" + "\n".join(rows))
+
+    if extraction.equipment:
+        fields = [
+            "name", "ruby", "category", "type", "purchase", "concealment",
+            "defense_s", "defense_p", "defense_i", "restriction",
+            "electric_restriction", "slot", "description",
+        ]
+        header = "## 装備\n" + "\t".join(fields)
+        rows = [
+            "\t".join(str(getattr(e, f) if getattr(e, f) is not None else "") for f in fields)
+            for e in extraction.equipment
+        ]
+        blocks.append(header + "\n" + "\n".join(rows))
+
+    if extraction.rules:
+        header = "## ルール\ndepth\ttitle\tbody"
+        rows: list[str] = []
+
+        def _flatten_rules(rules: list, depth: int = 0) -> None:
+            for r in rules:
+                rows.append(f"{depth}\t{r.title}\t{r.body}")
+                _flatten_rules(r.sub_sections, depth + 1)
+
+        _flatten_rules(extraction.rules)
+        blocks.append(header + "\n" + "\n".join(rows))
+
+    return "\n\n".join(blocks) + "\n" if blocks else ""
+
+
+def run_structured_tsv(images: list[Path]) -> None:
+    """structured_tsv モード: 画像からゲームデータを構造化抽出して TSV 出力する。"""
+    from nova_parser.structured import extract_structured
+
+    for img in images:
+        output_file = OUTPUT_DIR / f"{img.stem}.structured.tsv"
+        if output_file.exists():
+            print(f"スキップ: {output_file}（既に存在します）")
+            continue
+        print(f"処理中: {img.name} ... ", end="", flush=True)
+        for attempt in range(MAX_RETRIES):
+            try:
+                extraction = extract_structured(img)
+                break
+            except Exception as exc:
+                if not _is_rate_limit_error(exc) or attempt == MAX_RETRIES - 1:
+                    raise
+                wait = INITIAL_WAIT * (2**attempt)
+                print(f"\n  レート制限 - {wait}秒後にリトライ ({attempt + 1}/{MAX_RETRIES}) ... ", end="", flush=True)
+                time.sleep(wait)
+        tsv_text = _structured_to_tsv(extraction)
+        output_file.write_text(tsv_text, encoding="utf-8")
+        print(f"完了 -> {output_file}")
+
+
 def run_docai(images: list[Path]) -> None:
     """docai モード: Document AI で OCR → Gemini で構造化抽出 → TSV 出力。"""
     from nova_parser.documentai import extract_docai
@@ -214,11 +298,11 @@ def main():
     )
     parser.add_argument(
         "--mode",
-        choices=["plain", "structured", "gamedata", "schema", "docai"],
+        choices=["plain", "structured", "structured_tsv", "gamedata", "schema", "docai"],
         default="plain",
         help="出力モード: plain=Markdown OCR, structured=JSON 構造化抽出, "
-        "gamedata=動的ゲームデータ抽出, schema=型名・フィールド名のみ抽出, "
-        "docai=Document AI OCR+構造化TSV（デフォルト: plain）",
+        "structured_tsv=構造化抽出TSV出力, gamedata=動的ゲームデータ抽出, "
+        "schema=型名・フィールド名のみ抽出, docai=Document AI OCR+構造化TSV（デフォルト: plain）",
     )
     parser.add_argument(
         "files",
@@ -241,6 +325,8 @@ def main():
         run_plain(images)
     elif args.mode == "structured":
         run_structured(images)
+    elif args.mode == "structured_tsv":
+        run_structured_tsv(images)
     elif args.mode == "gamedata":
         run_gamedata(images)
     elif args.mode == "docai":

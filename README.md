@@ -36,6 +36,9 @@ uv run nova-parser
 # 構造化抽出モード（JSON 出力）
 uv run nova-parser --mode structured Images/NAN_067.tif
 
+# 構造化抽出モード（TSV 出力）
+uv run nova-parser --mode structured_tsv Images/NAN_067.tif
+
 # ゲームデータ動的抽出モード（JSON 出力）
 uv run nova-parser --mode gamedata Images/TNX_OFC_020.tif
 
@@ -49,11 +52,12 @@ uv run nova-parser --mode docai Images/NAN_067.tif
 uv run nova-parser path/to/image.png
 ```
 
-`Output/` ディレクトリに各画像に対応する `.plain.md`、`.structured.json`、`.gamedata.json`、`.schema.tsv`、`.docai.tsv` ファイルが出力されます。
+`Output/` ディレクトリに各画像に対応する `.plain.md`、`.structured.json`、`.structured.tsv`、`.gamedata.json`、`.schema.tsv`、`.docai.tsv` ファイルが出力されます。
 
 ## ドキュメント
 
 - [使い方の詳細](docs/usage.md) — CLI オプション、サポート形式、出力仕様
+- [MCP サーバー設定](docs/mcp-servers.md) — Claude Code 用の外部ドキュメント検索設定
 
 ## 開発
 

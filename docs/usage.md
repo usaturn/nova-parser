@@ -13,12 +13,12 @@ nova-parser
 ## CLI 引数
 
 ```
-nova-parser [--mode {plain,structured,gamedata,schema,docai}] [files ...]
+nova-parser [--mode {plain,structured,structured_tsv,gamedata,schema,docai}] [files ...]
 ```
 
 | 引数/オプション | 説明 | デフォルト |
 |------|------|------|
-| `--mode` | 出力モード（`plain`、`structured`、`gamedata`、`schema`、`docai`） | `plain` |
+| `--mode` | 出力モード（`plain`、`structured`、`structured_tsv`、`gamedata`、`schema`、`docai`） | `plain` |
 | `files` | 処理する画像ファイルのパス（省略可、複数指定可） | — |
 
 - 引数を省略すると、`Images/` ディレクトリ内のサポート対象画像を全て処理します
@@ -29,13 +29,16 @@ nova-parser [--mode {plain,structured,gamedata,schema,docai}] [files ...]
 uv run nova-parser
 
 # 構造化抽出モード（JSON 出力）
-uv run nova-parser --mode structured
+rv run nova-parser --mode structured
 
 # 特定のファイルを指定
 uv run nova-parser image1.png
 
 # 特定のファイルを構造化抽出
 uv run nova-parser --mode structured image1.png image2.tif
+
+# 構造化抽出 TSV 出力 ※未完
+uv run nova-parser --mode structured_tsv image1.png
 
 # ゲームデータ動的抽出
 uv run nova-parser --mode gamedata image1.png
@@ -135,6 +138,48 @@ Pydantic AI を使い、画像からゲームデータを構造化抽出して J
   "rules": []
 }
 ```
+
+### structured_tsv モード
+
+structured モードと同じ Pydantic AI による構造化抽出を行い、結果を JSON ではなく TSV（タブ区切り）で出力します。スプレッドシートへの取り込みに適しています。
+
+| 項目 | 内容 |
+|------|------|
+| 出力先 | `Output/` ディレクトリ（自動作成） |
+| ファイル名 | `{元のファイル名（拡張子なし）}.structured.tsv` |
+| エンコーディング | UTF-8 |
+| フォーマット | TSV（タブ区切り、カテゴリごとにセクション分割） |
+
+例:
+
+- `Images/NAN_067.tif` → `Output/NAN_067.structured.tsv`
+
+#### 出力形式
+
+カテゴリごとに `## カテゴリ名` ヘッダーで区切られ、各セクションにフィールド名のヘッダー行とデータ行が続きます。該当データがないカテゴリはスキップされます。
+
+```
+## 組織
+name	classification	sub_organizations	headquarters	description
+組織名	企業	下部組織A, 下部組織B	東京	組織の解説テキスト...
+
+## 技能
+name	ruby	prerequisite	max_level	timing	target	range	target_value	opposed	description
+技能名	ぎのうめい	前提技能名	3	メジャー	単体	10m	対決	回避	技能の解説テキスト...
+
+## 装備
+name	ruby	category	type	purchase	concealment	defense_s	defense_p	defense_i	restriction	electric_restriction	slot	description
+装備名	そうびめい	カテゴリ	ボディアーマー	-/25	3/-1	3	4	5	0	20	スーツ	装備の解説テキスト...
+
+## ルール
+depth	title	body
+0	セクション見出し	本文テキスト...
+1	サブセクション見出し	サブセクション本文...
+```
+
+- `sub_organizations` は `, ` 区切りで結合されます
+- `rules` は再帰構造（`sub_sections`）を `depth` 列でフラット化して出力します（0 が最上位）
+- `null` 値は空文字として出力されます
 
 ### gamedata モード
 

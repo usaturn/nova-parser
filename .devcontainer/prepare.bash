@@ -20,9 +20,20 @@ export PATH="$HOME/.local/bin:$PATH"
 if command -v claude >/dev/null 2>&1; then
 	claude mcp add -s project context7 -- npx -y @upstash/context7-mcp || \
 		echo "Warning: Failed to register context7 MCP."
+
+	if [ -n "${GOOGLE_DEV_KNOWLEDGE_API_KEY:-}" ]; then
+		claude mcp add -s project google-dev-knowledge \
+			--transport http \
+			https://developerknowledge.googleapis.com/mcp \
+			--header "X-Goog-Api-Key: ${GOOGLE_DEV_KNOWLEDGE_API_KEY}" || \
+			echo "Warning: Failed to register google-dev-knowledge MCP."
+	else
+		echo "Warning: GOOGLE_DEV_KNOWLEDGE_API_KEY not set. Skipping google-dev-knowledge MCP registration."
+	fi
 else
 	echo "Warning: claude command not found. Skipping MCP registration."
 fi
 
-echo 'alias ccd="claude --allow-dangerously-skip-permissions"' >> ${HOME}/.bashrc
+echo 'alias ccd="claude --allow-dangerously-skip-permissions"' >> ${HOME}/.zprofile
+echo 'alias ccd="claude --allow-dangerously-skip-permissions"' >> ${HOME}/.zshrc
 
