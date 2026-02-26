@@ -28,4 +28,4 @@ uv run task ruff
 
 `nova-parser` は Python 3.14 のプロジェクトで、パッケージマネージャは `uv`。エントリポイントは `uv run nova-parser`（`pyproject.toml` の `[project.scripts]` で定義）。devcontainer は日本語ロケールの設定と Claude Code のインストールを行う。
 
-`Images/` ディレクトリ内の画像を Gemini で OCR するアプリケーション。`google-genai` SDK を使用し、Vertex AI Express モード（API キー認証）で動作する。環境変数は `.env` で管理（`GOOGLE_GENAI_USE_VERTEXAI`, `VERTEX_AI_API_KEY` 等）。
+画像から Gemini および Document AI を使って OCR・構造化抽出を行うアプリケーション。6つのモード（`plain`, `structured`, `structured_tsv`, `gamedata`, `schema`, `docai`）を提供する。`google-genai` SDK を使用し、Vertex AI Express モード（API キー認証）で動作する。環境変数は `.env` で管理（`GOOGLE_GENAI_USE_VERTEXAI`, `VERTEX_AI_API_KEY` 等）。

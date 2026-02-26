@@ -29,7 +29,7 @@ nova-parser [--mode {plain,structured,structured_tsv,gamedata,schema,docai}] [fi
 uv run nova-parser
 
 # 構造化抽出モード（JSON 出力）
-rv run nova-parser --mode structured
+uv run nova-parser --mode structured
 
 # 特定のファイルを指定
 uv run nova-parser image1.png
@@ -37,7 +37,7 @@ uv run nova-parser image1.png
 # 特定のファイルを構造化抽出
 uv run nova-parser --mode structured image1.png image2.tif
 
-# 構造化抽出 TSV 出力 ※未完
+# 構造化抽出 TSV 出力
 uv run nova-parser --mode structured_tsv image1.png
 
 # ゲームデータ動的抽出
