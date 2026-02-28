@@ -13,12 +13,12 @@ nova-parser
 ## CLI 引数
 
 ```
-nova-parser [--mode {plain,structured,structured_tsv,gamedata,schema,docai}] [files ...]
+nova-parser [--mode {plain,structured,structured_tsv,gamedata,schema,docai,docai2}] [files ...]
 ```
 
 | 引数/オプション | 説明 | デフォルト |
 |------|------|------|
-| `--mode` | 出力モード（`plain`、`structured`、`structured_tsv`、`gamedata`、`schema`、`docai`） | `plain` |
+| `--mode` | 出力モード（`plain`、`structured`、`structured_tsv`、`gamedata`、`schema`、`docai`、`docai2`） | `plain` |
 | `files` | 処理する画像ファイルのパス（省略可、複数指定可） | — |
 
 - 引数を省略すると、`Images/` ディレクトリ内のサポート対象画像を全て処理します
@@ -48,6 +48,9 @@ uv run nova-parser --mode schema image1.png
 
 # Document AI OCR + 構造化 TSV 出力
 uv run nova-parser --mode docai image1.png
+
+# Document AI OCR + 改良構造化 TSV 出力（None 修正・プロンプト改良版）
+uv run nova-parser --mode docai2 image1.png
 ```
 
 ## サポート画像形式
@@ -284,23 +287,16 @@ Google Cloud Document AI で OCR を行い、その結果を Gemini で構造化
 
 #### 前提条件
 
-- Google Cloud のアプリケーションデフォルト認証（ADC）が設定されていること
+- Document AI の認証が設定されていること（後述の「[Document AI 認証セットアップ](#document-ai-認証セットアップ)」を参照）
 - Document AI API が有効なプロジェクトに OCR プロセッサが作成済みであること
 - `.env` に `DOCUMENT_AI_PROCESSOR` が設定されていること
-
-```bash
-# ADC の設定（初回のみ）
-gcloud auth application-default login
-
-# OCR プロセッサの作成（初回のみ、Google Cloud Console からも可能）
-# 作成後、プロセッサのリソース名を .env に設定する
-```
 
 #### 環境変数
 
 | 変数名 | 説明 | 例 |
 |--------|------|------|
 | `DOCUMENT_AI_PROCESSOR` | OCR プロセッサのリソース名 | `projects/123456/locations/us/processors/abc123` |
+| `GOOGLE_APPLICATION_CREDENTIALS` | サービスアカウントキーファイルのパス | `.secrets/docai-sa.json` |
 
 #### 処理フロー
 
@@ -395,6 +391,103 @@ Document AI の OCR はプレーンテキスト認識のため、特殊文字が
 | OCR 出力 | 補正後 | 理由 |
 |---|---|---|
 | `NOVA` | `N◎VA` | ゲームタイトル「トーキョーN◎VA」の特殊表記 |
+
+### docai2 モード
+
+docai モードの改良版です。同じ Document AI OCR + Gemini 構造化抽出パイプラインを使用しますが、以下の点を改善しています:
+
+- **None 文字列問題の修正**: 値が存在しないフィールドが `None` ではなく空文字列 `""` で出力される
+- **プロンプトの改良**: フィールド名に画像の表見出しを忠実に使用する指示を追加
+- **より多くのデータ型パターン**: 白兵武器、射撃武器、ニューラルウェア等の型パターンをプロンプトに追加
+
+| 項目 | 内容 |
+|------|------|
+| OCR | Google Cloud Document AI（OCR プロセッサ） |
+| 構造化抽出 | `gemini-3-flash-preview` |
+| 出力先 | `Output/` ディレクトリ（自動作成） |
+| ファイル名 | `{元のファイル名（拡張子なし）}.docai2.tsv` |
+| エンコーディング | UTF-8 |
+| フォーマット | TSV（タブ区切り、パターン種別ごとにセクション分割） |
+
+例:
+
+- `Images/NAN_067.tif` → `Output/NAN_067.docai2.tsv`
+
+#### 前提条件
+
+docai モードと同じ前提条件が必要です（「[Document AI 認証セットアップ](#document-ai-認証セットアップ)」を参照）。
+
+#### docai モードとの違い
+
+| 項目 | docai | docai2 |
+|------|-------|--------|
+| 出力ファイル名 | `.docai.tsv` | `.docai2.tsv` |
+| None 処理 | `str(None)` → `"None"` が出力される | `None` → 空文字列 `""` |
+| プロンプト | 基本的な型パターン例 | 改良版（None 排除指示、列見出し忠実使用指示を追加） |
+| 型パターン例 | スキル、防具、サービス、ニューラルウェア | スキル、防具、サービス/ソーシャル、組織、白兵武器、射撃武器、ニューラルウェア |
+
+## Document AI 認証セットアップ
+
+`docai` / `docai2` モードは Google Cloud Document AI を使用するため、サービスアカウント認証が必要です。Document AI は API キー認証に対応していないため、サービスアカウントキーファイルを使用します。
+
+### 手順
+
+#### 1. サービスアカウントの作成と権限付与
+
+[Google Cloud Console](https://console.cloud.google.com/iam-admin/serviceaccounts) でサービスアカウントを作成し、以下のロールを付与します:
+
+| ロール | 用途 |
+|--------|------|
+| `roles/documentai.apiUser` | Document AI プロセッサの呼び出し |
+
+#### 2. JSON キーファイルのダウンロード
+
+Google Cloud Console のサービスアカウント画面から「キーを追加」→「新しいキーを作成」→「JSON」を選択してダウンロードします。
+
+#### 3. キーファイルの配置
+
+ダウンロードした JSON ファイルをプロジェクト内の `.secrets/` ディレクトリに配置します:
+
+```bash
+mkdir -p .secrets
+mv ~/Downloads/your-key-file.json .secrets/docai-sa.json
+```
+
+> **重要**: `.secrets/` ディレクトリは `.gitignore` に追加してキーファイルをリポジトリにコミットしないようにしてください。
+>
+> ```bash
+> echo '.secrets/' >> .gitignore
+> ```
+
+#### 4. `.env` への設定追加
+
+`.env` に以下の 2 つの変数を設定します:
+
+```env
+# Document AI プロセッサのリソース名
+DOCUMENT_AI_PROCESSOR=projects/PROJECT_NUMBER/locations/LOCATION/processors/PROCESSOR_ID
+
+# サービスアカウントキーファイルのパス
+GOOGLE_APPLICATION_CREDENTIALS=/workspaces/nova-parser/.secrets/docai-sa.json
+```
+
+`DOCUMENT_AI_PROCESSOR` の値は Google Cloud Console の Document AI プロセッサ詳細画面で確認できます（形式: `projects/{数値}/locations/{us|eu}/processors/{ID}`）。
+
+#### 5. 動作確認
+
+```bash
+uv run nova-parser --mode docai2 Images/sample.tif
+```
+
+正常に動作すると `Output/sample.docai2.tsv` が生成されます。
+
+### 認証エラーが発生する場合
+
+| エラー | 原因 | 対処 |
+|--------|------|------|
+| `DefaultCredentialsError` | `GOOGLE_APPLICATION_CREDENTIALS` 未設定またはファイルが存在しない | `.env` のパスとファイルの存在を確認 |
+| `403 Permission denied` | サービスアカウントに `roles/documentai.apiUser` が付与されていない | IAM でロールを追加 |
+| `404 Processor not found` | `DOCUMENT_AI_PROCESSOR` のリソース名が誤っている | Console でプロセッサ名を再確認 |
 
 ## エラー処理
 

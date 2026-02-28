@@ -19,17 +19,9 @@
 		"${localWorkspaceFolder}/.env"
 	],
   "features": {
-    "ghcr.io/devcontainers/features/node:1": {
-      "nodeGypDependencies": true,
-      "installYarnUsingApt": true,
-      "version": "lts",
-      "pnpmVersion": "latest",
-      "nvmVersion": "latest"
-    },
+    "ghcr.io/devcontainers/features/node:1": {},
     "ghcr.io/jungaretti/features/vim:1": {},
-    "ghcr.io/devcontainers-extra/features/uv:1": {
-      "version": "latest"
-		}
+    "ghcr.io/devcontainers-extra/features/uv:1": {}
 	},
 
 	// Features to add to the dev container. More info: https://containers.dev/features.

@@ -2,10 +2,14 @@ import argparse
 import sys
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from dotenv import load_dotenv
 
 from nova_parser.ocr import MIME_TYPES
+
+if TYPE_CHECKING:
+    from nova_parser.models import PageExtraction
 
 load_dotenv()
 
@@ -192,20 +196,30 @@ def _structured_to_tsv(extraction: "PageExtraction") -> str:
         rows = []
         for o in extraction.organizations:
             rows.append(
-                "\t".join([
-                    o.name,
-                    o.classification,
-                    ", ".join(o.sub_organizations),
-                    o.headquarters,
-                    o.description,
-                ])
+                "\t".join(
+                    [
+                        o.name,
+                        o.classification,
+                        ", ".join(o.sub_organizations),
+                        o.headquarters,
+                        o.description,
+                    ]
+                )
             )
         blocks.append(header + "\n" + "\n".join(rows))
 
     if extraction.skills:
         fields = [
-            "name", "ruby", "prerequisite", "max_level", "timing",
-            "target", "range", "target_value", "opposed", "description",
+            "name",
+            "ruby",
+            "prerequisite",
+            "max_level",
+            "timing",
+            "target",
+            "range",
+            "target_value",
+            "opposed",
+            "description",
         ]
         header = "## 技能\n" + "\t".join(fields)
         rows = [
@@ -216,9 +230,19 @@ def _structured_to_tsv(extraction: "PageExtraction") -> str:
 
     if extraction.equipment:
         fields = [
-            "name", "ruby", "category", "type", "purchase", "concealment",
-            "defense_s", "defense_p", "defense_i", "restriction",
-            "electric_restriction", "slot", "description",
+            "name",
+            "ruby",
+            "category",
+            "type",
+            "purchase",
+            "concealment",
+            "defense_s",
+            "defense_p",
+            "defense_i",
+            "restriction",
+            "electric_restriction",
+            "slot",
+            "description",
         ]
         header = "## 装備\n" + "\t".join(fields)
         rows = [
@@ -292,17 +316,42 @@ def run_docai(images: list[Path]) -> None:
         print(f"完了 -> {output_file}")
 
 
+def run_docai2(images: list[Path]) -> None:
+    """docai2 モード: Document AI OCR → Gemini 改良構造化抽出 → TSV 出力。"""
+    from nova_parser.docai2 import extract_docai2
+
+    for img in images:
+        output_file = OUTPUT_DIR / f"{img.stem}.docai2.tsv"
+        if output_file.exists():
+            print(f"スキップ: {output_file}（既に存在します）")
+            continue
+        print(f"処理中: {img.name} ... ", end="", flush=True)
+        for attempt in range(MAX_RETRIES):
+            try:
+                tsv_text = extract_docai2(img)
+                break
+            except Exception as exc:
+                if not _is_rate_limit_error(exc) or attempt == MAX_RETRIES - 1:
+                    raise
+                wait = INITIAL_WAIT * (2**attempt)
+                print(f"\n  レート制限 - {wait}秒後にリトライ ({attempt + 1}/{MAX_RETRIES}) ... ", end="", flush=True)
+                time.sleep(wait)
+        output_file.write_text(tsv_text, encoding="utf-8")
+        print(f"完了 -> {output_file}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="画像ファイルを Gemini / Document AI で OCR / 構造化抽出する。",
     )
     parser.add_argument(
         "--mode",
-        choices=["plain", "structured", "structured_tsv", "gamedata", "schema", "docai"],
+        choices=["plain", "structured", "structured_tsv", "gamedata", "schema", "docai", "docai2"],
         default="plain",
         help="出力モード: plain=Markdown OCR, structured=JSON 構造化抽出, "
         "structured_tsv=構造化抽出TSV出力, gamedata=動的ゲームデータ抽出, "
-        "schema=型名・フィールド名のみ抽出, docai=Document AI OCR+構造化TSV（デフォルト: plain）",
+        "schema=型名・フィールド名のみ抽出, docai=Document AI OCR+構造化TSV, "
+        "docai2=Document AI OCR+改良構造化TSV（デフォルト: plain）",
     )
     parser.add_argument(
         "files",
@@ -331,6 +380,8 @@ def main():
         run_gamedata(images)
     elif args.mode == "docai":
         run_docai(images)
+    elif args.mode == "docai2":
+        run_docai2(images)
     else:
         run_schema(images)
 
