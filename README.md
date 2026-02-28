@@ -58,6 +58,10 @@ uv run nova-parser path/to/image.png
 
 - [使い方の詳細](docs/usage.md) — CLI オプション、サポート形式、出力仕様
 - [MCP サーバー設定](docs/mcp-servers.md) — Claude Code 用の外部ドキュメント検索設定
+- [Spec Kit 5分オンボーディング](docs/spec-kit-onboarding.md) — 最短手順で導入・起票を始めるためのクイックガイド
+- [Spec Kit 利用ガイド（詳細版）](docs/spec-kit-guide-detailed.md) — 日常運用向けの手順、コマンド、クローズ基準、トラブル対応
+- [Spec Kit ガイド入口](docs/spec-kit-guide.md) — オンボーディング版・詳細版・実装記録への導線
+- [Spec Kit 実装記録](docs/spec-kit-implementation.md) — devcontainer + Copilot での導入手順、成果物、検証、クローズ基準
 
 ## 開発
 
@@ -65,3 +69,30 @@ uv run nova-parser path/to/image.png
 # lint & format
 uv run task ruff
 ```
+
+## Spec Kit（GitHub Copilot）
+
+このリポジトリでは Spec Kit を `uv` 経由で利用します。
+
+```bash
+# 単発実行
+uvx --from git+https://github.com/github/spec-kit.git specify check
+
+# 永続インストール
+uv tool install specify-cli --from git+https://github.com/github/spec-kit.git
+specify check
+```
+
+初期化（既存リポジトリにマージ）:
+
+```bash
+specify init --here --ai copilot
+```
+
+初期化後は VS Code の Copilot Chat で以下を順に実行します。
+
+- `/speckit.constitution`
+- `/speckit.specify`
+- `/speckit.plan`
+- `/speckit.tasks`
+- `/speckit.implement`
