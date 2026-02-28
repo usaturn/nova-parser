@@ -31,7 +31,11 @@
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-[Gates determined based on constitution file]
+- [ ] All Python commands use `uv` (`uv run`, `uv add`, `uvx`, `uv tool`).
+- [ ] Existing CLI UX remains backward compatible (do not break current entrypoint/flags).
+- [ ] Verification steps are explicit and reproducible (commands + expected results).
+- [ ] Documentation updates are written in Japanese when process or behavior changes.
+- [ ] Secrets and credentials are not committed; `.env`/ignore policy is respected.
 
 ## Project Structure
 

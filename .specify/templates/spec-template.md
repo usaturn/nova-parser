@@ -100,6 +100,14 @@
 - **[Entity 1]**: [What it represents, key attributes without implementation]
 - **[Entity 2]**: [What it represents, relationships to other entities]
 
+## Constitution Alignment *(mandatory)*
+
+- **CA-001**: Document all executable commands using `uv` when Python tooling is involved.
+- **CA-002**: State backward-compatibility expectations for existing CLI behavior.
+- **CA-003**: Define explicit verification steps with pass/fail conditions.
+- **CA-004**: If docs are changed, specify Japanese documentation scope.
+- **CA-005**: Identify any secret-handling risk and mitigation (`.env`, ignore rules).
+
 ## Success Criteria *(mandatory)*
 
 <!--

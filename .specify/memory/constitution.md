@@ -1,39 +1,57 @@
+<!--
+Sync Impact Report
+- Version change: 1.0.1 -> 1.0.2
+- Modified principles: なし（文意変更なし）
+- Added sections: なし
+- Removed sections: なし
+- Templates requiring updates:
+	- ✅ .specify/templates/plan-template.md
+	- ✅ .specify/templates/spec-template.md
+	- ✅ .specify/templates/tasks-template.md
+	- ⚠ .specify/templates/commands/*.md (対象ディレクトリ未作成のため更新対象なし)
+	- ✅ README.md
+- Follow-up TODOs: なし
+-->
+
 # nova-parser Constitution
 
 ## Core Principles
 
-### I. CLI First
-すべての機能は `uv run nova-parser` の CLI から実行可能でなければならない。新機能追加時は `--mode` などの既存導線を優先し、別実行系を乱立させない。
+### I. uv 統一実行
+Python 関連コマンドは必ず `uv` 経由で実行する。実行・依存追加・lint/format は `uv run` / `uv add` / `uv run task ruff` に統一し、手順の再現性を保証する。
 
-### II. Japanese-First Documentation
-プロジェクト内の運用ドキュメントと利用ガイドは日本語で記述しなければならない。新しい挙動・オプション・前提条件を追加した場合、同一PR内でドキュメント更新を行う。
+### II. 既存CLI互換性の維持
+エントリポイント `uv run nova-parser` の利用体験を壊さない。新機能追加時も既存モード（plain/structured/structured_tsv/gamedata/schema/docai）の後方互換を優先する。
 
-### III. Safe Defaults for OCR Output
-構造化出力では欠損値を安全に扱うことを必須とする。`None` / `null` の文字列混入は禁止し、空値は空文字で統一する。
+### III. 小さく検証可能な変更
+変更は最小差分で行い、作業後に実行可能な検証コマンドを必ず残す。失敗時は原因と再現手順を記録し、未検証の推測で完了扱いにしない。
 
-### IV. Reproducible Toolchain
-Python関連の実行・検証は `uv` 経由で行わなければならない。lint/format は `uv run task ruff` を標準ゲートとし、提出前に必ず実行する。
+### IV. ドキュメント日本語化
+リポジトリ内ドキュメントは日本語で記述する。利用者が同じ手順を再現できるよう、コマンド・前提条件・期待結果を明示する。
 
-### V. Incremental Delivery with Spec Kit
-機能追加は `spec.md` → `plan.md` → `tasks.md` → 実装の順で進め、成果物の整合性を維持する。MVPは User Story 1 から独立テスト可能な単位で完了させる。
+### V. 認証情報の安全管理
+APIキー等の秘匿情報は `.env` と devcontainer の環境注入で管理し、平文の認証情報をコミットしない。機密漏えいの可能性がある生成物は `.gitignore` で保護する。
 
-## Additional Constraints
+## 追加制約
 
-- ランタイムは Python 3.14 以上を前提とする
-- OCR/抽出の外部依存（Gemini, Document AI）の失敗は利用者が原因を判別できるエラーで返す
-- 機密情報（鍵・認証情報）はリポジトリへコミットしない
+- ランタイムは Python 3.14 を前提とする。
+- OCR/LLM 関連の外部API利用時は、ネットワーク可用性と認証済み状態を前提条件として明示する。
+- 出力フォーマット（Markdown/JSON/TSV）を変更する場合は既存の `Output/` 互換を考慮する。
 
-## Development Workflow
+## 開発ワークフロー
 
-1. feature ブランチ作成後に `spec.md` を確定する
-2. `plan.md` と設計成果物（research/data-model/quickstart）を作成する
-3. `tasks.md` を実行可能な粒度で作成する
-4. 実装後は `uv run task ruff` を通し、必要ドキュメントを更新する
+1. 変更前に対象範囲を明確化し、影響ファイルを限定する。
+2. 実装後は対象機能に最も近い単位から順に検証する。
+3. 破壊的変更や運用変更がある場合は README もしくは docs を更新する。
+4. 生成AI連携機能の追加時は、認証前提と手動操作箇所を明示する。
 
 ## Governance
 
-- この憲章は仕様・計画・タスクより優先される
-- 原則の追加・変更は憲章バージョンを更新し、理由を明記する
-- すべてのPRで憲章遵守を確認する
+本 Constitution は開発手順上の最上位ルールとして扱う。改訂時は以下を必須とする。
 
-**Version**: 1.0.0 | **Ratified**: 2026-02-28 | **Last Amended**: 2026-02-28
+1. 改訂提案に目的・影響範囲・移行方針を記録する。
+2. 版数はセマンティックバージョニング（MAJOR/MINOR/PATCH）で更新する。
+3. 依存テンプレート（plan/spec/tasks）とランタイム文書（README/docs）への反映有無を確認する。
+4. レビュー時は本ファイルへの準拠確認を必須ゲートとする。
+
+**Version**: 1.0.2 | **Ratified**: 2026-02-28 | **Last Amended**: 2026-02-28
