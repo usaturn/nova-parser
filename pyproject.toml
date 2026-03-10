@@ -14,6 +14,7 @@ dependencies = [
     "pydantic",
     "pydantic-ai",
     "google-cloud-documentai>=3.10.0",
+    "pypdf>=6.8.0",
 ]
 
 [project.scripts]

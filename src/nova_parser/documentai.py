@@ -1,5 +1,6 @@
 """docai モード: Document AI で OCR し、Gemini で構造化抽出する。"""
 
+import io
 import json
 import os
 from pathlib import Path
@@ -8,6 +9,8 @@ from google.cloud import documentai_v1 as documentai
 from google.genai import types
 
 from nova_parser.ocr import MIME_TYPES, get_client
+
+DOCAI_PAGE_LIMIT = 15
 
 GEMINI_MODEL = "gemini-3-flash-preview"
 
@@ -61,24 +64,61 @@ def _get_documentai_client() -> documentai.DocumentProcessorServiceClient:
     return documentai.DocumentProcessorServiceClient()
 
 
+def _split_pdf(pdf_bytes: bytes, chunk_size: int = DOCAI_PAGE_LIMIT) -> list[bytes]:
+    """PDF を chunk_size ページごとに分割し、各チャンクのバイト列を返す。"""
+    from pypdf import PdfReader, PdfWriter
+
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    total = len(reader.pages)
+    if total <= chunk_size:
+        return [pdf_bytes]
+
+    chunks: list[bytes] = []
+    for start in range(0, total, chunk_size):
+        writer = PdfWriter()
+        for page in reader.pages[start : start + chunk_size]:
+            writer.add_page(page)
+        buf = io.BytesIO()
+        writer.write(buf)
+        chunks.append(buf.getvalue())
+    return chunks
+
+
+def _ocr_single_document(
+    client: documentai.DocumentProcessorServiceClient,
+    processor_name: str,
+    content: bytes,
+    mime_type: str,
+) -> str:
+    """Document AI で単一ドキュメントを OCR し、テキストを返す。"""
+    raw_document = documentai.RawDocument(content=content, mime_type=mime_type)
+    request = documentai.ProcessRequest(name=processor_name, raw_document=raw_document)
+    result = client.process_document(request=request)
+    return result.document.text
+
+
 def ocr_with_documentai(image_path: Path) -> str:
-    """Document AI で画像を OCR し、テキストを返す。"""
+    """Document AI で画像/PDF を OCR し、テキストを返す。
+
+    PDF が Document AI のページ上限を超える場合は自動的に分割して処理する。
+    """
     processor_name = get_processor_name()
     client = _get_documentai_client()
     mime_type = MIME_TYPES[image_path.suffix.lower()]
-    image_content = image_path.read_bytes()
+    file_content = image_path.read_bytes()
 
-    raw_document = documentai.RawDocument(
-        content=image_content,
-        mime_type=mime_type,
-    )
-    request = documentai.ProcessRequest(
-        name=processor_name,
-        raw_document=raw_document,
-    )
+    if mime_type == "application/pdf":
+        chunks = _split_pdf(file_content)
+        if len(chunks) > 1:
+            print(f"({len(chunks)} チャンクに分割) ", end="", flush=True)
+        texts = [
+            _ocr_single_document(client, processor_name, chunk, mime_type)
+            for chunk in chunks
+        ]
+        text = "\n".join(texts)
+    else:
+        text = _ocr_single_document(client, processor_name, file_content, mime_type)
 
-    result = client.process_document(request=request)
-    text = result.document.text
     # Document AI は「N◎VA」を「NOVA」として認識するため補正する
     text = text.replace("NOVA", "N◎VA")
     return text

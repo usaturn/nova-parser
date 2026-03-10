@@ -2,7 +2,7 @@
 
 書籍からゲームデータを Gemini / Document AI で抽出する OCR アプリケーション。
 
-`Images/` ディレクトリに配置した画像を Gemini または Document AI で処理し、Markdown テキスト、構造化 JSON、TSV として `Output/` に出力します。
+`Images/` ディレクトリに配置した画像や PDF を Gemini または Document AI で処理し、Markdown テキスト、構造化 JSON、TSV として `Output/` に出力します。
 
 ## セットアップ
 
@@ -30,7 +30,7 @@ uv sync
 ## クイックスタート
 
 ```bash
-# Images/ 内の全画像を OCR（Markdown 出力）
+# Images/ 内の全画像・PDF を OCR（Markdown 出力）
 uv run nova-parser
 
 # 構造化抽出モード（JSON 出力）
@@ -53,9 +53,10 @@ uv run nova-parser --mode docai Images/NAN_067.tif
 
 # 特定のファイルを指定して処理
 uv run nova-parser path/to/image.png
+uv run nova-parser path/to/document.pdf
 ```
 
-`Output/` ディレクトリに各画像に対応する `.plain.md`、`.structured.json`、`.structured.tsv`、`.gamedata.json`、`.schema.tsv`、`.docai_plain.md`、`.docai.tsv` ファイルが出力されます。
+`Output/` ディレクトリに各ファイルに対応する `.plain.md`、`.structured.json`、`.structured.tsv`、`.gamedata.json`、`.schema.tsv`、`.docai_plain.md`、`.docai.tsv` ファイルが出力されます。
 
 ## ドキュメント
 

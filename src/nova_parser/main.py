@@ -28,7 +28,7 @@ def resolve_images(file_args: list[str]) -> list[Path]:
                 sys.exit(1)
             if p.suffix.lower() not in MIME_TYPES:
                 print(
-                    f"エラー: サポートされていない画像形式です: {p.suffix} ({p})",
+                    f"エラー: サポートされていないファイル形式です: {p.suffix} ({p})",
                     file=sys.stderr,
                 )
                 sys.exit(1)
@@ -332,17 +332,17 @@ def main():
     parser.add_argument(
         "files",
         nargs="*",
-        help="処理する画像ファイルのパス（省略時は Images/ 内の全画像を処理）",
+        help="処理する画像/PDFファイルのパス（省略時は Images/ 内の全画像を処理）",
     )
     args = parser.parse_args()
 
     images = resolve_images(args.files)
 
     if not images:
-        print(f"{IMAGES_DIR}/ に画像ファイルが見つかりません。")
+        print(f"{IMAGES_DIR}/ に対象ファイルが見つかりません。")
         return
 
-    print(f"{len(images)} 件の画像を処理します。（モード: {args.mode}）\n")
+    print(f"{len(images)} 件のファイルを処理します。（モード: {args.mode}）\n")
 
     OUTPUT_DIR.mkdir(exist_ok=True)
 
