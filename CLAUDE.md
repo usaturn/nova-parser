@@ -1,6 +1,8 @@
 # CLAUDE.md
 
-このファイルは、Claude Code (claude.ai/code) がこのリポジトリで作業する際のガイダンスを提供します。
+## 基本
+
+- ユーザの入力が曖昧な場合はAskUserQuestionツールを積極的に使う
 
 ## 言語
 
