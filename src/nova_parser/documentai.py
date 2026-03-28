@@ -24,18 +24,35 @@ def get_processor_name() -> str:
     return name
 
 
-def _get_documentai_client() -> documentai.DocumentProcessorServiceClient:
-    """Document AI クライアントを初期化する（OAuth2 / ADC 認証）。
+def _find_docai_credentials_file() -> Path | None:
+    """プロジェクト内の Document AI サービスアカウントキーを探す。"""
+    candidates = [
+        Path(__file__).resolve().parents[2] / ".secrets" / "docai-sa.json",
+        Path.cwd() / ".secrets" / "docai-sa.json",
+    ]
+    for p in candidates:
+        if p.exists():
+            return p
+    return None
 
-    GOOGLE_APPLICATION_CREDENTIALS が存在しないファイルを指している場合は
-    環境変数を変更せず google.auth.default() で認証情報を取得する。
+
+def _get_documentai_client() -> documentai.DocumentProcessorServiceClient:
+    """Document AI クライアントを初期化する。
+
+    GOOGLE_APPLICATION_CREDENTIALS が有効なファイルを指していればそれを使い、
+    存在しない場合はプロジェクト内の .secrets/docai-sa.json にフォールバックする。
     """
     creds_file = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
-    if creds_file and not Path(creds_file).exists():
-        import google.auth
+    if creds_file and Path(creds_file).exists():
+        return documentai.DocumentProcessorServiceClient()
 
-        credentials, _ = google.auth.default()
+    fallback = _find_docai_credentials_file()
+    if fallback:
+        from google.oauth2 import service_account
+
+        credentials = service_account.Credentials.from_service_account_file(str(fallback))
         return documentai.DocumentProcessorServiceClient(credentials=credentials)
+
     return documentai.DocumentProcessorServiceClient()
 
 
