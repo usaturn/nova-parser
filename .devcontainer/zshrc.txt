@@ -68,165 +68,6 @@ function _ssh {
       compadd `fgrep 'Host ' ~/.ssh/config | awk '{print $2}' | sort`;
 }
 
-PATH=$PATH:./node_modules/.bin:~/bin:~/.tfenv/bin
-export PATH
-
-function awsenv(){
-    export AWS_DEFAULT_PROFILE=$(AWS_CLI_AUTO_PROMPT="" aws configure list-profiles | fzf) &&
-    AWS_PAGER="" aws sts get-caller-identity --output yaml &&
-    AWS_PAGER="" aws iam list-account-aliases --query 'AccountAliases|[0]'
-}
-
-function jssenv(){
-    local choice
-    choice=$(printf "test-tokyo\ntest-osaka\njss-tokyo\njss-osaka\n" | fzf)
-    if [[ -z "$choice" ]]; then
-        echo "環境が選択されませんでした。" >&2 # エラーメッセージは標準エラー出力へ
-        return 1 # 関数をエラーで終了
-    fi
-
-    export ENVIRONMENT_NAME="$choice"
-
-    case "${ENVIRONMENT_NAME}" in
-      jss-tokyo)
-        export REGION="ap-northeast-1"
-        export AWS_DEFAULT_PROFILE=jss-prod-tokyo
-        ;;
-      jss-osaka)
-        export REGION="ap-northeast-3"
-        export AWS_DEFAULT_PROFILE=jss-prod-osaka
-        ;;
-      test-tokyo)
-        export REGION="ap-northeast-1"
-        export AWS_DEFAULT_PROFILE=solution2-tokyo
-        ;;
-      test-osaka)
-        export REGION="ap-northeast-3"
-        export AWS_DEFAULT_PROFILE=solution2-osaka
-        ;;
-      *)
-        echo "エラー: 予期しない環境名 '${ENVIRONMENT_NAME}' です。REGION は設定されません。" >&2
-        return 1
-        ;;
-    esac
-
-    AWS_PAGER="" aws sts get-caller-identity --output yaml
-    AWS_PAGER="" aws iam list-account-aliases --query 'AccountAliases|[0]'
-    echo "以下の環境変数が設定されました:"
-    cat <<- EOF
-          ENVIRONMENT_NAME    = ${ENVIRONMENT_NAME}
-          REGION              = ${REGION}
-          AWS_DEFAULT_PROFILE = ${AWS_DEFAULT_PROFILE}
-EOF
-    return 0
-}
-
-function awxenv(){
-    ENVIRONMENT_NAME=$(ls ${HOME}/repo/awx/environment_files/ | awk 'BEGIN{FS=OFS="-"}{print $1,$2,$3}' | fzf) &&
-    source ${HOME}/repo/awx/environment_files/${ENVIRONMENT_NAME}-env.sh
-}
-
-function ec2connect(){
-    export INSTANCE_NAME=$(aws ec2 describe-instances --query 'Reservations[].Instances[?IamInstanceProfile!=`null` && State.Name == `running`].[Tags[?Key==`Name`] | [0].Value]' --output text | fzf)
-    export INSTANCE_ID=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=${INSTANCE_NAME}"  Name=instance-state-name,Values=running --query 'Reservations[].Instances[].InstanceId' --output text)
-    if [ -n "${INSTANCE_ID}" ] ;then
-        echo connect: ${INSTANCE_NAME}
-    else
-        echo INSTANCE_ID is none
-        return 1
-    fi
-    aws ssm start-session --target ${INSTANCE_ID} || echo $?
-}
-
-function ec2start(){
-    export INSTANCE_NAME=$(aws ec2 describe-instances --query 'Reservations[].Instances[?IamInstanceProfile!=`null` && State.Name==`stopped`].[Tags[?Key==`Name`] | [0].Value]' --output text | fzf)
-    export INSTANCE_ID=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=${INSTANCE_NAME}" Name=instance-state-name,Values=stopped --query 'Reservations[].Instances[].InstanceId' --output text)
-    if [ -n "${INSTANCE_ID}" ] ;then
-        echo Start: ${INSTANCE_NAME}
-    else
-        echo INSTANCE_ID is none
-        return 1
-    fi
-    aws ec2 start-instances --instance-ids ${INSTANCE_ID} || echo $?
-    aws ec2 describe-instances --query 'Reservations[].Instances[].{
-        Name:Tags[?Key==`Name`] | [0].Value,
-        InstanceId:InstanceId,
-        Status:State.Name,
-        PublicIpAddress:PublicIpAddress,
-        PrivateIpAddress:PrivateIpAddress,
-        Az:Placement.AvailabilityZone}' --output table
-}
-
-function ec2stop(){
-    export INSTANCE_NAME=$(aws ec2 describe-instances --query 'Reservations[].Instances[?IamInstanceProfile!=`null` && State.Name == `running`].[Tags[?Key==`Name`] | [0].Value]' --output text | fzf)
-    export INSTANCE_ID=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=${INSTANCE_NAME}" Name=instance-state-name,Values=running --query 'Reservations[].Instances[].InstanceId' --output text)
-    if [ -n "${INSTANCE_ID}" ] ;then
-        echo Stop: ${INSTANCE_NAME}
-    else
-        echo INSTANCE_ID is none
-        return 1
-    fi
-    aws ec2 stop-instances --instance-ids ${INSTANCE_ID} || echo $?
-    aws ec2 describe-instances --query 'Reservations[].Instances[].{
-        Name:Tags[?Key==`Name`] | [0].Value,
-        InstanceId:InstanceId,
-        Status:State.Name,
-        PublicIpAddress:PublicIpAddress,
-        PrivateIpAddress:PrivateIpAddress,
-        Az:Placement.AvailabilityZone}' --output table
-}
-
-function ec2check(){
-    aws ec2 describe-instances --query 'Reservations[].Instances[].{
-        Name:Tags[?Key==`Name`] | [0].Value,
-        InstanceId:InstanceId,
-        Status:State.Name,
-        PublicIpAddress:PublicIpAddress,
-        PrivateIpAddress:PrivateIpAddress,
-        Az:Placement.AvailabilityZone}' --output table
-}
-
-function eip(){
-  aws ec2 describe-addresses --query 'Addresses[].{
-      AllocationId:AllocationId,
-      PublicIp:PublicIp,
-      InstanceId:InstanceId,
-      Name:Tags[?Key==`Name`] | [0].Value}' --output table
-}
-
-function rds-status(){
-    if [ -z "$AWS_DEFAULT_PROFILE" ]; then
-        echo "Error: AWS_DEFAULT_PROFILE environment variable is not set"
-        echo "Execute awsenv!"
-        awsenv
-    fi
-    aws rds describe-db-instances --query 'DBInstances[].{
-      DBInstanceIdentifier:DBInstanceIdentifier,
-      ASStatus:ActivityStreamStatus,
-      DBStatus:DBInstanceStatus,
-      Pending:to_string(PendingModifiedValues),
-      CreateTime:InstanceCreateTime,
-      ReadReplicaName:to_string(ReadReplicaDBInstanceIdentifiers),
-      ReadReplicaSourceDBInstanceIdentifier:ReadReplicaSourceDBInstanceIdentifier
-      }' --output table --region="ap-northeast-1"
-    aws rds describe-db-instances --query 'DBInstances[].{
-      DBInstanceIdentifier:DBInstanceIdentifier,
-      ASStatus:ActivityStreamStatus,
-      DBStatus:DBInstanceStatus,
-      Pending:to_string(PendingModifiedValues),
-      CreateTime:InstanceCreateTime,
-      ReadReplicaName:to_string(ReadReplicaDBInstanceIdentifiers),
-      ReadReplicaSourceDBInstanceIdentifier:ReadReplicaSourceDBInstanceIdentifier
-      }' --output table --region="ap-southeast-1"
-}
-
-function cfn(){
-    rain fmt stacks/*.yaml -w
-    echo CFn Formatting
-    uv run task lint
-    echo Linter OK
-}
-
 alias gitm="git fetch -p && git checkout origin/main"
 alias gitc="git branch -a| fzf | xargs git checkout"
 alias gitd="git branch | fzf | xargs git branch -D"
@@ -237,53 +78,112 @@ alias ipa='IPAddr=$(curl http://ifconfig.me/)"/32" >/dev/null 2>&1 && echo $IPAd
 alias tmuxlog='tmux capture-pane -p -S -100000 > tmux$(date +%Y%m%d_%H%M%S).log'
 #alias dev='source /home/yamada/repo/awx/scripts/dev.bash'
 
-functions targetg(){
-    if [ -z "$AWS_DEFAULT_PROFILE" ]; then
-        echo "Error: AWS_DEFAULT_PROFILE environment variable is not set"
-        echo "Execute awsenv!"
-        awsenv
-    fi
-    cd ~/repo/aws-resource-manager
-    export INSTANCE_NAME=$(aws ec2 describe-instances --query 'Reservations[].Instances[?IamInstanceProfile!=`null`].[Tags[?Key==`Name`] | [0].Value]' --output text | fzf)
-    uv run utility/find_target_groups.py ${INSTANCE_NAME}
+# git-fzf.zsh
+# 使い方:
+#   source /workspaces/nova-parser/scripts/git-fzf.zsh
+#   gbd-fzf           # マージ済みでなければ削除失敗（安全）
+#   gbd-fzf -f        # 強制削除
+
+function _gbd_fzf_default_base() {
+  local base
+  base=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+  if [[ -n "$base" ]]; then
+    echo "$base"
+    return 0
+  fi
+
+  if git show-ref --verify --quiet refs/remotes/origin/main; then
+    echo "origin/main"
+    return 0
+  fi
+
+  if git show-ref --verify --quiet refs/heads/main; then
+    echo "main"
+    return 0
+  fi
+
+  if git show-ref --verify --quiet refs/heads/master; then
+    echo "master"
+    return 0
+  fi
+
+  echo "HEAD"
 }
 
-function regist-target(){
-    if [ -z "$AWS_DEFAULT_PROFILE" ]; then
-        echo "Error: AWS_DEFAULT_PROFILE environment variable is not set"
-        echo "Execute awsenv!"
-        awsenv
-    fi
-    export INSTANCE_NAME=$(aws ec2 describe-instances --query 'Reservations[].Instances[?IamInstanceProfile!=`null`].[Tags[?Key==`Name`] | [0].Value]' --output text | fzf)
-    export INSTANCE_ID=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=${INSTANCE_NAME}" --query 'Reservations[].Instances[].InstanceId' --output text)
-    INSTANCE_STATE=$(aws ec2 describe-instances --instance-ids ${INSTANCE_ID} --query 'Reservations[].Instances[].State.Name' --output text)
-    if [ "${INSTANCE_STATE}" != "running" ]; then
-        echo "Instance ${INSTANCE_NAME} (${INSTANCE_ID}) is ${INSTANCE_STATE}. Starting instance..."
-        aws ec2 start-instances --instance-ids ${INSTANCE_ID}
-        echo "Waiting for instance to be running..."
-        aws ec2 wait instance-running --instance-ids ${INSTANCE_ID}
-        echo "Instance is now running"
-    else
-        echo "Instance ${INSTANCE_NAME} (${INSTANCE_ID}) is already running"
-    fi
-    if [ -n "${INSTANCE_ID}" ] ;then
-        export LOAD_BALANCER_ARN=$(aws elbv2 describe-load-balancers --query 'LoadBalancers[].[LoadBalancerArn]' --output text|fzf) && echo ${LOAD_BALANCER_ARN}
-        export TARGET_GROUP_NAME=$(aws elbv2 describe-target-groups --load-balancer-arn=${LOAD_BALANCER_ARN} --query 'TargetGroups[].TargetGroupName'  --output text) && echo ${TARGET_GROUP_NAME}
-        export TARGET_GROUP_ARN=$(aws elbv2 describe-target-groups --names ${TARGET_GROUP_NAME} --query 'TargetGroups[].TargetGroupArn' --output text) && echo ${TARGET_GROUP_ARN}
-        aws elbv2 register-targets --target-group-arn ${TARGET_GROUP_ARN} --targets Id=${INSTANCE_ID}
-    else
-        echo INSTANCE_ID is none
-        return 1
-    fi
-}
+function gbd-fzf() {
+  emulate -L zsh
+  setopt pipefail
 
-function npmi(){
-    npm cache clean --force
-    npm cache verify
-    rm -f package-lock.json
-    ls -ld node_modules && rm -rf node_modules
-    npm i
-    npm run test
+  if ! command -v git >/dev/null 2>&1; then
+    echo "git が見つかりません" >&2
+    return 1
+  fi
+
+  if ! command -v fzf >/dev/null 2>&1; then
+    echo "fzf が見つかりません" >&2
+    return 1
+  fi
+
+  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
+    echo "git リポジトリ内で実行してください" >&2
+    return 1
+  }
+
+  local delete_cmd="-d"
+  if [[ "$1" == "-f" || "$1" == "--force" ]]; then
+    delete_cmd="-D"
+  fi
+
+  local selected
+  selected=$(git for-each-ref refs/heads --format='%(if)%(HEAD)%(then)* %(else)  %(end)%(refname:short)' \
+    | fzf --height=40% --reverse --prompt='Delete local branch > ' --header='Enter: 選択 / ESC: キャンセル') || return 0
+
+  local branch=${selected#\* }
+  branch=${branch##  }
+
+  if [[ "$selected" == \** ]]; then
+    echo "現在のブランチは削除できません: $branch" >&2
+    return 1
+  fi
+
+  local ans
+  read "ans?ローカルブランチ '$branch' を削除しますか？ [y/N]: "
+  if [[ "$ans" != "y" && "$ans" != "Y" ]]; then
+    echo "キャンセルしました"
+    return 0
+  fi
+
+  if [[ "$delete_cmd" == "-D" ]]; then
+    git branch -D -- "$branch"
+    return $?
+  fi
+
+  if git branch -d -- "$branch"; then
+    return 0
+  fi
+
+  local base
+  base=$(_gbd_fzf_default_base)
+
+  local branch_tree
+  local base_tree
+  branch_tree=$(git rev-parse "$branch^{tree}" 2>/dev/null)
+  base_tree=$(git rev-parse "$base^{tree}" 2>/dev/null)
+
+  if [[ -n "$branch_tree" && -n "$base_tree" && "$branch_tree" == "$base_tree" ]]; then
+    echo "注意: 祖先関係はありませんが、'$branch' は '$base' と内容が同一です。"
+    local ans2
+    read "ans2?内容同一のため強制削除しますか？ [y/N]: "
+    if [[ "$ans2" == "y" || "$ans2" == "Y" ]]; then
+      git branch -D -- "$branch"
+      return $?
+    fi
+    echo "キャンセルしました"
+    return 1
+  fi
+
+  echo "削除できませんでした。未マージの場合は gbd-fzf -f を使ってください。" >&2
+  return 1
 }
 
 export EDITOR=code

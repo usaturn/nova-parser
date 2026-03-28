@@ -7,6 +7,9 @@ from dotenv import load_dotenv
 
 from nova_parser.ocr import MIME_TYPES
 
+if False:  # TYPE_CHECKING
+    from nova_parser.models import PageExtraction
+
 load_dotenv()
 
 
@@ -161,6 +164,52 @@ def run_schema(images: list[Path]) -> None:
         print(f"完了 -> {output_file}")
 
 
+def _parse_docai_tsvs(files: list[Path] | None = None) -> dict:
+    """docai TSV ファイルからスキーマ提案を生成する。
+
+    files を指定した場合はそのファイルのみ、省略時は Output/*.docai*.tsv を走査する。
+    """
+    tsv_files = sorted(files) if files else sorted(OUTPUT_DIR.glob("*.docai*.tsv"))
+    type_fields: dict[str, list[str]] = {}
+    type_source: dict[str, str] = {}
+
+    for tsv_file in tsv_files:
+        text = tsv_file.read_text(encoding="utf-8")
+        for block in text.split("\n\n"):
+            lines = [line for line in block.strip().splitlines() if line.strip()]
+            if not lines or not lines[0].startswith("## "):
+                continue
+            type_name = lines[0][3:].strip()
+            if len(lines) < 2:
+                continue
+            fields = lines[1].split("\t")
+            if type_name not in type_fields:
+                type_fields[type_name] = list(fields)
+                type_source[type_name] = tsv_file.name
+            else:
+                existing = type_fields[type_name]
+                seen = set(existing)
+                for f in fields:
+                    if f not in seen:
+                        existing.append(f)
+                        seen.add(f)
+
+    return {"types": [{"type_name": tn, "fields": type_fields[tn], "source": type_source[tn]} for tn in type_fields]}
+
+
+def run_schema_propose(files: list[Path] | None = None) -> None:
+    """schema_propose モード: docai TSV からスキーマ提案を生成する。"""
+    import json
+
+    result = _parse_docai_tsvs(files)
+    output_file = OUTPUT_DIR / "schema_proposal.json"
+    output_file.write_text(
+        json.dumps(result, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    print(f"スキーマ提案を生成しました: {output_file}（{len(result['types'])} 型）")
+
+
 def _gamedata_to_tsv(result: dict) -> str:
     """ゲームデータ dict を同種パターンごとの TSV 文字列に変換する。"""
     blocks: list[str] = []
@@ -192,20 +241,30 @@ def _structured_to_tsv(extraction: "PageExtraction") -> str:
         rows = []
         for o in extraction.organizations:
             rows.append(
-                "\t".join([
-                    o.name,
-                    o.classification,
-                    ", ".join(o.sub_organizations),
-                    o.headquarters,
-                    o.description,
-                ])
+                "\t".join(
+                    [
+                        o.name,
+                        o.classification,
+                        ", ".join(o.sub_organizations),
+                        o.headquarters,
+                        o.description,
+                    ]
+                )
             )
         blocks.append(header + "\n" + "\n".join(rows))
 
     if extraction.skills:
         fields = [
-            "name", "ruby", "prerequisite", "max_level", "timing",
-            "target", "range", "target_value", "opposed", "description",
+            "name",
+            "ruby",
+            "prerequisite",
+            "max_level",
+            "timing",
+            "target",
+            "range",
+            "target_value",
+            "opposed",
+            "description",
         ]
         header = "## 技能\n" + "\t".join(fields)
         rows = [
@@ -216,9 +275,19 @@ def _structured_to_tsv(extraction: "PageExtraction") -> str:
 
     if extraction.equipment:
         fields = [
-            "name", "ruby", "category", "type", "purchase", "concealment",
-            "defense_s", "defense_p", "defense_i", "restriction",
-            "electric_restriction", "slot", "description",
+            "name",
+            "ruby",
+            "category",
+            "type",
+            "purchase",
+            "concealment",
+            "defense_s",
+            "defense_p",
+            "defense_i",
+            "restriction",
+            "electric_restriction",
+            "slot",
+            "description",
         ]
         header = "## 装備\n" + "\t".join(fields)
         rows = [
@@ -291,6 +360,76 @@ def run_docai_plain(images: list[Path]) -> None:
         print(f"完了 -> {output_file}")
 
 
+def _append_to_tsv(
+    type_data: dict,
+    schema_fields: list[str] | None,
+    source_name: str,
+    *,
+    matched: bool,
+) -> None:
+    """抽出結果を型別 TSV ファイルに追記する。"""
+    type_name = type_data["type_name"]
+    items = type_data.get("items", [])
+    if not items:
+        return
+
+    prefix = "" if matched else "none_"
+    tsv_path = OUTPUT_DIR / f"{prefix}{type_name}.tsv"
+
+    # フィールド決定
+    if schema_fields is not None:
+        fields = list(schema_fields)
+    else:
+        fields: list[str] = []
+        seen: set[str] = set()
+        for item in items:
+            for key in item:
+                if key not in seen:
+                    fields.append(key)
+                    seen.add(key)
+
+    file_exists = tsv_path.exists() and tsv_path.stat().st_size > 0
+    with tsv_path.open("a", encoding="utf-8") as f:
+        if not file_exists:
+            f.write("\t".join(fields + ["source"]) + "\n")
+        for item in items:
+            row = [str(item.get(field, "")) for field in fields] + [source_name]
+            f.write("\t".join(row) + "\n")
+
+
+def run_extract(images: list[Path], schema_path: Path) -> None:
+    """extract モード: スキーマに従って Document AI OCR → Gemini 構造化抽出 → 型別 TSV。"""
+    import json
+
+    from nova_parser.documentai import extract_with_schema
+
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    schema_fields = {t["type_name"]: t["fields"] for t in schema["types"]}
+
+    for img in images:
+        print(f"処理中: {img.name} ... ", end="", flush=True)
+        for attempt in range(MAX_RETRIES):
+            try:
+                result = extract_with_schema(img, schema)
+                break
+            except Exception as exc:
+                if not _is_rate_limit_error(exc) or attempt == MAX_RETRIES - 1:
+                    raise
+                wait = INITIAL_WAIT * (2**attempt)
+                print(
+                    f"\n  レート制限 - {wait}秒後にリトライ ({attempt + 1}/{MAX_RETRIES}) ... ",
+                    end="",
+                    flush=True,
+                )
+                time.sleep(wait)
+
+        for t in result.get("matched_types", []):
+            _append_to_tsv(t, schema_fields.get(t["type_name"]), img.name, matched=True)
+        for t in result.get("unmatched_types", []):
+            _append_to_tsv(t, None, img.name, matched=False)
+        print("完了")
+
+
 def run_docai(images: list[Path]) -> None:
     """docai モード: Document AI で OCR → Gemini で構造化抽出 → TSV 出力。"""
     from nova_parser.documentai import extract_docai
@@ -322,12 +461,30 @@ def main():
     )
     parser.add_argument(
         "--mode",
-        choices=["plain", "structured", "structured_tsv", "gamedata", "schema", "docai", "docai_plain"],
+        choices=[
+            "plain",
+            "structured",
+            "structured_tsv",
+            "gamedata",
+            "schema",
+            "docai",
+            "docai_plain",
+            "schema_propose",
+            "extract",
+        ],
         default="plain",
         help="出力モード: plain=Markdown OCR, structured=JSON 構造化抽出, "
         "structured_tsv=構造化抽出TSV出力, gamedata=動的ゲームデータ抽出, "
         "schema=型名・フィールド名のみ抽出, docai=Document AI OCR+構造化TSV, "
-        "docai_plain=Document AI OCRのみMarkdown出力（デフォルト: plain）",
+        "docai_plain=Document AI OCRのみMarkdown出力, "
+        "schema_propose=docai TSVからスキーマ提案生成, "
+        "extract=スキーマ準拠で型別TSV抽出（デフォルト: plain）",
+    )
+    parser.add_argument(
+        "--schema",
+        type=str,
+        default=None,
+        help="スキーマ定義ファイルのパス（extract モード時に必須）",
     )
     parser.add_argument(
         "files",
@@ -336,6 +493,20 @@ def main():
     )
     args = parser.parse_args()
 
+    if args.mode == "extract" and not args.schema:
+        parser.error("extract モードでは --schema の指定が必須です。")
+    if args.schema and not Path(args.schema).exists():
+        parser.error(f"スキーマファイルが見つかりません: {args.schema}")
+
+    OUTPUT_DIR.mkdir(exist_ok=True)
+
+    # schema_propose は画像ではなく TSV ファイルを受け取る
+    if args.mode == "schema_propose":
+        tsv_files = [Path(f) for f in args.files] if args.files else None
+        run_schema_propose(tsv_files)
+        print(f"\n全ての結果を {OUTPUT_DIR}/ に保存しました。")
+        return
+
     images = resolve_images(args.files)
 
     if not images:
@@ -343,8 +514,6 @@ def main():
         return
 
     print(f"{len(images)} 件のファイルを処理します。（モード: {args.mode}）\n")
-
-    OUTPUT_DIR.mkdir(exist_ok=True)
 
     if args.mode == "plain":
         run_plain(images)
@@ -358,6 +527,8 @@ def main():
         run_docai(images)
     elif args.mode == "docai_plain":
         run_docai_plain(images)
+    elif args.mode == "extract":
+        run_extract(images, Path(args.schema))
     else:
         run_schema(images)
 
