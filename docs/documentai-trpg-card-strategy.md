@@ -87,7 +87,7 @@
 
 ### 推奨構成
 
-品質最優先なら、理想は次の 2 段階です。
+品質最優先なら、理想は次の 2 段階です。具体的なセットアップ手順は [CUSTOM_EXTRACTION_PROCESSOR セットアップガイド](./custom-extractor-setup.md) を参照してください。
 
 1. ページ画像からカード領域だけを切り出す
 2. 切り出したカード画像を `CUSTOM_EXTRACTION_PROCESSOR` に渡す
@@ -174,7 +174,7 @@
 
 ### 中期の理想解
 
-中期的には、`CUSTOM_EXTRACTION_PROCESSOR` に寄せるのが本筋です。
+中期的には、`CUSTOM_EXTRACTION_PROCESSOR` に寄せるのが本筋です。具体的な構築・運用手順は [セットアップガイド](./custom-extractor-setup.md) にまとめています。
 
 1. `game_card` を parent とした schema を定義
 2. card sample を収集
