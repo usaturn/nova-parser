@@ -13,13 +13,14 @@ nova-parser
 ## CLI 引数
 
 ```
-nova-parser [--mode {plain,structured,structured_tsv,gamedata,schema,docai}] [files ...]
+nova-parser [--mode {plain,structured,structured_tsv,gamedata,schema,docai,docai_plain,schema_propose,extract}] [--schema SCHEMA] [files ...]
 ```
 
 | 引数/オプション | 説明 | デフォルト |
 |------|------|------|
-| `--mode` | 出力モード（`plain`、`structured`、`structured_tsv`、`gamedata`、`schema`、`docai`） | `plain` |
-| `files` | 処理する画像ファイルのパス（省略可、複数指定可） | — |
+| `--mode` | 出力モード（`plain`、`structured`、`structured_tsv`、`gamedata`、`schema`、`docai`、`docai_plain`、`schema_propose`、`extract`） | `plain` |
+| `--schema` | スキーマ定義ファイルのパス（`extract` モード時に必須） | — |
+| `files` | 処理する画像/PDFファイルのパス（省略可、複数指定可） | — |
 
 - 引数を省略すると、`Images/` ディレクトリ内のサポート対象画像を全て処理します
 - 複数ファイルを指定できます
@@ -46,8 +47,20 @@ uv run nova-parser --mode gamedata image1.png
 # スキーマ抽出（型名・フィールド名のみ）
 uv run nova-parser --mode schema image1.png
 
+# Document AI OCR（Markdown 出力）
+uv run nova-parser --mode docai_plain image1.png
+
 # Document AI OCR + 構造化 TSV 出力
 uv run nova-parser --mode docai image1.png
+
+# docai TSV からスキーマ提案を生成（Output/ 内の全 docai TSV を走査）
+uv run nova-parser --mode schema_propose
+
+# 特定の TSV ファイルのみからスキーマ提案を生成
+uv run nova-parser --mode schema_propose Output/TNX_OFC_020.docai.tsv Output/TNX_OFC_037.docai.tsv
+
+# スキーマ準拠で型別 TSV 抽出
+uv run nova-parser --mode extract --schema Output/schema.json image1.tif image2.tif
 ```
 
 ## サポート画像形式
@@ -62,6 +75,7 @@ uv run nova-parser --mode docai image1.png
 | `.webp` | `image/webp` |
 | `.tiff` | `image/tiff` |
 | `.tif` | `image/tiff` |
+| `.pdf` | `application/pdf` |
 
 ## 出力モード
 
@@ -395,6 +409,172 @@ Document AI の OCR はプレーンテキスト認識のため、特殊文字が
 | OCR 出力 | 補正後 | 理由 |
 |---|---|---|
 | `NOVA` | `N◎VA` | ゲームタイトル「トーキョーN◎VA」の特殊表記 |
+
+### docai_plain モード
+
+Document AI で OCR を行い、結果を Markdown テキストとして出力します。docai モードと異なり、Gemini による構造化抽出は行いません。
+
+| 項目 | 内容 |
+|------|------|
+| OCR | Google Cloud Document AI（OCR プロセッサ） |
+| 出力先 | `Output/` ディレクトリ（自動作成） |
+| ファイル名 | `{元のファイル名（拡張子なし）}.docai_plain.md` |
+| エンコーディング | UTF-8 |
+| フォーマット | Markdown |
+
+例:
+
+- `Images/NAN_067.tif` → `Output/NAN_067.docai_plain.md`
+
+#### 前提条件・環境変数
+
+docai モードと同じです。ADC の設定と `DOCUMENT_AI_PROCESSOR` 環境変数が必要です。
+
+#### 処理フロー
+
+1. **Document AI OCR**: 画像を Document AI の OCR プロセッサに送信してテキストを取得
+2. **Markdown 出力**: OCR テキストをそのまま Markdown ファイルとして保存
+
+### schema_propose モード
+
+`Output/` 内の docai TSV ファイル（`*.docai*.tsv`）を走査し、各 `## 型名` セクションのヘッダ行を解析してスキーマ提案 JSON を自動生成します。Gemini は使用しません。
+
+| 項目 | 内容 |
+|------|------|
+| 入力 | `Output/*.docai*.tsv`（docai モードの出力ファイル群） |
+| 出力先 | `Output/` ディレクトリ |
+| ファイル名 | `schema_proposal.json` |
+| エンコーディング | UTF-8 |
+| フォーマット | JSON（インデント付き） |
+
+例:
+
+```bash
+# Output/ 内の全 docai TSV を走査
+uv run nova-parser --mode schema_propose
+
+# 特定のファイルのみ指定
+uv run nova-parser --mode schema_propose Output/TNX_OFC_020.docai.tsv Output/TNX_OFC_037.docai.tsv
+# → Output/schema_proposal.json
+```
+
+#### 出力形式
+
+```json
+{
+  "types": [
+    {
+      "type_name": "白兵武器",
+      "fields": ["名称", "ルビ", "隠", "受", "ス", "購", "攻", "射", "電制", "部位", "解説"],
+      "source": "TNX_OFC_020.docai.tsv"
+    }
+  ]
+}
+```
+
+- 同一型名が複数ファイルに存在する場合、フィールドは和集合（出現順保持）になります
+- `## ` ヘッダのないファイル（手動作成ファイル等）はスキップされます
+
+### extract モード
+
+スキーマ定義ファイル（`schema.json`）に従って、Document AI OCR + Gemini でゲームデータを抽出し、型名ごとに TSV ファイルを出力します。
+
+| 項目 | 内容 |
+|------|------|
+| OCR | Google Cloud Document AI（OCR プロセッサ） |
+| 構造化抽出 | `gemini-3-flash-preview` |
+| 出力先 | `Output/` ディレクトリ（自動作成） |
+| ファイル名 | `{type_name}.tsv`（スキーマ合致）/ `none_{type_name}.tsv`（スキーマ外） |
+| エンコーディング | UTF-8 |
+| フォーマット | TSV（タブ区切り、ヘッダ付き） |
+
+例:
+
+```bash
+uv run nova-parser --mode extract --schema Output/schema.json Images/TNX_OFC_020.tif
+# → Output/武器.tsv, Output/防具.tsv 等
+```
+
+#### 前提条件
+
+- docai モードと同じ前提条件（ADC 設定、`DOCUMENT_AI_PROCESSOR` 環境変数）
+- スキーマ定義ファイル（`--schema` で指定）
+
+#### スキーマ定義ファイル
+
+以下の JSON 形式で型名とフィールド一覧を定義します:
+
+```json
+{
+  "types": [
+    {
+      "type_name": "武器",
+      "fields": ["名称", "ルビ", "メーカー", "購", "隠", "攻", "受", "射", "ス", "電制", "部位", "解説"]
+    },
+    {
+      "type_name": "防具",
+      "fields": ["名称", "ルビ", "メーカー", "購", "隠", "防(S/P/I)", "制", "電制", "部位", "解説"]
+    }
+  ]
+}
+```
+
+#### 処理フロー
+
+1. **Document AI OCR**: 画像を Document AI の OCR プロセッサに送信してテキストを取得
+2. **Gemini スキーマ準拠抽出**: OCR テキストとスキーマ定義を Gemini に送り、スキーマに合致するデータ（`matched_types`）と合致しないデータ（`unmatched_types`）を JSON で抽出
+3. **型別 TSV 出力**: 合致データは `{type_name}.tsv` に、非合致データは `none_{type_name}.tsv` に追記
+
+#### 出力形式
+
+各 TSV ファイルは1行目がヘッダ（スキーマの fields + `source`）、2行目以降がデータ行です。複数画像の処理結果は同一ファイルに追記されます。
+
+```
+名称	ルビ	メーカー	購	隠	攻	受	射	ス	電制	部位	解説	source
+撃滅バット	げきめつ	ブラックドラゴン	2/1	8/0	I+1	1	至近	0	10	片手持ち	戦闘にも耐えられるように...	TNX_OFC_020.tif
+```
+
+- `source` 列: 抽出元の画像ファイル名
+- スキーマに合致しないデータは `none_{type_name}.tsv` に動的なヘッダで出力されます
+
+## 4段階ワークフロー
+
+複数の画像ファイルからゲームデータを体系的に抽出する推奨ワークフローです。
+
+### Stage 1: サンプル抽出（docai モード）
+
+サンプル画像を `docai` モードで処理し、動的にデータパターンを検出します。
+
+```bash
+uv run nova-parser --mode docai sample1.tif sample2.tif sample3.tif
+```
+
+### Stage 2: スキーマ提案生成（schema_propose モード）
+
+Stage 1 の出力 TSV からスキーマ案を自動生成します。
+
+```bash
+uv run nova-parser --mode schema_propose
+# → Output/schema_proposal.json
+```
+
+### Stage 3: スキーマ確定（手動）
+
+`schema_proposal.json` を元に、エディタでスキーマを編集・確定します。
+
+- 類似の型を統合（例: 白兵武器 + 射撃武器 → 武器）
+- フィールド名の正規化（OCR 誤認識の修正等）
+- 不要な型の削除、フィールドの追加
+
+確定したスキーマを `schema.json` として保存します。
+
+### Stage 4: 本番抽出（extract モード）
+
+確定スキーマに従って全画像を処理し、型別 TSV を生成します。
+
+```bash
+uv run nova-parser --mode extract --schema Output/schema.json Images/*.tif
+```
 
 ## エラー処理
 

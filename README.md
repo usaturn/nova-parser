@@ -61,7 +61,9 @@ uv run nova-parser path/to/document.pdf
 ## ドキュメント
 
 - [使い方の詳細](docs/usage.md) — CLI オプション、サポート形式、出力仕様
+- [Document AI 期待値最適化ガイド](docs/documentai-expected-output.md) — 入力品質、processor 選定、レスポンス診断、`docai` モードへの適用
 - [MCP サーバー設定](docs/mcp-servers.md) — Claude Code 用の外部ドキュメント検索設定
+- [Claude Code Agent Teams 運用ガイド](docs/agent-teams.md) — Agent Teams の有効化、標準 Team 設計、運用手順
 
 ## 開発
 

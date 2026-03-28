@@ -2,7 +2,9 @@
 
 ## 基本
 
-- ユーザの入力が曖昧な場合はAskUserQuestionツールを積極的に使う
+- ユーザの入力が曖昧な場合は積極的に質問して解像度を上げる
+- 実装速度よりコード品質、保守性、テスト容易性を優先する
+- 計画や設計が必要な変更では、十分に検討してから実装に入る
 
 ## 言語
 
@@ -30,4 +32,4 @@ uv run task ruff
 
 `nova-parser` は Python 3.14 のプロジェクトで、パッケージマネージャは `uv`。エントリポイントは `uv run nova-parser`（`pyproject.toml` の `[project.scripts]` で定義）。devcontainer は日本語ロケールの設定と Claude Code のインストールを行う。
 
-画像から Gemini および Document AI を使って OCR・構造化抽出を行うアプリケーション。6つのモード（`plain`, `structured`, `structured_tsv`, `gamedata`, `schema`, `docai`）を提供する。`google-genai` SDK を使用し、Vertex AI Express モード（API キー認証）で動作する。環境変数は `.env` で管理（`GOOGLE_GENAI_USE_VERTEXAI`, `VERTEX_AI_API_KEY` 等）。
+画像から Gemini および Document AI を使って OCR・構造化抽出を行うアプリケーション。主なモードは `plain`、`structured`、`structured_tsv`、`gamedata`、`schema`、`docai`、`docai_plain`、`schema_propose`、`extract`。`google-genai` SDK を使用し、Vertex AI Express モード（API キー認証）で動作する。環境変数は `.env` で管理（`GOOGLE_GENAI_USE_VERTEXAI`, `VERTEX_AI_API_KEY` 等）。
