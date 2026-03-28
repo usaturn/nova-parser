@@ -13,13 +13,16 @@ nova-parser
 ## CLI 引数
 
 ```
-nova-parser [--mode {plain,structured,structured_tsv,gamedata,schema,docai,docai_plain,schema_propose,extract}] [--schema SCHEMA] [files ...]
+nova-parser [--mode {plain,structured,structured_tsv,gamedata,schema,docai,docai_plain,schema_propose,extract,crop}] [--schema SCHEMA] [--min-card-area MIN] [--max-card-area MAX] [--padding PX] [files ...]
 ```
 
 | 引数/オプション | 説明 | デフォルト |
 |------|------|------|
-| `--mode` | 出力モード（`plain`、`structured`、`structured_tsv`、`gamedata`、`schema`、`docai`、`docai_plain`、`schema_propose`、`extract`） | `plain` |
+| `--mode` | 出力モード（`plain`、`structured`、`structured_tsv`、`gamedata`、`schema`、`docai`、`docai_plain`、`schema_propose`、`extract`、`crop`） | `plain` |
 | `--schema` | スキーマ定義ファイルのパス（`extract` モード時に必須） | — |
+| `--min-card-area` | `crop` モード: カード最小面積比率 | `0.05` |
+| `--max-card-area` | `crop` モード: カード最大面積比率 | `0.80` |
+| `--padding` | `crop` モード: クロップ時のパディング（px） | `15` |
 | `files` | 処理する画像/PDFファイルのパス（省略可、複数指定可） | — |
 
 - 引数を省略すると、`Images/` ディレクトリ内のサポート対象画像を全て処理します
@@ -61,6 +64,12 @@ uv run nova-parser --mode schema_propose Output/TNX_OFC_020.docai.tsv Output/TNX
 
 # スキーマ準拠で型別 TSV 抽出
 uv run nova-parser --mode extract --schema Output/schema.json image1.tif image2.tif
+
+# Document AI OCR のブロック座標でカード領域を切り出し
+uv run nova-parser --mode crop image1.png
+
+# カード面積比率とパディングを調整して切り出し
+uv run nova-parser --mode crop --min-card-area 0.03 --max-card-area 0.60 --padding 20 image1.png
 ```
 
 ## サポート画像形式
@@ -548,6 +557,81 @@ uv run nova-parser --mode extract --schema Output/schema.json Images/TNX_OFC_020
 
 - `source` 列: 抽出元の画像ファイル名
 - スキーマに合致しないデータは `none_{type_name}.tsv` に動的なヘッダで出力されます
+
+### crop モード
+
+Document AI の OCR ブロック座標を利用して、画像内のカード領域を自動検出・切り出しします。近接ブロックのクラスタリングと面積比率フィルタリングにより、テーブルやカードなどのまとまった領域を個別の画像として保存します。
+
+| 項目 | 内容 |
+|------|------|
+| OCR | Google Cloud Document AI（OCR プロセッサ） |
+| 出力先 | `Output/` ディレクトリ（自動作成） |
+| 画像ファイル名 | `{元のファイル名（拡張子なし）}.crop_{NNN}.png`（NNN は 001 から連番） |
+| メタデータファイル名 | `{元のファイル名（拡張子なし）}.crop.json` |
+| エンコーディング | UTF-8（JSON） |
+| フォーマット | PNG（画像）、JSON（メタデータ） |
+
+例:
+
+- `Images/NAN_067.png` → `Output/NAN_067.crop_001.png`, `Output/NAN_067.crop_002.png`, ..., `Output/NAN_067.crop.json`
+
+#### 前提条件・環境変数
+
+docai モードと同じです。認証設定と `DOCUMENT_AI_PROCESSOR` 環境変数が必要です。
+
+#### CLI オプション
+
+| オプション | 型 | デフォルト | 説明 |
+|------|------|------|------|
+| `--min-card-area` | float | `0.05` | カード候補の最小面積比率（ページ全体に対する割合）。これより小さい領域は除外される |
+| `--max-card-area` | float | `0.80` | カード候補の最大面積比率。これより大きい領域は除外される |
+| `--padding` | int | `15` | クロップ時に各辺に追加するパディング（ピクセル） |
+
+#### 処理フロー
+
+1. **Document AI OCR**: 画像を Document AI の OCR プロセッサに送信し、ブロック座標を取得
+2. **ブロック抽出**: 各ブロックの正規化座標をピクセル座標に変換
+3. **クラスタリング**: 垂直方向に近接し水平方向に重なるブロックを統合
+4. **面積フィルタリング**: `--min-card-area` 〜 `--max-card-area` の範囲外の領域を除外
+5. **クロップ**: 各候補領域を `--padding` 付きで切り出し、PNG として保存
+6. **メタデータ出力**: 全カード情報を JSON ファイルに保存
+
+#### 出力形式（メタデータ JSON）
+
+```json
+{
+  "source": "NAN_067.png",
+  "cards": [
+    {
+      "index": 1,
+      "left": 100,
+      "top": 200,
+      "right": 500,
+      "bottom": 600,
+      "confidence": 0.9876,
+      "text_snippet": "カード内のテキスト（先頭100文字）...",
+      "file": "NAN_067.crop_001.png"
+    }
+  ]
+}
+```
+
+| フィールド | 型 | 説明 |
+|------|------|------|
+| `source` | string | 元の画像ファイル名 |
+| `cards[].index` | int | カードの連番（1 始まり） |
+| `cards[].left` | int | 左端のピクセル座標 |
+| `cards[].top` | int | 上端のピクセル座標 |
+| `cards[].right` | int | 右端のピクセル座標 |
+| `cards[].bottom` | int | 下端のピクセル座標 |
+| `cards[].confidence` | float | OCR の平均信頼度（クラスタ内ブロックの平均） |
+| `cards[].text_snippet` | string | 領域内テキストの先頭 100 文字 |
+| `cards[].file` | string | 切り出し画像のファイル名 |
+
+#### 制限事項
+
+- **PDF は非対応**: ピクセル座標での切り出しに画像が必要なため、PDF ファイルはスキップされます
+- レート制限（429）発生時は指数バックオフで最大 5 回リトライします
 
 ## 4段階ワークフロー
 

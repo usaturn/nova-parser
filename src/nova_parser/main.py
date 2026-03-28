@@ -430,6 +430,70 @@ def run_extract(images: list[Path], schema_path: Path) -> None:
         print("完了")
 
 
+def run_crop(images: list[Path], *, min_card_area: float, max_card_area: float, padding: int) -> None:
+    """crop モード: Document AI OCR のブロック座標からカード領域を検出・切り出す。"""
+    import json
+
+    from PIL import Image
+
+    from nova_parser.crop import detect_and_crop_cards
+    from nova_parser.documentai import process_image_with_documentai
+
+    for img in images:
+        mime = MIME_TYPES.get(img.suffix.lower(), "")
+        if mime == "application/pdf":
+            print(f"スキップ: {img.name}（crop モードは PDF に対応していません）")
+            continue
+
+        print(f"処理中: {img.name} ... ", end="", flush=True)
+        for attempt in range(MAX_RETRIES):
+            try:
+                document = process_image_with_documentai(img)
+                pil_image = Image.open(img)
+                results = detect_and_crop_cards(
+                    pil_image,
+                    document,
+                    min_area_ratio=min_card_area,
+                    max_area_ratio=max_card_area,
+                    padding=padding,
+                )
+                break
+            except Exception as exc:
+                if not _is_rate_limit_error(exc) or attempt == MAX_RETRIES - 1:
+                    raise
+                wait = INITIAL_WAIT * (2**attempt)
+                print(f"\n  レート制限 - {wait}秒後にリトライ ({attempt + 1}/{MAX_RETRIES}) ... ", end="", flush=True)
+                time.sleep(wait)
+
+        if not results:
+            print("カード領域が検出されませんでした。")
+            continue
+
+        cards_meta: list[dict] = []
+        for i, (region, cropped_img) in enumerate(results, 1):
+            crop_file = OUTPUT_DIR / f"{img.stem}.crop_{i:03d}.png"
+            cropped_img.save(crop_file)
+            cards_meta.append(
+                {
+                    "index": i,
+                    "left": region.left,
+                    "top": region.top,
+                    "right": region.right,
+                    "bottom": region.bottom,
+                    "confidence": round(region.confidence, 4),
+                    "text_snippet": region.text_snippet,
+                    "file": crop_file.name,
+                }
+            )
+
+        meta_file = OUTPUT_DIR / f"{img.stem}.crop.json"
+        meta_file.write_text(
+            json.dumps({"source": img.name, "cards": cards_meta}, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        print(f"完了 -> {len(results)} 件のカード領域を検出 ({meta_file})")
+
+
 def run_docai(images: list[Path]) -> None:
     """docai モード: Document AI で OCR → Gemini で構造化抽出 → TSV 出力。"""
     from nova_parser.documentai import extract_docai
@@ -471,6 +535,7 @@ def main():
             "docai_plain",
             "schema_propose",
             "extract",
+            "crop",
         ],
         default="plain",
         help="出力モード: plain=Markdown OCR, structured=JSON 構造化抽出, "
@@ -478,13 +543,32 @@ def main():
         "schema=型名・フィールド名のみ抽出, docai=Document AI OCR+構造化TSV, "
         "docai_plain=Document AI OCRのみMarkdown出力, "
         "schema_propose=docai TSVからスキーマ提案生成, "
-        "extract=スキーマ準拠で型別TSV抽出（デフォルト: plain）",
+        "extract=スキーマ準拠で型別TSV抽出, "
+        "crop=Document AI OCRのブロック座標でカード領域を切り出し（デフォルト: plain）",
     )
     parser.add_argument(
         "--schema",
         type=str,
         default=None,
         help="スキーマ定義ファイルのパス（extract モード時に必須）",
+    )
+    parser.add_argument(
+        "--min-card-area",
+        type=float,
+        default=0.05,
+        help="crop モード: カード最小面積比率（デフォルト: 0.05）",
+    )
+    parser.add_argument(
+        "--max-card-area",
+        type=float,
+        default=0.80,
+        help="crop モード: カード最大面積比率（デフォルト: 0.80）",
+    )
+    parser.add_argument(
+        "--padding",
+        type=int,
+        default=15,
+        help="crop モード: クロップ時のパディング px（デフォルト: 15）",
     )
     parser.add_argument(
         "files",
@@ -529,6 +613,8 @@ def main():
         run_docai_plain(images)
     elif args.mode == "extract":
         run_extract(images, Path(args.schema))
+    elif args.mode == "crop":
+        run_crop(images, min_card_area=args.min_card_area, max_card_area=args.max_card_area, padding=args.padding)
     else:
         run_schema(images)
 

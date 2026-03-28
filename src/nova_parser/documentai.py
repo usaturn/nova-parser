@@ -76,6 +76,19 @@ def _split_pdf(pdf_bytes: bytes, chunk_size: int = DOCAI_PAGE_LIMIT) -> list[byt
     return chunks
 
 
+def _process_single_document(
+    client: documentai.DocumentProcessorServiceClient,
+    processor_name: str,
+    content: bytes,
+    mime_type: str,
+) -> documentai.Document:
+    """Document AI で単一ドキュメントを処理し、Document オブジェクトを返す。"""
+    raw_document = documentai.RawDocument(content=content, mime_type=mime_type)
+    request = documentai.ProcessRequest(name=processor_name, raw_document=raw_document)
+    result = client.process_document(request=request)
+    return result.document
+
+
 def _ocr_single_document(
     client: documentai.DocumentProcessorServiceClient,
     processor_name: str,
@@ -83,10 +96,22 @@ def _ocr_single_document(
     mime_type: str,
 ) -> str:
     """Document AI で単一ドキュメントを OCR し、テキストを返す。"""
-    raw_document = documentai.RawDocument(content=content, mime_type=mime_type)
-    request = documentai.ProcessRequest(name=processor_name, raw_document=raw_document)
-    result = client.process_document(request=request)
-    return result.document.text
+    return _process_single_document(client, processor_name, content, mime_type).text
+
+
+def process_image_with_documentai(image_path: Path) -> documentai.Document:
+    """画像を Document AI で処理し、完全な Document オブジェクトを返す。
+
+    PDF は非対応（ピクセル座標での切り出しに画像が必要なため）。
+    """
+    mime_type = MIME_TYPES[image_path.suffix.lower()]
+    if mime_type == "application/pdf":
+        msg = "process_image_with_documentai は PDF に対応していません。画像ファイルを指定してください。"
+        raise ValueError(msg)
+
+    processor_name = get_processor_name()
+    client = _get_documentai_client()
+    return _process_single_document(client, processor_name, image_path.read_bytes(), mime_type)
 
 
 def ocr_with_documentai(image_path: Path) -> str:

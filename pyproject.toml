@@ -15,6 +15,7 @@ dependencies = [
     "pydantic-ai",
     "google-cloud-documentai>=3.10.0",
     "pypdf>=6.8.0",
+    "pillow>=10.0.0",
 ]
 
 [project.scripts]
@@ -22,6 +23,7 @@ nova-parser = "nova_parser.main:main"
 
 [dependency-groups]
 dev = [
+    "pytest>=9.0.2",
     "taskipy",
 ]
 
