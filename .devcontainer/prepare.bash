@@ -2,6 +2,9 @@
 
 set -u
 
+cat .devcontainer/zshrc.txt >> ${HOME}/.zshrc
+cp .devcontainer/tmux.conf ${HOME}/.tmux.conf
+sudo apt update && sudo apt install -y tmux powerline tig fonts-powerline
 echo "Setting up Japanese locale..."
 sudo sed -i 's/# ja_JP.UTF-8/ja_JP.UTF-8/' /etc/locale.gen
 sudo locale-gen

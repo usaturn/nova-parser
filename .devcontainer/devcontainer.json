@@ -4,7 +4,10 @@
 	"name": "Ubuntu",
 	"mounts": [
 		"source=${localEnv:HOME}${localEnv:USERPROFILE}/.gitconfig,target=/home/vscode/.gitconfig,type=bind,consistency=cached",
-		"source=${localEnv:SSH_AUTH_SOCK},target=/tmp/ssh-auth.sock,type=bind,consistency=cached"
+		"source=${localEnv:SSH_AUTH_SOCK},target=/tmp/ssh-auth.sock,type=bind,consistency=cached",
+		"source=${localEnv:HOME}/.codex,target=/home/vscode/.codex,type=bind,consistency=cached",
+		"source=${localEnv:HOME}/.claude,target=/home/vscode/.claude,type=bind,consistency=cached",
+		"source=${localEnv:HOME}/.claude.json,target=/home/vscode/.claude.json,type=bind,consistency=cached"
 	],
 	"remoteEnv": {
 		"SSH_AUTH_SOCK": "/tmp/ssh-auth.sock"
