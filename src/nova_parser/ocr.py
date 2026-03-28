@@ -1,5 +1,6 @@
 """既存の OCR（プレーンテキスト抽出）ロジック。"""
 
+import json
 import os
 from pathlib import Path
 
@@ -26,6 +27,7 @@ OCR_PROMPT = """\
 """
 
 MODEL = "gemini-3.1-pro-preview"
+FLASH_MODEL = "gemini-3-flash-preview"
 
 
 def get_client() -> genai.Client:
@@ -34,6 +36,29 @@ def get_client() -> genai.Client:
         vertexai=True,
         api_key=os.environ.get("VERTEX_AI_API_KEY"),
     )
+
+
+def generate_json(
+    contents: list,
+    *,
+    model: str = FLASH_MODEL,
+    temperature: float = 0.0,
+) -> dict | list:
+    """Gemini に JSON レスポンスを要求し、パース結果を返す。"""
+    client = get_client()
+    response = client.models.generate_content(
+        model=model,
+        contents=contents,
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            temperature=temperature,
+        ),
+    )
+    try:
+        return json.loads(response.text)
+    except json.JSONDecodeError as exc:
+        msg = f"Gemini が不正な JSON を返しました: {response.text[:200]}"
+        raise ValueError(msg) from exc
 
 
 def ocr_image(client: genai.Client, image_path: Path) -> str:

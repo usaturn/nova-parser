@@ -1,38 +1,15 @@
 """docai モード: Document AI で OCR し、Gemini で構造化抽出する。"""
 
 import io
-import json
 import os
 from pathlib import Path
 
 from google.cloud import documentai_v1 as documentai
-from google.genai import types
 
-from nova_parser.ocr import MIME_TYPES, get_client
+from nova_parser.ocr import MIME_TYPES, generate_json
+from nova_parser.prompts import DOCAI_EXTRACT_PROMPT, SCHEMA_EXTRACT_PROMPT
 
 DOCAI_PAGE_LIMIT = 15
-
-GEMINI_MODEL = "gemini-3-flash-preview"
-
-EXTRACT_PROMPT = """\
-以下はTRPGルールブックのページから OCR で抽出したテキストです。
-このテキストに含まれるゲームデータを抽出してください。
-
-以下はデータ型の例です:
-- スキル: 名称, ルビ, 技能, 上限, タイミング, 対象, 射程, 目標値, 対決, 解説
-- 防具: 名称, ルビ, 購, 隠, 防S, 防P, 防I, 制, 電制, 部位, 解説
-- サービス: 名称, ルビ, 購, 隠, 電制, 部位, 解説
-- ニューラルウェア: 名称, ルビ, 購, 隠, 電制, 部位, 解説
-
-上記以外のデータ型がテキストにある場合は、適切な型名とフィールドを定義して抽出してください。
-該当するデータがない場合はtypesを空配列にしてください。
-各項目の値は原文をできるだけ忠実に抽出してください。
-
-出力は以下のJSON形式に従ってください:
-{"types": [{"type_name": "白兵武器", "items": [{"名称": "...", "ルビ": "...", ...}]}]}
-
---- OCR テキスト ---
-"""
 
 
 def get_processor_name() -> str:
@@ -51,16 +28,14 @@ def _get_documentai_client() -> documentai.DocumentProcessorServiceClient:
     """Document AI クライアントを初期化する（OAuth2 / ADC 認証）。
 
     GOOGLE_APPLICATION_CREDENTIALS が存在しないファイルを指している場合は
-    一時的に無視して gcloud ADC にフォールバックする。
+    環境変数を変更せず google.auth.default() で認証情報を取得する。
     """
     creds_file = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
     if creds_file and not Path(creds_file).exists():
-        saved = os.environ.pop("GOOGLE_APPLICATION_CREDENTIALS")
-        try:
-            return documentai.DocumentProcessorServiceClient()
-        except Exception:
-            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = saved
-            raise
+        import google.auth
+
+        credentials, _ = google.auth.default()
+        return documentai.DocumentProcessorServiceClient(credentials=credentials)
     return documentai.DocumentProcessorServiceClient()
 
 
@@ -111,10 +86,7 @@ def ocr_with_documentai(image_path: Path) -> str:
         chunks = _split_pdf(file_content)
         if len(chunks) > 1:
             print(f"({len(chunks)} チャンクに分割) ", end="", flush=True)
-        texts = [
-            _ocr_single_document(client, processor_name, chunk, mime_type)
-            for chunk in chunks
-        ]
+        texts = [_ocr_single_document(client, processor_name, chunk, mime_type) for chunk in chunks]
         text = "\n".join(texts)
     else:
         text = _ocr_single_document(client, processor_name, file_content, mime_type)
@@ -126,26 +98,24 @@ def ocr_with_documentai(image_path: Path) -> str:
 
 def extract_gamedata_from_text(ocr_text: str) -> dict:
     """Gemini を使って OCR テキストからゲームデータを構造化抽出する。"""
-    gemini_client = get_client()
-
-    response = gemini_client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=[EXTRACT_PROMPT + ocr_text],
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            temperature=0.0,
-        ),
-    )
-
-    result = json.loads(response.text)
+    result = generate_json([DOCAI_EXTRACT_PROMPT + ocr_text])
     if isinstance(result, list):
         result = {"types": result}
     return result
+
+
+def extract_with_schema(image_path: Path, schema: dict) -> dict:
+    """Document AI OCR → スキーマ準拠で Gemini 構造化抽出する。"""
+    ocr_text = ocr_with_documentai(image_path)
+
+    schema_section = "\n".join(f"- {t['type_name']}: {', '.join(t['fields'])}" for t in schema["types"])
+    prompt = SCHEMA_EXTRACT_PROMPT.format(schema_section=schema_section, ocr_text=ocr_text)
+
+    return generate_json([prompt])
 
 
 def extract_docai(image_path: Path) -> dict:
     """Document AI で OCR → Gemini で構造化抽出のパイプラインを実行する。"""
     ocr_text = ocr_with_documentai(image_path)
     result = extract_gamedata_from_text(ocr_text)
-    result["source_file"] = image_path.name
-    return result
+    return {**result, "source_file": image_path.name}
