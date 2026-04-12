@@ -63,7 +63,10 @@ uv run nova-parser path/to/document.pdf
 - [使い方の詳細](docs/usage.md) — CLI オプション、サポート形式、出力仕様
 - [Document AI 期待値最適化ガイド](docs/documentai-expected-output.md) — 入力品質、processor 選定、レスポンス診断、`docai` モードへの適用
 - [MCP サーバー設定](docs/mcp-servers.md) — Claude Code 用の外部ドキュメント検索設定
+- [Codex CLI Subagents（マルチエージェント）運用ガイド](docs/codex-subagents.md) — Subagents の基本、カスタム agent 定義、推奨運用
 - [Claude Code Agent Teams 運用ガイド](docs/agent-teams.md) — Agent Teams の有効化、標準 Team 設計、運用手順
+- [Claude Code feature-dev 詳解ガイド](docs/feature-dev.md) — 7 フェーズの詳細、補助エージェントの役割、導入と基本的な使い方
+- [Claude Code feature-dev インストール復旧手順](docs/feature-dev-install-recovery.md) — 壊れた marketplace キャッシュや古いパス参照を修正する手順
 
 ## 開発
 

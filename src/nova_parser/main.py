@@ -27,15 +27,26 @@ def resolve_images(file_args: list[str]) -> list[Path]:
         for f in file_args:
             p = Path(f)
             if not p.exists():
-                print(f"エラー: ファイルが見つかりません: {p}", file=sys.stderr)
+                print(f"エラー: パスが見つかりません: {p}", file=sys.stderr)
                 sys.exit(1)
-            if p.suffix.lower() not in MIME_TYPES:
-                print(
-                    f"エラー: サポートされていないファイル形式です: {p.suffix} ({p})",
-                    file=sys.stderr,
+            if p.is_dir():
+                dir_images = sorted(
+                    child for child in p.iterdir() if child.is_file() and child.suffix.lower() in MIME_TYPES
                 )
-                sys.exit(1)
-            images.append(p)
+                if not dir_images:
+                    print(
+                        f"警告: ディレクトリに対象ファイルが見つかりません: {p}",
+                        file=sys.stderr,
+                    )
+                images.extend(dir_images)
+            else:
+                if p.suffix.lower() not in MIME_TYPES:
+                    print(
+                        f"エラー: サポートされていないファイル形式です: {p.suffix} ({p})",
+                        file=sys.stderr,
+                    )
+                    sys.exit(1)
+                images.append(p)
         return images
 
     if not IMAGES_DIR.exists():
@@ -431,13 +442,12 @@ def run_extract(images: list[Path], schema_path: Path) -> None:
 
 
 def run_crop(images: list[Path], *, min_card_area: float, max_card_area: float, padding: int) -> None:
-    """crop モード: Document AI OCR のブロック座標からカード領域を検出・切り出す。"""
+    """crop モード: Gemini Vision でカード領域を検出・切り出す（フォールバック: Document AI）。"""
     import json
 
     from PIL import Image
 
-    from nova_parser.crop import detect_and_crop_cards
-    from nova_parser.documentai import process_image_with_documentai
+    from nova_parser.crop import crop_cards, detect_and_crop_cards, detect_cards_with_gemini
 
     for img in images:
         mime = MIME_TYPES.get(img.suffix.lower(), "")
@@ -448,15 +458,26 @@ def run_crop(images: list[Path], *, min_card_area: float, max_card_area: float, 
         print(f"処理中: {img.name} ... ", end="", flush=True)
         for attempt in range(MAX_RETRIES):
             try:
-                document = process_image_with_documentai(img)
-                pil_image = Image.open(img)
-                results = detect_and_crop_cards(
-                    pil_image,
-                    document,
-                    min_area_ratio=min_card_area,
-                    max_area_ratio=max_card_area,
-                    padding=padding,
-                )
+                # Gemini Vision でカード検出を試みる
+                regions = detect_cards_with_gemini(img)
+                if regions:
+                    pil_image = Image.open(img)
+                    results = crop_cards(pil_image, regions, padding)
+                    print("(Gemini) ", end="", flush=True)
+                else:
+                    # フォールバック: Document AI ベースの検出
+                    from nova_parser.documentai import process_image_with_documentai
+
+                    print("(Document AI フォールバック) ", end="", flush=True)
+                    document = process_image_with_documentai(img)
+                    pil_image = Image.open(img)
+                    results = detect_and_crop_cards(
+                        pil_image,
+                        document,
+                        min_area_ratio=min_card_area,
+                        max_area_ratio=max_card_area,
+                        padding=padding,
+                    )
                 break
             except Exception as exc:
                 if not _is_rate_limit_error(exc) or attempt == MAX_RETRIES - 1:
@@ -573,7 +594,8 @@ def main():
     parser.add_argument(
         "files",
         nargs="*",
-        help="処理する画像/PDFファイルのパス（省略時は Images/ 内の全画像を処理）",
+        help="処理する画像/PDFファイルまたはディレクトリのパス"
+        "（ディレクトリ指定時は直下の画像を処理。省略時は Images/ 内の全画像を処理）",
     )
     args = parser.parse_args()
 
@@ -594,7 +616,7 @@ def main():
     images = resolve_images(args.files)
 
     if not images:
-        print(f"{IMAGES_DIR}/ に対象ファイルが見つかりません。")
+        print("対象ファイルが見つかりません。")
         return
 
     print(f"{len(images)} 件のファイルを処理します。（モード: {args.mode}）\n")

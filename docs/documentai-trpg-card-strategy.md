@@ -25,7 +25,7 @@
 
 ## なぜ `Custom Extractor` が本命か
 
-今回欲しいのは、単なる OCR テキストではなく、カード単位にまとまった構造化データです。つまり「1 カード = 1 レコード」であり、その下に `名称`、`ルビ`、`技能`、`対象`、`射程`、`解説` のような複数フィールドがぶら下がります。
+今回欲しいのは、単なる OCR テキストではなく、カード単位にまとまった構造化データです。つまり「1 カード = 1 レコード」であり、その下に概念上は「名称」「ルビ」「技能」「対象」「射程」「解説」のような複数フィールドがぶら下がります。Document AI の label 名自体は `name`, `ruby`, `skill`, `target`, `range`, `description` のような ASCII 名にする前提です。
 
 この形は、Document AI の機能で言うと「OCR」よりも「entity extraction」に近く、さらに事前定義した schema を持てる方が相性がよくなります。`Custom Extractor` はまさにこの用途向けで、公式 docs でも新しい文書タイプに対して custom entity extraction solution を作るための選択肢として説明されています。
 
@@ -103,8 +103,8 @@
 
 | 階層 | 例 |
 |---|---|
-| parent | `game_card` |
-| child | `type_name`, `name`, `ruby`, `skill`, `timing`, `target`, `range`, `cost`, `limit`, `description` |
+| parent | `game_card`（最小構成） / `skill_card`, `armor_card`, `melee_weapon_card` など（型名が必要な場合） |
+| child | `name`, `ruby`, `skill`, `timing`, `target`, `range`, `cost`, `limit`, `description` |
 
 カード種別ごとにフィールド差が大きい場合は、次のどちらかに寄せます。
 
@@ -112,7 +112,8 @@
 - カード種別ごとに別 parent を切る
 
 後者の方が schema は明確ですが、カード種別が多すぎると運用が重くなります。
-この repo の現状を見る限り、まずは `game_card` を共通 parent にして、型名は child として持つ構成から始めるのが無難です。これは**repo 運用上の推奨**です。
+ただし `type_name` を child field にするのは、カード面にその文字列が明示されていて、実際に抽出対象のテキストとしてラベル付けできる場合に限るべきです。文字列ではなく分類値として扱うことが多いなら、`skill_card` や `armor_card` のように parent label を型別に分けて `entity.type_` から復元する方が自然です。
+この repo の現状を見る限り、まずは `game_card` を共通 parent にして text-backed な child fields のみで始め、型別出力が必要になった段階で parent 分割を検討するのが無難です。これは**repo 運用上の推奨**です。
 
 ## template-based と custom model-based の選び分け
 
@@ -186,6 +187,7 @@
 ### label 名と description を丁寧に作る
 
 公式 docs では、field description は extraction accuracy の改善に使えると説明されています。
+また、Document AI の label 名は先頭が英字で、使用できるのは英数字、`_`、`-` のみです。日本語の項目名や `防(S/P/I)` のような表記は label 名にせず、ASCII の label 名と description で意味を分離した方が安全です。
 似た項目が多いカードでは、`description` に「この項目は消費コストであり、購入価格ではない」のような差分説明を書く価値があります。
 
 ### document-level prompt は補助として使える

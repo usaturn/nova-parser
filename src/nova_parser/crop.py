@@ -1,12 +1,13 @@
-"""crop モード: Document AI OCR のブロック座標からカード領域を検出・切り出す。
+"""crop モード: カード領域を検出・切り出す。
 
-このモジュールは Document AI の型に直接依存せず、duck typing で Document オブジェクトを受け取る。
-Document AI の呼び出しは呼び出し元（main.py の run_crop）が行う。
+Gemini Vision によるカード検出と、Document AI OCR ブロック座標による検出の両方をサポートする。
+Document AI の型に直接依存せず、duck typing で Document オブジェクトを受け取る。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from PIL import Image
@@ -31,6 +32,42 @@ class PageBlocks:
     regions: list[CardRegion]
     page_width: int
     page_height: int
+
+
+def detect_cards_with_gemini(image_path: Path) -> list[CardRegion]:
+    """Gemini Vision でカード領域を検出し、ピクセル座標の CardRegion リストを返す。"""
+    from google.genai import types
+
+    from nova_parser.ocr import MIME_TYPES, generate_json
+    from nova_parser.prompts import CARD_DETECT_PROMPT
+
+    mime_type = MIME_TYPES[image_path.suffix.lower()]
+    image_bytes = image_path.read_bytes()
+
+    result = generate_json(
+        [
+            CARD_DETECT_PROMPT,
+            types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+        ],
+    )
+
+    cards_raw = result.get("cards", []) if isinstance(result, dict) else []
+    if not cards_raw:
+        return []
+
+    with Image.open(image_path) as img:
+        img_width, img_height = img.size
+
+    regions: list[CardRegion] = []
+    for card in cards_raw:
+        left = int(card["left"] * img_width)
+        top = int(card["top"] * img_height)
+        right = int(card["right"] * img_width)
+        bottom = int(card["bottom"] * img_height)
+        label = card.get("label", "")
+        regions.append(CardRegion(left, top, right, bottom, confidence=1.0, text_snippet=label))
+
+    return regions
 
 
 def extract_block_regions(document: Any, page_index: int = 0) -> PageBlocks:
