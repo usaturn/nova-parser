@@ -7,6 +7,8 @@ from pathlib import Path
 from google import genai
 from google.genai import types
 
+from nova_parser.perf import tracker
+
 MIME_TYPES: dict[str, str] = {
     ".pdf": "application/pdf",
     ".png": "image/png",
@@ -66,11 +68,12 @@ def ocr_image(client: genai.Client, image_path: Path) -> str:
     mime_type = MIME_TYPES[image_path.suffix.lower()]
     image_bytes = image_path.read_bytes()
 
-    response = client.models.generate_content(
-        model=MODEL,
-        contents=[
-            OCR_PROMPT,
-            types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
-        ],
-    )
+    with tracker.timer("Gemini OCR", str(image_path)):
+        response = client.models.generate_content(
+            model=MODEL,
+            contents=[
+                OCR_PROMPT,
+                types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+            ],
+        )
     return response.text

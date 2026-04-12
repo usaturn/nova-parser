@@ -7,7 +7,9 @@ from pathlib import Path
 import pytest
 
 import nova_parser.documentai as documentai_mod
+import nova_parser.gamedata as gamedata_mod
 import nova_parser.main as main_mod
+import nova_parser.perf as perf_mod
 
 
 def _make_images(tmp_path: Path, *names: str) -> list[Path]:
@@ -40,6 +42,13 @@ def _write_schema(schema_path: Path) -> None:
 def _read_output_texts(output_dir: Path, pattern: str) -> dict[str, str]:
     """出力ディレクトリ内の対象ファイル内容を読み込む。"""
     return {path.name: path.read_text(encoding="utf-8") for path in sorted(output_dir.glob(pattern))}
+
+
+@pytest.fixture(autouse=True)
+def reset_perf_tracker():
+    perf_mod.tracker.reset()
+    yield
+    perf_mod.tracker.reset()
 
 
 def test_run_docai_parallel_matches_sequential(monkeypatch, tmp_path):
@@ -285,6 +294,72 @@ def test_run_extract_failure_does_not_commit(monkeypatch, tmp_path):
     assert append_calls == 0
     assert existing_card.read_text(encoding="utf-8") == existing_text
     assert not (output_dir / "none_Unknown.tsv").exists()
+
+
+def test_run_extract_reports_retry_timings(monkeypatch, tmp_path, capsys):
+    image_path = _make_images(tmp_path, "retry.png")[0]
+    schema_path = tmp_path / "schema.json"
+    _write_schema(schema_path)
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    attempts = 0
+    sleep_calls: list[int] = []
+
+    def fake_extract_with_schema(image_path: Path, schema: dict, *, show_progress: bool = True) -> dict:
+        nonlocal attempts
+        attempts += 1
+        perf_mod.tracker.record("DocAI OCR", str(image_path), 90.0)
+        if attempts == 1:
+            perf_mod.tracker.record("Gemini JSON", str(image_path), 40.0, outcome="error")
+            raise RuntimeError("429")
+        perf_mod.tracker.record("Gemini JSON", str(image_path), 70.0)
+        return {
+            "matched_types": [
+                {
+                    "type_name": "Card",
+                    "items": [{"name": image_path.stem, "power": "7"}],
+                }
+            ],
+            "unmatched_types": [],
+        }
+
+    monkeypatch.setattr(documentai_mod, "extract_with_schema", fake_extract_with_schema)
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", output_dir)
+    monkeypatch.setattr(main_mod, "INITIAL_WAIT", 1)
+    monkeypatch.setattr(main_mod, "_is_rate_limit_error", lambda exc: str(exc) == "429")
+    monkeypatch.setattr(main_mod.time, "sleep", lambda seconds: sleep_calls.append(seconds))
+
+    main_mod.run_extract([image_path], schema_path, parallel_files=1)
+
+    captured = capsys.readouterr().out
+    assert "retry.png: レート制限 - attempt 1/5 失敗: Gemini JSON 40.0s" in captured
+    assert "retry.png: retry wait 1.0s" in captured
+    assert "DocAI OCR 実 180.0s / 成功 180.0s (2回, 0失敗)" in captured
+    assert "Gemini JSON 実 110.0s / 成功 70.0s (2回, 1失敗)" in captured
+    assert "retry wait 1.0s, 実計 291.0s, 成功計 250.0s" in captured
+    assert sleep_calls == [1]
+    assert (output_dir / "Card.tsv").read_text(encoding="utf-8") == "name\tpower\tsource\nretry\t7\tretry.png\n"
+
+
+def test_run_schema_omits_empty_perf_summary(monkeypatch, tmp_path, capsys):
+    image_path = _make_images(tmp_path, "alpha.png")[0]
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", output_dir)
+    monkeypatch.setattr(
+        gamedata_mod,
+        "extract_schema",
+        lambda image_path: {"types": [{"type_name": "Card", "fields": ["name"]}]},
+    )
+
+    main_mod.run_schema([image_path])
+
+    captured = capsys.readouterr().out
+    assert f"完了 -> {output_dir / 'alpha.schema.tsv'}" in captured
+    assert "成功計" not in captured
+    assert "実計" not in captured
 
 
 def test_main_passes_parallel_files_to_docai(monkeypatch, tmp_path):

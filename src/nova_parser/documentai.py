@@ -7,6 +7,7 @@ from pathlib import Path
 from google.cloud import documentai_v1 as documentai
 
 from nova_parser.ocr import MIME_TYPES, generate_json
+from nova_parser.perf import tracker
 from nova_parser.prompts import DOCAI_EXTRACT_PROMPT, SCHEMA_EXTRACT_PROMPT
 
 DOCAI_PAGE_LIMIT = 15
@@ -124,14 +125,15 @@ def ocr_with_documentai(image_path: Path, *, show_progress: bool = True) -> str:
     mime_type = MIME_TYPES[image_path.suffix.lower()]
     file_content = image_path.read_bytes()
 
-    if mime_type == "application/pdf":
-        chunks = _split_pdf(file_content)
-        if len(chunks) > 1 and show_progress:
-            print(f"({len(chunks)} チャンクに分割) ", end="", flush=True)
-        texts = [_ocr_single_document(client, processor_name, chunk, mime_type) for chunk in chunks]
-        text = "\n".join(texts)
-    else:
-        text = _ocr_single_document(client, processor_name, file_content, mime_type)
+    with tracker.timer("DocAI OCR", str(image_path)):
+        if mime_type == "application/pdf":
+            chunks = _split_pdf(file_content)
+            if len(chunks) > 1 and show_progress:
+                print(f"({len(chunks)} チャンクに分割) ", end="", flush=True)
+            texts = [_ocr_single_document(client, processor_name, chunk, mime_type) for chunk in chunks]
+            text = "\n".join(texts)
+        else:
+            text = _ocr_single_document(client, processor_name, file_content, mime_type)
 
     # Document AI は「N◎VA」を「NOVA」として認識するため補正する
     text = text.replace("NOVA", "N◎VA")
@@ -153,11 +155,13 @@ def extract_with_schema(image_path: Path, schema: dict, *, show_progress: bool =
     schema_section = "\n".join(f"- {t['type_name']}: {', '.join(t['fields'])}" for t in schema["types"])
     prompt = SCHEMA_EXTRACT_PROMPT.format(schema_section=schema_section, ocr_text=ocr_text)
 
-    return generate_json([prompt])
+    with tracker.timer("Gemini JSON", str(image_path)):
+        return generate_json([prompt])
 
 
 def extract_docai(image_path: Path, *, show_progress: bool = True) -> dict:
     """Document AI で OCR → Gemini で構造化抽出のパイプラインを実行する。"""
     ocr_text = ocr_with_documentai(image_path, show_progress=show_progress)
-    result = extract_gamedata_from_text(ocr_text)
+    with tracker.timer("Gemini JSON", str(image_path)):
+        result = extract_gamedata_from_text(ocr_text)
     return {**result, "source_file": image_path.name}

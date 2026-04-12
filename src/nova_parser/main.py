@@ -9,6 +9,7 @@ from typing import Callable, TypeVar
 from dotenv import load_dotenv
 
 from nova_parser.ocr import MIME_TYPES
+from nova_parser.perf import RETRY_WAIT_STEP, tracker
 
 if False:  # TYPE_CHECKING
     from nova_parser.models import PageExtraction
@@ -79,17 +80,32 @@ def _validate_parallel_files(parallel_files: int) -> int:
     return parallel_files
 
 
-def _run_with_retries(action: Callable[[], T], *, on_retry: Callable[[int, int], None] | None = None) -> T:
+def _run_with_retries(
+    action: Callable[[], T],
+    *,
+    file_key: str,
+    item_label: str,
+) -> T:
     """429 レート制限時に指数バックオフ付きで処理を再試行する。"""
     for attempt in range(MAX_RETRIES):
+        event_start = tracker.event_count()
         try:
             return action()
         except Exception as exc:
             if not _is_rate_limit_error(exc) or attempt == MAX_RETRIES - 1:
                 raise
             wait = INITIAL_WAIT * (2**attempt)
-            if on_retry is not None:
-                on_retry(attempt + 1, wait)
+            failure = tracker.latest_failure(file_key, since_index=event_start)
+            if failure is not None:
+                detail = f"{failure.step_name} {failure.elapsed:.1f}s"
+            else:
+                detail = exc.__class__.__name__
+            print(
+                f"\n  {item_label}: レート制限 - attempt {attempt + 1}/{MAX_RETRIES} 失敗: {detail}",
+                flush=True,
+            )
+            tracker.record_wait(file_key, wait, reason=RETRY_WAIT_STEP)
+            print(f"  {item_label}: {RETRY_WAIT_STEP} {wait:.1f}s", flush=True)
             time.sleep(wait)
 
     msg = "リトライ処理が不正な状態で終了しました。"
@@ -137,6 +153,12 @@ def _ensure_unique_docai_outputs(work_items: list[tuple[int, Path, Path]]) -> No
     raise ValueError(msg)
 
 
+def _format_perf_suffix(file_key: str) -> str:
+    """計測済みファイルにだけサマリー文字列を付与する。"""
+    summary = tracker.format_file_summary(file_key)
+    return f" ({summary})" if summary else ""
+
+
 def run_plain(images: list[Path]) -> None:
     """plain モード: 画像を OCR してMarkdown として出力する。"""
     from nova_parser.ocr import get_client, ocr_image
@@ -148,18 +170,13 @@ def run_plain(images: list[Path]) -> None:
             print(f"スキップ: {output_file}（既に存在します）")
             continue
         print(f"処理中: {img.name} ... ", end="", flush=True)
-        for attempt in range(MAX_RETRIES):
-            try:
-                text = ocr_image(client, img)
-                break
-            except Exception as exc:
-                if not _is_rate_limit_error(exc) or attempt == MAX_RETRIES - 1:
-                    raise
-                wait = INITIAL_WAIT * (2**attempt)
-                print(f"\n  レート制限 - {wait}秒後にリトライ ({attempt + 1}/{MAX_RETRIES}) ... ", end="", flush=True)
-                time.sleep(wait)
+        text = _run_with_retries(
+            lambda img=img: ocr_image(client, img),
+            file_key=str(img),
+            item_label=img.name,
+        )
         output_file.write_text(text, encoding="utf-8")
-        print(f"完了 -> {output_file}")
+        print(f"完了{_format_perf_suffix(str(img))} -> {output_file}")
 
 
 def run_structured(images: list[Path]) -> None:
@@ -186,7 +203,7 @@ def run_structured(images: list[Path]) -> None:
             extraction.model_dump_json(indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
-        print(f"完了 -> {output_file}")
+        print(f"完了{_format_perf_suffix(str(img))} -> {output_file}")
 
 
 def run_gamedata(images: list[Path]) -> None:
@@ -215,7 +232,7 @@ def run_gamedata(images: list[Path]) -> None:
             json.dumps(result, indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
-        print(f"完了 -> {output_file}")
+        print(f"完了{_format_perf_suffix(str(img))} -> {output_file}")
 
 
 def run_schema(images: list[Path]) -> None:
@@ -243,7 +260,7 @@ def run_schema(images: list[Path]) -> None:
             fields = [t["type_name"], *t["fields"]]
             lines.append("\t".join(fields))
         output_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        print(f"完了 -> {output_file}")
+        print(f"完了{_format_perf_suffix(str(img))} -> {output_file}")
 
 
 def _parse_docai_tsvs(files: list[Path] | None = None) -> dict:
@@ -422,7 +439,7 @@ def run_structured_tsv(images: list[Path]) -> None:
                 time.sleep(wait)
         tsv_text = _structured_to_tsv(extraction)
         output_file.write_text(tsv_text, encoding="utf-8")
-        print(f"完了 -> {output_file}")
+        print(f"完了{_format_perf_suffix(str(img))} -> {output_file}")
 
 
 def run_docai_plain(images: list[Path]) -> None:
@@ -435,18 +452,13 @@ def run_docai_plain(images: list[Path]) -> None:
             print(f"スキップ: {output_file}（既に存在します）")
             continue
         print(f"処理中: {img.name} ... ", end="", flush=True)
-        for attempt in range(MAX_RETRIES):
-            try:
-                text = ocr_with_documentai(img)
-                break
-            except Exception as exc:
-                if not _is_rate_limit_error(exc) or attempt == MAX_RETRIES - 1:
-                    raise
-                wait = INITIAL_WAIT * (2**attempt)
-                print(f"\n  レート制限 - {wait}秒後にリトライ ({attempt + 1}/{MAX_RETRIES}) ... ", end="", flush=True)
-                time.sleep(wait)
+        text = _run_with_retries(
+            lambda img=img: ocr_with_documentai(img),
+            file_key=str(img),
+            item_label=img.name,
+        )
         output_file.write_text(text, encoding="utf-8")
-        print(f"完了 -> {output_file}")
+        print(f"完了{_format_perf_suffix(str(img))} -> {output_file}")
 
 
 def _append_to_tsv(
@@ -501,17 +513,14 @@ def run_extract(images: list[Path], schema_path: Path, *, parallel_files: int = 
             print(f"処理中: {img.name} ... ", end="", flush=True)
             result = _run_with_retries(
                 lambda img=img: extract_with_schema(img, schema),
-                on_retry=lambda attempt, wait: print(
-                    f"\n  レート制限 - {wait}秒後にリトライ ({attempt}/{MAX_RETRIES}) ... ",
-                    end="",
-                    flush=True,
-                ),
+                file_key=str(img),
+                item_label=img.name,
             )
             for t in result.get("matched_types", []):
                 _append_to_tsv(t, schema_fields.get(t["type_name"]), img.name, matched=True)
             for t in result.get("unmatched_types", []):
                 _append_to_tsv(t, None, img.name, matched=False)
-            print("完了")
+            print(f"完了{_format_perf_suffix(str(img))}")
         return
 
     results_by_index: dict[int, dict] = {}
@@ -525,6 +534,8 @@ def run_extract(images: list[Path], schema_path: Path, *, parallel_files: int = 
             executor.submit(
                 _run_with_retries,
                 lambda img=img: extract_with_schema(img, schema, show_progress=False),
+                file_key=str(img),
+                item_label=img.name,
             ): (index, img)
             for index, img in work_items
         }
@@ -534,7 +545,7 @@ def run_extract(images: list[Path], schema_path: Path, *, parallel_files: int = 
                 index, img = future_to_job[future]
                 result = future.result()
                 results_by_index[index] = result
-                print(f"完了: {img.name}")
+                print(f"完了: {img.name}{_format_perf_suffix(str(img))}")
         except Exception:
             for pending in future_to_job:
                 pending.cancel()
@@ -619,7 +630,7 @@ def run_crop(images: list[Path], *, min_card_area: float, max_card_area: float, 
             json.dumps({"source": img.name, "cards": cards_meta}, indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
-        print(f"完了 -> {len(results)} 件のカード領域を検出 ({meta_file})")
+        print(f"完了{_format_perf_suffix(str(img))} -> {len(results)} 件のカード領域を検出 ({meta_file})")
 
 
 def run_docai(images: list[Path], *, parallel_files: int = 1) -> None:
@@ -643,15 +654,12 @@ def run_docai(images: list[Path], *, parallel_files: int = 1) -> None:
             print(f"処理中: {img.name} ... ", end="", flush=True)
             result = _run_with_retries(
                 lambda img=img: extract_docai(img),
-                on_retry=lambda attempt, wait: print(
-                    f"\n  レート制限 - {wait}秒後にリトライ ({attempt}/{MAX_RETRIES}) ... ",
-                    end="",
-                    flush=True,
-                ),
+                file_key=str(img),
+                item_label=img.name,
             )
             tsv_text = _gamedata_to_tsv(result)
             _atomic_write_text(output_file, tsv_text)
-            print(f"完了 -> {output_file}")
+            print(f"完了{_format_perf_suffix(str(img))} -> {output_file}")
         return
 
     for _, img, _ in work_items:
@@ -662,6 +670,8 @@ def run_docai(images: list[Path], *, parallel_files: int = 1) -> None:
             executor.submit(
                 _run_with_retries,
                 lambda img=img: extract_docai(img, show_progress=False),
+                file_key=str(img),
+                item_label=img.name,
             ): (index, img, output_file)
             for index, img, output_file in work_items
         }
@@ -672,7 +682,7 @@ def run_docai(images: list[Path], *, parallel_files: int = 1) -> None:
                 result = future.result()
                 tsv_text = _gamedata_to_tsv(result)
                 _atomic_write_text(output_file, tsv_text)
-                print(f"完了: {img.name} -> {output_file}")
+                print(f"完了: {img.name}{_format_perf_suffix(str(img))} -> {output_file}")
         except Exception:
             for pending in future_to_job:
                 pending.cancel()
@@ -767,6 +777,7 @@ def main():
         return
 
     print(f"{len(images)} 件のファイルを処理します。（モード: {args.mode}）\n")
+    tracker.start_run()
 
     if args.mode == "plain":
         run_plain(images)
@@ -787,6 +798,7 @@ def main():
     else:
         run_schema(images)
 
+    tracker.print_summary()
     print(f"\n全ての結果を {OUTPUT_DIR}/ に保存しました。")
 
 
