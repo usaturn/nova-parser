@@ -1,7 +1,10 @@
 import argparse
 import sys
+import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from typing import Callable, TypeVar
 
 from dotenv import load_dotenv
 
@@ -18,6 +21,8 @@ OUTPUT_DIR = Path("Output")
 
 MAX_RETRIES = 5
 INITIAL_WAIT = 30
+
+T = TypeVar("T")
 
 
 def resolve_images(file_args: list[str]) -> list[Path]:
@@ -64,6 +69,72 @@ def _is_rate_limit_error(exc: Exception) -> bool:
     if isinstance(exc, ModelHTTPError) and exc.status_code == 429:
         return True
     return False
+
+
+def _validate_parallel_files(parallel_files: int) -> int:
+    """並列実行数の妥当性を検証する。"""
+    if parallel_files < 1:
+        msg = "parallel_files は 1 以上である必要があります。"
+        raise ValueError(msg)
+    return parallel_files
+
+
+def _run_with_retries(action: Callable[[], T], *, on_retry: Callable[[int, int], None] | None = None) -> T:
+    """429 レート制限時に指数バックオフ付きで処理を再試行する。"""
+    for attempt in range(MAX_RETRIES):
+        try:
+            return action()
+        except Exception as exc:
+            if not _is_rate_limit_error(exc) or attempt == MAX_RETRIES - 1:
+                raise
+            wait = INITIAL_WAIT * (2**attempt)
+            if on_retry is not None:
+                on_retry(attempt + 1, wait)
+            time.sleep(wait)
+
+    msg = "リトライ処理が不正な状態で終了しました。"
+    raise RuntimeError(msg)
+
+
+def _atomic_write_text(output_file: Path, text: str) -> None:
+    """同一ディレクトリ上の一時ファイル経由でテキストを書き込む。"""
+    output_file.parent.mkdir(exist_ok=True)
+    tmp_path: Path | None = None
+
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=output_file.parent,
+            prefix=f".{output_file.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as tmp_file:
+            tmp_file.write(text)
+            tmp_path = Path(tmp_file.name)
+        tmp_path.replace(output_file)
+    finally:
+        if tmp_path is not None and tmp_path.exists():
+            tmp_path.unlink()
+
+
+def _ensure_unique_docai_outputs(work_items: list[tuple[int, Path, Path]]) -> None:
+    """docai モードの出力先衝突を事前に検出する。"""
+    output_to_inputs: dict[Path, list[Path]] = {}
+
+    for _, img, output_file in work_items:
+        output_to_inputs.setdefault(output_file, []).append(img)
+
+    collisions = {output_file: inputs for output_file, inputs in output_to_inputs.items() if len(inputs) > 1}
+    if not collisions:
+        return
+
+    details = "; ".join(
+        f"{output_file.name} <- {', '.join(str(path) for path in inputs)}"
+        for output_file, inputs in sorted(collisions.items(), key=lambda item: item[0].name)
+    )
+    msg = f"docai モードで出力ファイル名が衝突します: {details}"
+    raise ValueError(msg)
 
 
 def run_plain(images: list[Path]) -> None:
@@ -221,6 +292,13 @@ def run_schema_propose(files: list[Path] | None = None) -> None:
     print(f"スキーマ提案を生成しました: {output_file}（{len(result['types'])} 型）")
 
 
+def _normalize_dash(value: str) -> str:
+    """値が単独のダッシュ類文字の場合、半角ハイフンに統一する。"""
+    if value in {"一", "－", "ー", "−", "-", "–", "—", "―"}:
+        return "-"
+    return value
+
+
 def _gamedata_to_tsv(result: dict) -> str:
     """ゲームデータ dict を同種パターンごとの TSV 文字列に変換する。"""
     blocks: list[str] = []
@@ -238,7 +316,7 @@ def _gamedata_to_tsv(result: dict) -> str:
                     field_names.append(key)
                     seen.add(key)
         header = f"## {type_name}\n" + "\t".join(field_names)
-        rows = ["\t".join(str(item.get(f, "")) for f in field_names) for item in items]
+        rows = ["\t".join(_normalize_dash(str(item.get(f, ""))) for f in field_names) for item in items]
         blocks.append(header + "\n" + "\n".join(rows))
     return "\n\n".join(blocks) + "\n" if blocks else ""
 
@@ -279,7 +357,7 @@ def _structured_to_tsv(extraction: "PageExtraction") -> str:
         ]
         header = "## 技能\n" + "\t".join(fields)
         rows = [
-            "\t".join(str(getattr(s, f) if getattr(s, f) is not None else "") for f in fields)
+            "\t".join(_normalize_dash(str(getattr(s, f) if getattr(s, f) is not None else "")) for f in fields)
             for s in extraction.skills
         ]
         blocks.append(header + "\n" + "\n".join(rows))
@@ -302,7 +380,7 @@ def _structured_to_tsv(extraction: "PageExtraction") -> str:
         ]
         header = "## 装備\n" + "\t".join(fields)
         rows = [
-            "\t".join(str(getattr(e, f) if getattr(e, f) is not None else "") for f in fields)
+            "\t".join(_normalize_dash(str(getattr(e, f) if getattr(e, f) is not None else "")) for f in fields)
             for e in extraction.equipment
         ]
         blocks.append(header + "\n" + "\n".join(rows))
@@ -404,41 +482,70 @@ def _append_to_tsv(
         if not file_exists:
             f.write("\t".join(fields + ["source"]) + "\n")
         for item in items:
-            row = [str(item.get(field, "")) for field in fields] + [source_name]
+            row = [_normalize_dash(str(item.get(field, ""))) for field in fields] + [source_name]
             f.write("\t".join(row) + "\n")
 
 
-def run_extract(images: list[Path], schema_path: Path) -> None:
+def run_extract(images: list[Path], schema_path: Path, *, parallel_files: int = 1) -> None:
     """extract モード: スキーマに従って Document AI OCR → Gemini 構造化抽出 → 型別 TSV。"""
     import json
 
     from nova_parser.documentai import extract_with_schema
 
+    parallel_files = _validate_parallel_files(parallel_files)
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     schema_fields = {t["type_name"]: t["fields"] for t in schema["types"]}
 
-    for img in images:
-        print(f"処理中: {img.name} ... ", end="", flush=True)
-        for attempt in range(MAX_RETRIES):
-            try:
-                result = extract_with_schema(img, schema)
-                break
-            except Exception as exc:
-                if not _is_rate_limit_error(exc) or attempt == MAX_RETRIES - 1:
-                    raise
-                wait = INITIAL_WAIT * (2**attempt)
-                print(
-                    f"\n  レート制限 - {wait}秒後にリトライ ({attempt + 1}/{MAX_RETRIES}) ... ",
+    if parallel_files == 1:
+        for img in images:
+            print(f"処理中: {img.name} ... ", end="", flush=True)
+            result = _run_with_retries(
+                lambda img=img: extract_with_schema(img, schema),
+                on_retry=lambda attempt, wait: print(
+                    f"\n  レート制限 - {wait}秒後にリトライ ({attempt}/{MAX_RETRIES}) ... ",
                     end="",
                     flush=True,
-                )
-                time.sleep(wait)
+                ),
+            )
+            for t in result.get("matched_types", []):
+                _append_to_tsv(t, schema_fields.get(t["type_name"]), img.name, matched=True)
+            for t in result.get("unmatched_types", []):
+                _append_to_tsv(t, None, img.name, matched=False)
+            print("完了")
+        return
 
+    results_by_index: dict[int, dict] = {}
+    work_items = list(enumerate(images))
+
+    for _, img in work_items:
+        print(f"処理中: {img.name} ...")
+
+    with ThreadPoolExecutor(max_workers=parallel_files) as executor:
+        future_to_job = {
+            executor.submit(
+                _run_with_retries,
+                lambda img=img: extract_with_schema(img, schema, show_progress=False),
+            ): (index, img)
+            for index, img in work_items
+        }
+
+        try:
+            for future in as_completed(future_to_job):
+                index, img = future_to_job[future]
+                result = future.result()
+                results_by_index[index] = result
+                print(f"完了: {img.name}")
+        except Exception:
+            for pending in future_to_job:
+                pending.cancel()
+            raise
+
+    for index, img in work_items:
+        result = results_by_index[index]
         for t in result.get("matched_types", []):
             _append_to_tsv(t, schema_fields.get(t["type_name"]), img.name, matched=True)
         for t in result.get("unmatched_types", []):
             _append_to_tsv(t, None, img.name, matched=False)
-        print("完了")
 
 
 def run_crop(images: list[Path], *, min_card_area: float, max_card_area: float, padding: int) -> None:
@@ -515,29 +622,61 @@ def run_crop(images: list[Path], *, min_card_area: float, max_card_area: float, 
         print(f"完了 -> {len(results)} 件のカード領域を検出 ({meta_file})")
 
 
-def run_docai(images: list[Path]) -> None:
+def run_docai(images: list[Path], *, parallel_files: int = 1) -> None:
     """docai モード: Document AI で OCR → Gemini で構造化抽出 → TSV 出力。"""
     from nova_parser.documentai import extract_docai
 
-    for img in images:
+    parallel_files = _validate_parallel_files(parallel_files)
+
+    work_items: list[tuple[int, Path, Path]] = []
+    for index, img in enumerate(images):
         output_file = OUTPUT_DIR / f"{img.stem}.docai.tsv"
         if output_file.exists():
             print(f"スキップ: {output_file}（既に存在します）")
             continue
-        print(f"処理中: {img.name} ... ", end="", flush=True)
-        for attempt in range(MAX_RETRIES):
-            try:
-                result = extract_docai(img)
-                break
-            except Exception as exc:
-                if not _is_rate_limit_error(exc) or attempt == MAX_RETRIES - 1:
-                    raise
-                wait = INITIAL_WAIT * (2**attempt)
-                print(f"\n  レート制限 - {wait}秒後にリトライ ({attempt + 1}/{MAX_RETRIES}) ... ", end="", flush=True)
-                time.sleep(wait)
-        tsv_text = _gamedata_to_tsv(result)
-        output_file.write_text(tsv_text, encoding="utf-8")
-        print(f"完了 -> {output_file}")
+        work_items.append((index, img, output_file))
+
+    _ensure_unique_docai_outputs(work_items)
+
+    if parallel_files == 1:
+        for _, img, output_file in work_items:
+            print(f"処理中: {img.name} ... ", end="", flush=True)
+            result = _run_with_retries(
+                lambda img=img: extract_docai(img),
+                on_retry=lambda attempt, wait: print(
+                    f"\n  レート制限 - {wait}秒後にリトライ ({attempt}/{MAX_RETRIES}) ... ",
+                    end="",
+                    flush=True,
+                ),
+            )
+            tsv_text = _gamedata_to_tsv(result)
+            _atomic_write_text(output_file, tsv_text)
+            print(f"完了 -> {output_file}")
+        return
+
+    for _, img, _ in work_items:
+        print(f"処理中: {img.name} ...")
+
+    with ThreadPoolExecutor(max_workers=parallel_files) as executor:
+        future_to_job = {
+            executor.submit(
+                _run_with_retries,
+                lambda img=img: extract_docai(img, show_progress=False),
+            ): (index, img, output_file)
+            for index, img, output_file in work_items
+        }
+
+        try:
+            for future in as_completed(future_to_job):
+                _, img, output_file = future_to_job[future]
+                result = future.result()
+                tsv_text = _gamedata_to_tsv(result)
+                _atomic_write_text(output_file, tsv_text)
+                print(f"完了: {img.name} -> {output_file}")
+        except Exception:
+            for pending in future_to_job:
+                pending.cancel()
+            raise
 
 
 def main():
@@ -574,6 +713,12 @@ def main():
         help="スキーマ定義ファイルのパス（extract モード時に必須）",
     )
     parser.add_argument(
+        "--parallel-files",
+        type=int,
+        default=1,
+        help="docai / extract モードで同時に処理するファイル数（デフォルト: 1）",
+    )
+    parser.add_argument(
         "--min-card-area",
         type=float,
         default=0.05,
@@ -603,6 +748,8 @@ def main():
         parser.error("extract モードでは --schema の指定が必須です。")
     if args.schema and not Path(args.schema).exists():
         parser.error(f"スキーマファイルが見つかりません: {args.schema}")
+    if args.parallel_files < 1:
+        parser.error("--parallel-files は 1 以上で指定してください。")
 
     OUTPUT_DIR.mkdir(exist_ok=True)
 
@@ -630,11 +777,11 @@ def main():
     elif args.mode == "gamedata":
         run_gamedata(images)
     elif args.mode == "docai":
-        run_docai(images)
+        run_docai(images, parallel_files=args.parallel_files)
     elif args.mode == "docai_plain":
         run_docai_plain(images)
     elif args.mode == "extract":
-        run_extract(images, Path(args.schema))
+        run_extract(images, Path(args.schema), parallel_files=args.parallel_files)
     elif args.mode == "crop":
         run_crop(images, min_card_area=args.min_card_area, max_card_area=args.max_card_area, padding=args.padding)
     else:

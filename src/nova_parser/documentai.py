@@ -114,7 +114,7 @@ def process_image_with_documentai(image_path: Path) -> documentai.Document:
     return _process_single_document(client, processor_name, image_path.read_bytes(), mime_type)
 
 
-def ocr_with_documentai(image_path: Path) -> str:
+def ocr_with_documentai(image_path: Path, *, show_progress: bool = True) -> str:
     """Document AI で画像/PDF を OCR し、テキストを返す。
 
     PDF が Document AI のページ上限を超える場合は自動的に分割して処理する。
@@ -126,7 +126,7 @@ def ocr_with_documentai(image_path: Path) -> str:
 
     if mime_type == "application/pdf":
         chunks = _split_pdf(file_content)
-        if len(chunks) > 1:
+        if len(chunks) > 1 and show_progress:
             print(f"({len(chunks)} チャンクに分割) ", end="", flush=True)
         texts = [_ocr_single_document(client, processor_name, chunk, mime_type) for chunk in chunks]
         text = "\n".join(texts)
@@ -146,9 +146,9 @@ def extract_gamedata_from_text(ocr_text: str) -> dict:
     return result
 
 
-def extract_with_schema(image_path: Path, schema: dict) -> dict:
+def extract_with_schema(image_path: Path, schema: dict, *, show_progress: bool = True) -> dict:
     """Document AI OCR → スキーマ準拠で Gemini 構造化抽出する。"""
-    ocr_text = ocr_with_documentai(image_path)
+    ocr_text = ocr_with_documentai(image_path, show_progress=show_progress)
 
     schema_section = "\n".join(f"- {t['type_name']}: {', '.join(t['fields'])}" for t in schema["types"])
     prompt = SCHEMA_EXTRACT_PROMPT.format(schema_section=schema_section, ocr_text=ocr_text)
@@ -156,8 +156,8 @@ def extract_with_schema(image_path: Path, schema: dict) -> dict:
     return generate_json([prompt])
 
 
-def extract_docai(image_path: Path) -> dict:
+def extract_docai(image_path: Path, *, show_progress: bool = True) -> dict:
     """Document AI で OCR → Gemini で構造化抽出のパイプラインを実行する。"""
-    ocr_text = ocr_with_documentai(image_path)
+    ocr_text = ocr_with_documentai(image_path, show_progress=show_progress)
     result = extract_gamedata_from_text(ocr_text)
     return {**result, "source_file": image_path.name}
