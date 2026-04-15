@@ -220,7 +220,7 @@ def run_gamedata(images: list[Path]) -> None:
         print(f"処理中: {img.name} ... ", end="", flush=True)
         for attempt in range(MAX_RETRIES):
             try:
-                result = extract_gamedata(img)
+                result = extract_gamedata(img, output_dir=OUTPUT_DIR)
                 break
             except Exception as exc:
                 if not _is_rate_limit_error(exc) or attempt == MAX_RETRIES - 1:
@@ -512,7 +512,7 @@ def run_extract(images: list[Path], schema_path: Path, *, parallel_files: int = 
         for img in images:
             print(f"処理中: {img.name} ... ", end="", flush=True)
             result = _run_with_retries(
-                lambda img=img: extract_with_schema(img, schema),
+                lambda img=img: extract_with_schema(img, schema, output_dir=OUTPUT_DIR),
                 file_key=str(img),
                 item_label=img.name,
             )
@@ -533,7 +533,7 @@ def run_extract(images: list[Path], schema_path: Path, *, parallel_files: int = 
         future_to_job = {
             executor.submit(
                 _run_with_retries,
-                lambda img=img: extract_with_schema(img, schema, show_progress=False),
+                lambda img=img: extract_with_schema(img, schema, show_progress=False, output_dir=OUTPUT_DIR),
                 file_key=str(img),
                 item_label=img.name,
             ): (index, img)
@@ -653,7 +653,7 @@ def run_docai(images: list[Path], *, parallel_files: int = 1) -> None:
         for _, img, output_file in work_items:
             print(f"処理中: {img.name} ... ", end="", flush=True)
             result = _run_with_retries(
-                lambda img=img: extract_docai(img),
+                lambda img=img: extract_docai(img, output_dir=OUTPUT_DIR),
                 file_key=str(img),
                 item_label=img.name,
             )
@@ -669,7 +669,7 @@ def run_docai(images: list[Path], *, parallel_files: int = 1) -> None:
         future_to_job = {
             executor.submit(
                 _run_with_retries,
-                lambda img=img: extract_docai(img, show_progress=False),
+                lambda img=img: extract_docai(img, show_progress=False, output_dir=OUTPUT_DIR),
                 file_key=str(img),
                 item_label=img.name,
             ): (index, img, output_file)

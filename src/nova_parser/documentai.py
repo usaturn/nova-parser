@@ -6,7 +6,13 @@ from pathlib import Path
 
 from google.cloud import documentai_v1 as documentai
 
-from nova_parser.ocr import MIME_TYPES, generate_json
+from nova_parser.json_contracts import (
+    build_extract_result_schema,
+    build_gamedata_result_schema,
+    validate_extract_result,
+    validate_gamedata_result,
+)
+from nova_parser.ocr import MIME_TYPES, JSONFailureArtifact, generate_json
 from nova_parser.perf import tracker
 from nova_parser.prompts import DOCAI_EXTRACT_PROMPT, SCHEMA_EXTRACT_PROMPT
 
@@ -140,15 +146,44 @@ def ocr_with_documentai(image_path: Path, *, show_progress: bool = True) -> str:
     return text
 
 
-def extract_gamedata_from_text(ocr_text: str) -> dict:
+def _gemini_error_artifact_path(image_path: Path, output_dir: Path, mode: str) -> Path:
+    """Gemini JSON エラーの調査用ファイルパスを返す。"""
+    return output_dir / f"{image_path.stem}.{mode}.gemini_json_error.json"
+
+
+def _require_dict_result(result: dict | list, *, context: str) -> dict:
+    """generate_json の戻り値が dict であることを保証する。"""
+    if isinstance(result, dict):
+        return result
+    msg = f"{context} の JSON トップレベルが object ではありません。"
+    raise ValueError(msg)
+
+
+def extract_gamedata_from_text(ocr_text: str, *, source_path: Path, output_dir: Path = Path("Output")) -> dict:
     """Gemini を使って OCR テキストからゲームデータを構造化抽出する。"""
-    result = generate_json([DOCAI_EXTRACT_PROMPT + ocr_text])
-    if isinstance(result, list):
-        result = {"types": result}
-    return result
+    prompt = DOCAI_EXTRACT_PROMPT + ocr_text
+    result = generate_json(
+        [prompt],
+        response_json_schema=build_gamedata_result_schema(),
+        result_validator=validate_gamedata_result,
+        failure_artifact=JSONFailureArtifact(
+            output_path=_gemini_error_artifact_path(source_path, output_dir, "docai"),
+            mode="docai",
+            source_path=source_path,
+            prompt=prompt,
+            ocr_text=ocr_text,
+        ),
+    )
+    return _require_dict_result(result, context="docai")
 
 
-def extract_with_schema(image_path: Path, schema: dict, *, show_progress: bool = True) -> dict:
+def extract_with_schema(
+    image_path: Path,
+    schema: dict,
+    *,
+    show_progress: bool = True,
+    output_dir: Path = Path("Output"),
+) -> dict:
     """Document AI OCR → スキーマ準拠で Gemini 構造化抽出する。"""
     ocr_text = ocr_with_documentai(image_path, show_progress=show_progress)
 
@@ -156,12 +191,24 @@ def extract_with_schema(image_path: Path, schema: dict, *, show_progress: bool =
     prompt = SCHEMA_EXTRACT_PROMPT.format(schema_section=schema_section, ocr_text=ocr_text)
 
     with tracker.timer("Gemini JSON", str(image_path)):
-        return generate_json([prompt])
+        result = generate_json(
+            [prompt],
+            response_json_schema=build_extract_result_schema(schema),
+            result_validator=lambda result: validate_extract_result(result, schema),
+            failure_artifact=JSONFailureArtifact(
+                output_path=_gemini_error_artifact_path(image_path, output_dir, "extract"),
+                mode="extract",
+                source_path=image_path,
+                prompt=prompt,
+                ocr_text=ocr_text,
+            ),
+        )
+    return _require_dict_result(result, context="extract")
 
 
-def extract_docai(image_path: Path, *, show_progress: bool = True) -> dict:
+def extract_docai(image_path: Path, *, show_progress: bool = True, output_dir: Path = Path("Output")) -> dict:
     """Document AI で OCR → Gemini で構造化抽出のパイプラインを実行する。"""
     ocr_text = ocr_with_documentai(image_path, show_progress=show_progress)
     with tracker.timer("Gemini JSON", str(image_path)):
-        result = extract_gamedata_from_text(ocr_text)
+        result = extract_gamedata_from_text(ocr_text, source_path=image_path, output_dir=output_dir)
     return {**result, "source_file": image_path.name}

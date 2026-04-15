@@ -61,7 +61,7 @@ uv run nova-parser path/to/image.png
 uv run nova-parser path/to/document.pdf
 ```
 
-`Output/` ディレクトリに各ファイルに対応する `.plain.md`、`.structured.json`、`.structured.tsv`、`.gamedata.json`、`.schema.tsv`、`.docai_plain.md`、`.docai.tsv`、型別 TSV、`.crop.json`、`.crop_001.png` などが出力されます。`docai` / `extract` など一部モードでは、実行時に標準出力へ性能サマリーも表示されます。
+`Output/` ディレクトリに各ファイルに対応する `.plain.md`、`.structured.json`、`.structured.tsv`、`.gamedata.json`、`.schema.tsv`、`.docai_plain.md`、`.docai.tsv`、型別 TSV、`.crop.json`、`.crop_001.png`、`.gemini_json_error.json` などが出力されます。`docai` / `extract` など一部モードでは、実行時に標準出力へ性能サマリーも表示されます。Gemini が `JSONDecodeError` になる不正 JSON を返した場合は 1 秒待って 1 回だけ再試行し、それでも失敗した場合や想定外形状を返した場合は調査用の `*.gemini_json_error.json` を残します。
 
 ## ドキュメント
 

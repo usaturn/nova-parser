@@ -91,6 +91,7 @@ uv run nova-parser --mode extract --parallel-files 4 --schema Output/schema.json
 
 - `plain`、`docai_plain`、`docai`、`extract` では、完了時と実行終了時に性能サマリーが標準出力に表示されます
 - `docai` / `extract` で 429 が発生した場合は、失敗したステップ名と待機時間を含む retry 詳細ログが表示されます
+- Gemini JSON 解析で `JSONDecodeError` が発生した場合は、1 秒待って 1 回だけ同一リクエストを再試行します
 - `実計` は成功した API 呼び出しに加え、失敗した attempt と retry wait を含む実時間ベースの集計です
 - `成功計` は成功した API 呼び出しのみを集計した値です
 
@@ -597,6 +598,7 @@ uv run nova-parser --mode extract --parallel-files 4 --schema Output/schema.json
 - 並列実行時も TSV への追記は全ファイルの抽出結果を回収した後に行うため、途中失敗時にその run の部分追記を避けます
 - 完了時と実行終了時に `DocAI OCR` / `Gemini JSON` の性能サマリーが標準出力に表示されます
 - 429 が発生した場合は、失敗したステップ名と retry wait を含む詳細ログが標準出力に表示されます
+- Gemini が不正 JSON を返して `JSONDecodeError` になった場合は、1 秒待って 1 回だけ再試行し、それでも失敗した場合に `*.gemini_json_error.json` を残します
 
 #### 出力形式
 

@@ -9,6 +9,7 @@ import pytest
 import nova_parser.documentai as documentai_mod
 import nova_parser.gamedata as gamedata_mod
 import nova_parser.main as main_mod
+import nova_parser.ocr as ocr_mod
 import nova_parser.perf as perf_mod
 
 
@@ -56,7 +57,12 @@ def test_run_docai_parallel_matches_sequential(monkeypatch, tmp_path):
 
     seq_calls: list[tuple[str, bool]] = []
 
-    def fake_extract_docai_sequential(image_path: Path, *, show_progress: bool = True) -> dict:
+    def fake_extract_docai_sequential(
+        image_path: Path,
+        *,
+        show_progress: bool = True,
+        output_dir: Path = Path("Output"),
+    ) -> dict:
         seq_calls.append((image_path.name, show_progress))
         return {
             "types": [
@@ -78,7 +84,12 @@ def test_run_docai_parallel_matches_sequential(monkeypatch, tmp_path):
 
     par_calls: list[tuple[str, bool]] = []
 
-    def fake_extract_docai_parallel(image_path: Path, *, show_progress: bool = True) -> dict:
+    def fake_extract_docai_parallel(
+        image_path: Path,
+        *,
+        show_progress: bool = True,
+        output_dir: Path = Path("Output"),
+    ) -> dict:
         par_calls.append((image_path.name, show_progress))
         if image_path.stem == "alpha":
             time.sleep(0.05)
@@ -114,7 +125,12 @@ def test_run_docai_skips_existing_outputs(monkeypatch, tmp_path):
 
     called: list[str] = []
 
-    def fake_extract_docai(image_path: Path, *, show_progress: bool = True) -> dict:
+    def fake_extract_docai(
+        image_path: Path,
+        *,
+        show_progress: bool = True,
+        output_dir: Path = Path("Output"),
+    ) -> dict:
         called.append(image_path.name)
         return {
             "types": [
@@ -159,7 +175,12 @@ def test_run_docai_allows_duplicate_stems_when_existing_output_skips_all(monkeyp
 
     called: list[str] = []
 
-    def fake_extract_docai(image_path: Path, *, show_progress: bool = True) -> dict:
+    def fake_extract_docai(
+        image_path: Path,
+        *,
+        show_progress: bool = True,
+        output_dir: Path = Path("Output"),
+    ) -> dict:
         called.append(image_path.name)
         return {
             "types": [
@@ -187,7 +208,13 @@ def test_run_extract_parallel_matches_sequential(monkeypatch, tmp_path):
 
     seq_calls: list[tuple[str, bool]] = []
 
-    def fake_extract_with_schema_sequential(image_path: Path, schema: dict, *, show_progress: bool = True) -> dict:
+    def fake_extract_with_schema_sequential(
+        image_path: Path,
+        schema: dict,
+        *,
+        show_progress: bool = True,
+        output_dir: Path = Path("Output"),
+    ) -> dict:
         seq_calls.append((image_path.name, show_progress))
         return {
             "matched_types": [
@@ -214,7 +241,13 @@ def test_run_extract_parallel_matches_sequential(monkeypatch, tmp_path):
 
     par_calls: list[tuple[str, bool]] = []
 
-    def fake_extract_with_schema_parallel(image_path: Path, schema: dict, *, show_progress: bool = True) -> dict:
+    def fake_extract_with_schema_parallel(
+        image_path: Path,
+        schema: dict,
+        *,
+        show_progress: bool = True,
+        output_dir: Path = Path("Output"),
+    ) -> dict:
         par_calls.append((image_path.name, show_progress))
         if image_path.name == "first.png":
             time.sleep(0.05)
@@ -270,7 +303,13 @@ def test_run_extract_failure_does_not_commit(monkeypatch, tmp_path):
         append_calls += 1
         return original_append(*args, **kwargs)
 
-    def fake_extract_with_schema(image_path: Path, schema: dict, *, show_progress: bool = True) -> dict:
+    def fake_extract_with_schema(
+        image_path: Path,
+        schema: dict,
+        *,
+        show_progress: bool = True,
+        output_dir: Path = Path("Output"),
+    ) -> dict:
         if image_path.name == "second.png":
             raise RuntimeError("boom")
         time.sleep(0.05)
@@ -306,7 +345,13 @@ def test_run_extract_reports_retry_timings(monkeypatch, tmp_path, capsys):
     attempts = 0
     sleep_calls: list[int] = []
 
-    def fake_extract_with_schema(image_path: Path, schema: dict, *, show_progress: bool = True) -> dict:
+    def fake_extract_with_schema(
+        image_path: Path,
+        schema: dict,
+        *,
+        show_progress: bool = True,
+        output_dir: Path = Path("Output"),
+    ) -> dict:
         nonlocal attempts
         attempts += 1
         perf_mod.tracker.record("DocAI OCR", str(image_path), 90.0)
@@ -340,6 +385,36 @@ def test_run_extract_reports_retry_timings(monkeypatch, tmp_path, capsys):
     assert "retry wait 1.0s, 実計 291.0s, 成功計 250.0s" in captured
     assert sleep_calls == [1]
     assert (output_dir / "Card.tsv").read_text(encoding="utf-8") == "name\tpower\tsource\nretry\t7\tretry.png\n"
+
+
+def test_run_extract_does_not_retry_json_errors(monkeypatch, tmp_path):
+    image_path = _make_images(tmp_path, "invalid.png")[0]
+    schema_path = tmp_path / "schema.json"
+    _write_schema(schema_path)
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    attempts = 0
+
+    def fake_extract_with_schema(
+        image_path: Path,
+        schema: dict,
+        *,
+        show_progress: bool = True,
+        output_dir: Path = Path("Output"),
+    ) -> dict:
+        nonlocal attempts
+        attempts += 1
+        raise ocr_mod.GeminiJSONError("bad json")
+
+    monkeypatch.setattr(documentai_mod, "extract_with_schema", fake_extract_with_schema)
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", output_dir)
+
+    with pytest.raises(ocr_mod.GeminiJSONError, match="bad json"):
+        main_mod.run_extract([image_path], schema_path, parallel_files=1)
+
+    assert attempts == 1
+    assert not (output_dir / "Card.tsv").exists()
 
 
 def test_run_schema_omits_empty_perf_summary(monkeypatch, tmp_path, capsys):
