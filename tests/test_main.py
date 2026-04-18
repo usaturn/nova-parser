@@ -1,6 +1,8 @@
 """main モジュールのユニットテスト。"""
 
+import json
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -44,6 +46,11 @@ def _write_schema(schema_path: Path) -> None:
 def _read_output_texts(output_dir: Path, pattern: str) -> dict[str, str]:
     """出力ディレクトリ内の対象ファイル内容を読み込む。"""
     return {path.name: path.read_text(encoding="utf-8") for path in sorted(output_dir.glob(pattern))}
+
+
+def _read_extract_tsv_manifest(output_dir: Path) -> dict:
+    """extract TSV manifest を読み込む。"""
+    return json.loads((output_dir / "cache" / "extract" / "tsv_manifest.json").read_text(encoding="utf-8"))
 
 
 @pytest.fixture(autouse=True)
@@ -767,24 +774,84 @@ def test_run_extract_sanitizes_unmatched_type_filename(monkeypatch, tmp_path):
     assert "\x01" not in produced[0].name
 
 
-def test_run_extract_leaves_unrelated_stale_none_tsv(monkeypatch, tmp_path):
-    """plan 通り、今回 run に現れない旧 run の `none_*.tsv` は放置される。"""
+def test_run_extract_cleans_stale_tsvs_using_manifest(monkeypatch, tmp_path):
+    images = _make_images(tmp_path, "only.png")
+    schema_path = tmp_path / "schema.json"
+    schema_path.write_text(
+        """
+{
+  "types": [
+    {"type_name": "Card", "fields": ["name", "power"]},
+    {"type_name": "Empty", "fields": ["x"]}
+  ]
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    def fake_first_run(
+        image_path: Path,
+        schema: dict,
+        *,
+        show_progress: bool = True,
+        output_dir: Path = Path("Output"),
+    ) -> dict:
+        return {
+            "matched_types": [
+                {"type_name": "Card", "items": [{"name": image_path.stem, "power": "1"}]},
+            ],
+            "unmatched_types": [
+                {"type_name": "Unknown", "items": [{"raw": "legacy"}]},
+            ],
+        }
+
+    monkeypatch.setattr(documentai_mod, "extract_with_schema", fake_first_run)
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", output_dir)
+
+    main_mod.run_extract(images, schema_path, parallel_files=1)
+
+    assert (output_dir / "Empty.tsv").exists()
+    assert (output_dir / "none_Unknown.tsv").exists()
+    manifest = _read_extract_tsv_manifest(output_dir)
+    assert manifest["files"] == ["Card.tsv", "Empty.tsv", "none_Unknown.tsv"]
+
+    _write_schema(schema_path)
+
+    monkeypatch.setattr(documentai_mod, "extract_with_schema", _extract_fake())
+    main_mod.run_extract(images, schema_path, parallel_files=1)
+
+    assert not (output_dir / "Empty.tsv").exists()
+    assert not (output_dir / "none_Unknown.tsv").exists()
+    manifest = _read_extract_tsv_manifest(output_dir)
+    assert manifest["files"] == ["Card.tsv"]
+
+
+def test_run_extract_bootstraps_cleanup_without_manifest(monkeypatch, tmp_path):
     images = _make_images(tmp_path, "only.png")
     schema_path = tmp_path / "schema.json"
     _write_schema(schema_path)
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 
-    stale = output_dir / "none_Old.tsv"
-    stale.write_text("stale content\n", encoding="utf-8")
+    stale_none = output_dir / "none_Old.tsv"
+    stale_none.write_text("stale none\n", encoding="utf-8")
+    stale_matched = output_dir / "Old.tsv"
+    stale_matched.write_text("stale matched\n", encoding="utf-8")
+    keep_docai = output_dir / "alpha.docai.tsv"
+    keep_docai.write_text("keep docai\n", encoding="utf-8")
 
     monkeypatch.setattr(documentai_mod, "extract_with_schema", _extract_fake())
     monkeypatch.setattr(main_mod, "OUTPUT_DIR", output_dir)
 
     main_mod.run_extract(images, schema_path, parallel_files=1)
 
-    assert stale.exists(), "今回 run に出現しない旧 none_*.tsv は削除されない"
-    assert stale.read_text(encoding="utf-8") == "stale content\n"
+    assert not stale_none.exists()
+    assert not stale_matched.exists()
+    assert keep_docai.exists()
+    manifest = _read_extract_tsv_manifest(output_dir)
+    assert manifest["files"] == ["Card.tsv"]
 
 
 def test_run_extract_parallel_failure_preserves_partial_cache(monkeypatch, tmp_path):
@@ -794,6 +861,7 @@ def test_run_extract_parallel_failure_preserves_partial_cache(monkeypatch, tmp_p
     _write_schema(schema_path)
     output_dir = tmp_path / "output"
     output_dir.mkdir()
+    start_barrier = threading.Barrier(2)
 
     def fake(
         image_path: Path,
@@ -802,9 +870,11 @@ def test_run_extract_parallel_failure_preserves_partial_cache(monkeypatch, tmp_p
         show_progress: bool = True,
         output_dir: Path = Path("Output"),
     ) -> dict:
+        start_barrier.wait(timeout=1.0)
         if image_path.name == "bad.png":
             msg = "boom"
             raise RuntimeError(msg)
+        time.sleep(0.05)
         return {
             "matched_types": [
                 {"type_name": "Card", "items": [{"name": "Alpha", "power": "1"}]},
@@ -821,6 +891,185 @@ def test_run_extract_parallel_failure_preserves_partial_cache(monkeypatch, tmp_p
     assert (output_dir / "cache" / "extract" / "good.json").exists()
     assert not (output_dir / "cache" / "extract" / "bad.json").exists()
     assert not (output_dir / "Card.tsv").exists()
+
+
+def test_run_extract_resumes_after_parallel_failure(monkeypatch, tmp_path):
+    images = _make_images(tmp_path, "good.png", "bad.png")
+    schema_path = tmp_path / "schema.json"
+    _write_schema(schema_path)
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    calls: list[str] = []
+    start_barrier = threading.Barrier(2)
+
+    def fake_fail_bad(
+        image_path: Path,
+        schema: dict,
+        *,
+        show_progress: bool = True,
+        output_dir: Path = Path("Output"),
+    ) -> dict:
+        calls.append(image_path.name)
+        start_barrier.wait(timeout=1.0)
+        if image_path.name == "bad.png":
+            raise RuntimeError("boom")
+        time.sleep(0.05)
+        return {
+            "matched_types": [
+                {"type_name": "Card", "items": [{"name": image_path.stem, "power": "1"}]},
+            ],
+            "unmatched_types": [],
+        }
+
+    monkeypatch.setattr(documentai_mod, "extract_with_schema", fake_fail_bad)
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", output_dir)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        main_mod.run_extract(images, schema_path, parallel_files=2)
+
+    assert sorted(calls) == ["bad.png", "good.png"]
+    calls.clear()
+
+    def fake_succeed_remaining(
+        image_path: Path,
+        schema: dict,
+        *,
+        show_progress: bool = True,
+        output_dir: Path = Path("Output"),
+    ) -> dict:
+        calls.append(image_path.name)
+        return {
+            "matched_types": [
+                {"type_name": "Card", "items": [{"name": image_path.stem, "power": "2"}]},
+            ],
+            "unmatched_types": [],
+        }
+
+    monkeypatch.setattr(documentai_mod, "extract_with_schema", fake_succeed_remaining)
+    main_mod.run_extract(images, schema_path, parallel_files=2)
+
+    assert calls == ["bad.png"]
+    tsv = (output_dir / "Card.tsv").read_text(encoding="utf-8")
+    assert "good\t1\tgood.png" in tsv
+    assert "bad\t2\tbad.png" in tsv
+
+
+def test_run_extract_cancels_pending_jobs_when_cache_save_fails(monkeypatch, tmp_path):
+    images = _make_images(tmp_path, "first.png", "second.png", "third.png")
+    schema_path = tmp_path / "schema.json"
+    _write_schema(schema_path)
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    class FakeFuture:
+        def __init__(self, *, result: dict | None = None, done: bool = False):
+            self._result = result
+            self._done = done
+            self.cancel_calls = 0
+
+        def result(self) -> dict:
+            return self._result or {"matched_types": [], "unmatched_types": []}
+
+        def done(self) -> bool:
+            return self._done
+
+        def cancel(self) -> bool:
+            self.cancel_calls += 1
+            return True
+
+    first_future = FakeFuture(
+        result={
+            "matched_types": [
+                {"type_name": "Card", "items": [{"name": "first", "power": "1"}]},
+            ],
+            "unmatched_types": [],
+        },
+        done=True,
+    )
+    second_future = FakeFuture()
+    third_future = FakeFuture()
+    submitted_futures = [first_future, second_future, third_future]
+
+    class FakeExecutor:
+        def __init__(self, futures: list[FakeFuture]):
+            self._futures = futures
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def submit(self, *args, **kwargs):
+            return self._futures.pop(0)
+
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", output_dir)
+    monkeypatch.setattr(main_mod, "ThreadPoolExecutor", lambda max_workers: FakeExecutor(submitted_futures))
+    monkeypatch.setattr(main_mod, "as_completed", lambda futures: iter([first_future]))
+    monkeypatch.setattr(main_mod, "_save_extract_cache", lambda *args, **kwargs: (_ for _ in ()).throw(OSError("disk full")))
+
+    with pytest.raises(OSError, match="disk full"):
+        main_mod.run_extract(images, schema_path, parallel_files=2)
+
+    assert second_future.cancel_calls == 1
+    assert third_future.cancel_calls == 1
+    assert not (output_dir / "Card.tsv").exists()
+
+
+def test_run_extract_staging_failure_preserves_previous_outputs(monkeypatch, tmp_path):
+    images = _make_images(tmp_path, "only.png")
+    schema_path = tmp_path / "schema.json"
+    _write_schema(schema_path)
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    old_card = output_dir / "Card.tsv"
+    old_card.write_text("name\tpower\tsource\nold\t9\told.png\n", encoding="utf-8")
+    old_none = output_dir / "none_Unknown.tsv"
+    old_none.write_text("raw\tsource\nold\told.png\n", encoding="utf-8")
+    manifest_path = output_dir / "cache" / "extract" / "tsv_manifest.json"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(
+        json.dumps({"manifest_version": 1, "files": ["Card.tsv", "none_Unknown.tsv"]}, ensure_ascii=False, indent=2)
+        + "\n",
+        encoding="utf-8",
+    )
+
+    def fake(
+        image_path: Path,
+        schema: dict,
+        *,
+        show_progress: bool = True,
+        output_dir: Path = Path("Output"),
+    ) -> dict:
+        return {
+            "matched_types": [
+                {"type_name": "Card", "items": [{"name": image_path.stem, "power": "1"}]},
+            ],
+            "unmatched_types": [
+                {"type_name": "New", "items": [{"raw": "fresh"}]},
+            ],
+        }
+
+    original_atomic_write_text = main_mod._atomic_write_text
+
+    def fail_stage_write(path: Path, text: str) -> None:
+        if any(part.startswith(main_mod._EXTRACT_TSV_STAGE_PREFIX) for part in path.parts) and path.name == "none_New.tsv":
+            raise OSError("stage failed")
+        original_atomic_write_text(path, text)
+
+    monkeypatch.setattr(documentai_mod, "extract_with_schema", fake)
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", output_dir)
+    monkeypatch.setattr(main_mod, "_atomic_write_text", fail_stage_write)
+
+    with pytest.raises(OSError, match="stage failed"):
+        main_mod.run_extract(images, schema_path, parallel_files=1)
+
+    assert old_card.read_text(encoding="utf-8") == "name\tpower\tsource\nold\t9\told.png\n"
+    assert old_none.read_text(encoding="utf-8") == "raw\tsource\nold\told.png\n"
+    manifest = _read_extract_tsv_manifest(output_dir)
+    assert manifest["files"] == ["Card.tsv", "none_Unknown.tsv"]
 
 
 def test_run_schema_omits_empty_perf_summary(monkeypatch, tmp_path, capsys):

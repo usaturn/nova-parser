@@ -122,7 +122,7 @@ def _run_with_retries(
 
 def _atomic_write_text(output_file: Path, text: str) -> None:
     """同一ディレクトリ上の一時ファイル経由でテキストを書き込む。"""
-    output_file.parent.mkdir(exist_ok=True)
+    output_file.parent.mkdir(parents=True, exist_ok=True)
     tmp_path: Path | None = None
 
     try:
@@ -470,6 +470,10 @@ def run_docai_plain(images: list[Path]) -> None:
 
 
 _EXTRACT_CACHE_SUBDIR = Path("cache") / "extract"
+_EXTRACT_TSV_MANIFEST_NAME = "tsv_manifest.json"
+_EXTRACT_TSV_MANIFEST_VERSION = 1
+_EXTRACT_TSV_STAGE_PREFIX = ".extract_tsv_stage."
+_NON_EXTRACT_TSV_SUFFIXES = (".docai.tsv", ".structured.tsv", ".schema.tsv")
 _UNSAFE_FILENAME_RE = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 
 
@@ -590,14 +594,16 @@ def _save_extract_cache(
     _atomic_write_text(cache_path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
 
 
-def _write_extract_tsv_from_cache(
-    ordered_results: list[tuple[Path, dict]],
-    schema: dict,
-    output_dir: Path,
-) -> None:
-    """現在の run の抽出結果から型別 TSV を原子的に書き直す。"""
+def _extract_tsv_manifest_path(output_dir: Path) -> Path:
+    """extract TSV manifest の保存パスを返す。"""
+    return output_dir / _EXTRACT_CACHE_SUBDIR / _EXTRACT_TSV_MANIFEST_NAME
+
+
+def _build_extract_tsv_outputs(ordered_results: list[tuple[Path, dict]], schema: dict) -> dict[Path, str]:
+    """現在の run で出力すべき TSV 一式を組み立てる。"""
     schema_type_order: list[str] = [t["type_name"] for t in schema["types"]]
     schema_fields: dict[str, list[str]] = {t["type_name"]: list(t["fields"]) for t in schema["types"]}
+    outputs: dict[Path, str] = {}
 
     matched_rows: dict[str, list[tuple[Path, dict]]] = {tn: [] for tn in schema_type_order}
     for img, result in ordered_results:
@@ -614,8 +620,7 @@ def _write_extract_tsv_from_cache(
             row = [_normalize_dash(str(item.get(field, ""))) for field in fields]
             row.append(img.name)
             lines.append("\t".join(row))
-        tsv_path = output_dir / f"{tn}.tsv"
-        _atomic_write_text(tsv_path, "\n".join(lines) + "\n")
+        outputs[Path(f"{tn}.tsv")] = "\n".join(lines) + "\n"
 
     unmatched_rows: dict[str, list[tuple[Path, dict]]] = {}
     unmatched_fields: dict[str, list[str]] = {}
@@ -634,15 +639,103 @@ def _write_extract_tsv_from_cache(
 
     for tn, rows in unmatched_rows.items():
         fields = unmatched_fields[tn]
-        tsv_path = output_dir / f"none_{_sanitize_type_filename(tn)}.tsv"
-        if tsv_path.exists():
-            tsv_path.unlink()
         lines = ["\t".join([*fields, "source"])]
         for img, item in rows:
             row = [_normalize_dash(str(item.get(field, ""))) for field in fields]
             row.append(img.name)
             lines.append("\t".join(row))
-        _atomic_write_text(tsv_path, "\n".join(lines) + "\n")
+        outputs[Path(f"none_{_sanitize_type_filename(tn)}.tsv")] = "\n".join(lines) + "\n"
+
+    return outputs
+
+
+def _load_extract_tsv_manifest_paths(output_dir: Path) -> set[Path] | None:
+    """成功 run の TSV 出力集合を manifest から読み込む。"""
+    manifest_path = _extract_tsv_manifest_path(output_dir)
+    if not manifest_path.exists():
+        return None
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except OSError, json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("manifest_version") != _EXTRACT_TSV_MANIFEST_VERSION:
+        return None
+    files = payload.get("files")
+    if not isinstance(files, list) or not all(isinstance(file_name, str) for file_name in files):
+        return None
+
+    paths: set[Path] = set()
+    for file_name in files:
+        relpath = Path(file_name)
+        if relpath.is_absolute() or ".." in relpath.parts:
+            return None
+        paths.add(output_dir / relpath)
+    return paths
+
+
+def _infer_legacy_extract_tsv_paths(output_dir: Path) -> set[Path]:
+    """manifest 導入前の extract TSV 群を推定する。"""
+    paths = {path for path in output_dir.glob("none_*.tsv") if path.is_file()}
+    for path in output_dir.glob("*.tsv"):
+        if not path.is_file():
+            continue
+        if path.name.startswith("none_"):
+            continue
+        if any(path.name.endswith(suffix) for suffix in _NON_EXTRACT_TSV_SUFFIXES):
+            continue
+        paths.add(path)
+    return paths
+
+
+def _managed_extract_tsv_paths(output_dir: Path) -> set[Path]:
+    """cleanup 対象となる既存 extract TSV パス集合を返す。"""
+    manifest_paths = _load_extract_tsv_manifest_paths(output_dir)
+    if manifest_paths is not None:
+        return manifest_paths
+    return _infer_legacy_extract_tsv_paths(output_dir)
+
+
+def _write_extract_tsv_manifest(output_paths: set[Path], output_dir: Path) -> None:
+    """成功 run の TSV 出力集合を manifest として保存する。"""
+    payload = {
+        "manifest_version": _EXTRACT_TSV_MANIFEST_VERSION,
+        "files": sorted(path.relative_to(output_dir).as_posix() for path in output_paths),
+    }
+    _atomic_write_text(_extract_tsv_manifest_path(output_dir), json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+
+
+def _commit_extract_tsv_outputs(outputs: dict[Path, str], output_dir: Path) -> None:
+    """staging 経由で TSV 一式を更新し、stale TSV を整理する。"""
+    current_paths = {output_dir / relpath for relpath in outputs}
+    previous_paths = _managed_extract_tsv_paths(output_dir)
+
+    with tempfile.TemporaryDirectory(dir=output_dir, prefix=_EXTRACT_TSV_STAGE_PREFIX) as stage_dir_name:
+        stage_dir = Path(stage_dir_name)
+        for relpath, text in sorted(outputs.items(), key=lambda item: item[0].as_posix()):
+            _atomic_write_text(stage_dir / relpath, text)
+
+        for relpath in sorted(outputs, key=lambda path: path.as_posix()):
+            final_path = output_dir / relpath
+            final_path.parent.mkdir(parents=True, exist_ok=True)
+            (stage_dir / relpath).replace(final_path)
+
+    for stale_path in sorted(previous_paths - current_paths, key=lambda path: path.as_posix()):
+        if stale_path.exists():
+            stale_path.unlink()
+
+    _write_extract_tsv_manifest(current_paths, output_dir)
+
+
+def _write_extract_tsv_from_cache(
+    ordered_results: list[tuple[Path, dict]],
+    schema: dict,
+    output_dir: Path,
+) -> None:
+    """現在の run の抽出結果から型別 TSV 一式を書き出す。"""
+    outputs = _build_extract_tsv_outputs(ordered_results, schema)
+    _commit_extract_tsv_outputs(outputs, output_dir)
 
 
 _CACHE_REASON_LABELS = [
@@ -716,17 +809,25 @@ def run_extract(images: list[Path], schema_path: Path, *, parallel_files: int = 
                 for index, img in miss_items
             }
 
-            try:
-                for future in as_completed(future_to_job):
-                    index, img = future_to_job[future]
+            first_error: Exception | None = None
+            for future in as_completed(future_to_job):
+                index, img = future_to_job[future]
+                try:
                     result = future.result()
                     _save_extract_cache(img, schema_fp, result, OUTPUT_DIR)
                     results[index] = result
                     print(f"完了: {img.name}{_format_perf_suffix(str(img))}")
-            except Exception:
-                for pending in future_to_job:
-                    pending.cancel()
-                raise
+                except Exception as exc:
+                    if first_error is None:
+                        first_error = exc
+                        for pending in future_to_job:
+                            if pending is future or pending.done():
+                                continue
+                            pending.cancel()
+                    continue
+
+            if first_error is not None:
+                raise first_error
 
     ordered_results = [(img, results[idx]) for idx, img in enumerate(images)]
     _write_extract_tsv_from_cache(ordered_results, schema, OUTPUT_DIR)
