@@ -50,7 +50,7 @@ def _read_output_texts(output_dir: Path, pattern: str) -> dict[str, str]:
 
 def _read_extract_tsv_manifest(output_dir: Path) -> dict:
     """extract TSV manifest を読み込む。"""
-    return json.loads((output_dir / "cache" / "extract" / "tsv_manifest.json").read_text(encoding="utf-8"))
+    return json.loads((output_dir / "cache" / "extract" / "_meta" / "tsv_manifest.json").read_text(encoding="utf-8"))
 
 
 @pytest.fixture(autouse=True)
@@ -471,6 +471,28 @@ def test_run_extract_reuses_cached_results(monkeypatch, tmp_path):
     assert (output_dir / "Card.tsv").read_text(encoding="utf-8") == first_tsv
 
 
+def test_run_extract_reuses_cached_results_for_tsv_manifest_stem(monkeypatch, tmp_path):
+    images = _make_images(tmp_path, "tsv_manifest.png")
+    schema_path = tmp_path / "schema.json"
+    _write_schema(schema_path)
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    calls: list[str] = []
+    monkeypatch.setattr(documentai_mod, "extract_with_schema", _extract_fake(calls=calls))
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", output_dir)
+
+    main_mod.run_extract(images, schema_path, parallel_files=1)
+    assert calls == ["tsv_manifest.png"]
+    assert (output_dir / "cache" / "extract" / "tsv_manifest.json").exists()
+    assert (output_dir / "cache" / "extract" / "_meta" / "tsv_manifest.json").exists()
+
+    calls.clear()
+    main_mod.run_extract(images, schema_path, parallel_files=1)
+
+    assert calls == []
+
+
 def test_run_extract_invalidates_on_schema_change(monkeypatch, tmp_path):
     images = _make_images(tmp_path, "first.png")
     schema_path = tmp_path / "schema.json"
@@ -841,6 +863,12 @@ def test_run_extract_bootstraps_cleanup_without_manifest(monkeypatch, tmp_path):
     stale_matched.write_text("stale matched\n", encoding="utf-8")
     keep_docai = output_dir / "alpha.docai.tsv"
     keep_docai.write_text("keep docai\n", encoding="utf-8")
+    keep_none_docai = output_dir / "none_alpha.docai.tsv"
+    keep_none_docai.write_text("keep none docai\n", encoding="utf-8")
+    keep_none_schema = output_dir / "none_alpha.schema.tsv"
+    keep_none_schema.write_text("keep none schema\n", encoding="utf-8")
+    keep_none_structured = output_dir / "none_alpha.structured.tsv"
+    keep_none_structured.write_text("keep none structured\n", encoding="utf-8")
 
     monkeypatch.setattr(documentai_mod, "extract_with_schema", _extract_fake())
     monkeypatch.setattr(main_mod, "OUTPUT_DIR", output_dir)
@@ -850,6 +878,9 @@ def test_run_extract_bootstraps_cleanup_without_manifest(monkeypatch, tmp_path):
     assert not stale_none.exists()
     assert not stale_matched.exists()
     assert keep_docai.exists()
+    assert keep_none_docai.exists()
+    assert keep_none_schema.exists()
+    assert keep_none_structured.exists()
     manifest = _read_extract_tsv_manifest(output_dir)
     assert manifest["files"] == ["Card.tsv"]
 
@@ -1028,7 +1059,7 @@ def test_run_extract_staging_failure_preserves_previous_outputs(monkeypatch, tmp
     old_card.write_text("name\tpower\tsource\nold\t9\told.png\n", encoding="utf-8")
     old_none = output_dir / "none_Unknown.tsv"
     old_none.write_text("raw\tsource\nold\told.png\n", encoding="utf-8")
-    manifest_path = output_dir / "cache" / "extract" / "tsv_manifest.json"
+    manifest_path = output_dir / "cache" / "extract" / "_meta" / "tsv_manifest.json"
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(
         json.dumps({"manifest_version": 1, "files": ["Card.tsv", "none_Unknown.tsv"]}, ensure_ascii=False, indent=2)
@@ -1064,6 +1095,45 @@ def test_run_extract_staging_failure_preserves_previous_outputs(monkeypatch, tmp
     monkeypatch.setattr(main_mod, "_atomic_write_text", fail_stage_write)
 
     with pytest.raises(OSError, match="stage failed"):
+        main_mod.run_extract(images, schema_path, parallel_files=1)
+
+    assert old_card.read_text(encoding="utf-8") == "name\tpower\tsource\nold\t9\told.png\n"
+    assert old_none.read_text(encoding="utf-8") == "raw\tsource\nold\told.png\n"
+    manifest = _read_extract_tsv_manifest(output_dir)
+    assert manifest["files"] == ["Card.tsv", "none_Unknown.tsv"]
+
+
+def test_run_extract_manifest_stage_failure_preserves_previous_outputs(monkeypatch, tmp_path):
+    images = _make_images(tmp_path, "only.png")
+    schema_path = tmp_path / "schema.json"
+    _write_schema(schema_path)
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    old_card = output_dir / "Card.tsv"
+    old_card.write_text("name\tpower\tsource\nold\t9\told.png\n", encoding="utf-8")
+    old_none = output_dir / "none_Unknown.tsv"
+    old_none.write_text("raw\tsource\nold\told.png\n", encoding="utf-8")
+    manifest_path = output_dir / "cache" / "extract" / "_meta" / "tsv_manifest.json"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(
+        json.dumps({"manifest_version": 1, "files": ["Card.tsv", "none_Unknown.tsv"]}, ensure_ascii=False, indent=2)
+        + "\n",
+        encoding="utf-8",
+    )
+
+    original_atomic_write_text = main_mod._atomic_write_text
+
+    def fail_manifest_stage_write(path: Path, text: str) -> None:
+        if any(part.startswith(main_mod._EXTRACT_TSV_STAGE_PREFIX) for part in path.parts) and path.name == "tsv_manifest.json":
+            raise OSError("manifest stage failed")
+        original_atomic_write_text(path, text)
+
+    monkeypatch.setattr(documentai_mod, "extract_with_schema", _extract_fake())
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", output_dir)
+    monkeypatch.setattr(main_mod, "_atomic_write_text", fail_manifest_stage_write)
+
+    with pytest.raises(OSError, match="manifest stage failed"):
         main_mod.run_extract(images, schema_path, parallel_files=1)
 
     assert old_card.read_text(encoding="utf-8") == "name\tpower\tsource\nold\t9\told.png\n"

@@ -470,6 +470,7 @@ def run_docai_plain(images: list[Path]) -> None:
 
 
 _EXTRACT_CACHE_SUBDIR = Path("cache") / "extract"
+_EXTRACT_TSV_META_SUBDIR = _EXTRACT_CACHE_SUBDIR / "_meta"
 _EXTRACT_TSV_MANIFEST_NAME = "tsv_manifest.json"
 _EXTRACT_TSV_MANIFEST_VERSION = 1
 _EXTRACT_TSV_STAGE_PREFIX = ".extract_tsv_stage."
@@ -596,7 +597,12 @@ def _save_extract_cache(
 
 def _extract_tsv_manifest_path(output_dir: Path) -> Path:
     """extract TSV manifest の保存パスを返す。"""
-    return output_dir / _EXTRACT_CACHE_SUBDIR / _EXTRACT_TSV_MANIFEST_NAME
+    return output_dir / _EXTRACT_TSV_META_SUBDIR / _EXTRACT_TSV_MANIFEST_NAME
+
+
+def _is_non_extract_tsv_path(path: Path) -> bool:
+    """TSV が他モード由来なら True を返す。"""
+    return any(path.name.endswith(suffix) for suffix in _NON_EXTRACT_TSV_SUFFIXES)
 
 
 def _build_extract_tsv_outputs(ordered_results: list[tuple[Path, dict]], schema: dict) -> dict[Path, str]:
@@ -677,13 +683,13 @@ def _load_extract_tsv_manifest_paths(output_dir: Path) -> set[Path] | None:
 
 def _infer_legacy_extract_tsv_paths(output_dir: Path) -> set[Path]:
     """manifest 導入前の extract TSV 群を推定する。"""
-    paths = {path for path in output_dir.glob("none_*.tsv") if path.is_file()}
+    paths = {path for path in output_dir.glob("none_*.tsv") if path.is_file() and not _is_non_extract_tsv_path(path)}
     for path in output_dir.glob("*.tsv"):
         if not path.is_file():
             continue
         if path.name.startswith("none_"):
             continue
-        if any(path.name.endswith(suffix) for suffix in _NON_EXTRACT_TSV_SUFFIXES):
+        if _is_non_extract_tsv_path(path):
             continue
         paths.add(path)
     return paths
@@ -710,22 +716,36 @@ def _commit_extract_tsv_outputs(outputs: dict[Path, str], output_dir: Path) -> N
     """staging 経由で TSV 一式を更新し、stale TSV を整理する。"""
     current_paths = {output_dir / relpath for relpath in outputs}
     previous_paths = _managed_extract_tsv_paths(output_dir)
+    manifest_path = _extract_tsv_manifest_path(output_dir)
+    manifest_stage_relpath = manifest_path.relative_to(output_dir)
 
     with tempfile.TemporaryDirectory(dir=output_dir, prefix=_EXTRACT_TSV_STAGE_PREFIX) as stage_dir_name:
         stage_dir = Path(stage_dir_name)
         for relpath, text in sorted(outputs.items(), key=lambda item: item[0].as_posix()):
             _atomic_write_text(stage_dir / relpath, text)
+        _atomic_write_text(
+            stage_dir / manifest_stage_relpath,
+            json.dumps(
+                {
+                    "manifest_version": _EXTRACT_TSV_MANIFEST_VERSION,
+                    "files": sorted(path.relative_to(output_dir).as_posix() for path in current_paths),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+        )
 
         for relpath in sorted(outputs, key=lambda path: path.as_posix()):
             final_path = output_dir / relpath
             final_path.parent.mkdir(parents=True, exist_ok=True)
             (stage_dir / relpath).replace(final_path)
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        (stage_dir / manifest_stage_relpath).replace(manifest_path)
 
     for stale_path in sorted(previous_paths - current_paths, key=lambda path: path.as_posix()):
         if stale_path.exists():
             stale_path.unlink()
-
-    _write_extract_tsv_manifest(current_paths, output_dir)
 
 
 def _write_extract_tsv_from_cache(

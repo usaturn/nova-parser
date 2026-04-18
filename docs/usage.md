@@ -591,7 +591,7 @@ uv run nova-parser --mode extract --parallel-files 4 --schema Output/schema.json
 1. **Document AI OCR**: 画像を Document AI の OCR プロセッサに送信してテキストを取得（PDF が 15 ページを超える場合は自動的にチャンク分割して処理）
 2. **Gemini スキーマ準拠抽出**: OCR テキストとスキーマ定義を Gemini に送り、スキーマに合致するデータ（`matched_types`）と合致しないデータ（`unmatched_types`）を JSON で抽出
 3. **画像単位キャッシュ**: 各画像の抽出結果を `Output/cache/extract/{stem}.json` に保存
-4. **型別 TSV 再生成**: 全画像分のキャッシュを集約し、スキーマ上の全型 `{type_name}.tsv` と unmatched の `none_{type_name}.tsv` を staging 経由で再生成し、成功 run の出力集合を `Output/cache/extract/tsv_manifest.json` に記録
+4. **型別 TSV 再生成**: 全画像分のキャッシュを集約し、スキーマ上の全型 `{type_name}.tsv` と unmatched の `none_{type_name}.tsv` を staging 経由で再生成し、成功 run の出力集合を `Output/cache/extract/_meta/tsv_manifest.json` に記録
 
 #### 並列実行とログ
 
@@ -619,7 +619,7 @@ TSV ファイルはキャッシュを元に毎回 current run 基準で再生成
 - **スキーマに定義された全型** の `{type_name}.tsv` は run ごとに再生成されます。0 件の型でもヘッダ行のみのファイルが作られます
 - **unmatched 型** の `none_{type_name}.tsv` は current run に出現した型だけが生成されます
 - **stale TSV の整理**: current run に存在しない旧 `{type_name}.tsv` / `none_{type_name}.tsv` は成功 run 後に削除されます
-- **manifest**: 直前の成功 run が管理していた TSV 一覧を `Output/cache/extract/tsv_manifest.json` に保存し、次回 cleanup に使います
+- **manifest**: 直前の成功 run が管理していた TSV 一覧を `Output/cache/extract/_meta/tsv_manifest.json` に保存し、次回 cleanup に使います
 - **行の並び順**: 入力画像の指定順で安定しており、並列実行でも順序は保たれます
 - **過去 run のデータは保持されません**: 前回 run と今回 run で異なる画像セットを指定した場合、前回分の行は出力されません（再利用したい場合はキャッシュごと保持して同じ引数で実行）
 
