@@ -1,0 +1,6 @@
+interface:
+  display_name: "Skill Creator Plus"
+  short_description: "Build, benchmark, and improve Codex skills"
+  default_prompt: "Use $skill-creator-plus to create or improve a Codex skill with evals and benchmarks."
+policy:
+  allow_implicit_invocation: true

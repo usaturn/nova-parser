@@ -1,0 +1,1 @@
+Write short summaries when asked. Use when Codex needs help with incident, summary, api, customer, update, engineering, postmortem, stakeholders, or closely related requests. Strong trigger examples include: Write a customer-safe incident update for our API outage; Summarize the incident postmortem for engineering; Prepare an executive incident summary for stakeholders.

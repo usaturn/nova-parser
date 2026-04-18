@@ -1,0 +1,6 @@
+interface:
+  display_name: "Incident Summary Helper"
+  short_description: "Draft short incident summaries and updates"
+  default_prompt: "Use $incident-summary-helper to draft an incident summary."
+policy:
+  allow_implicit_invocation: true

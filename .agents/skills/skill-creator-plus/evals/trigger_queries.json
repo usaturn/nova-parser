@@ -1,0 +1,66 @@
+{
+  "skill_name": "skill-creator-plus",
+  "queries": [
+    {
+      "id": "q1",
+      "query": "Create a new Codex skill for our deployment checklist workflow",
+      "should_trigger": true,
+      "expected_terms": [
+        "create",
+        "codex",
+        "skill",
+        "workflow"
+      ],
+      "notes": "Greenfield skill creation"
+    },
+    {
+      "id": "q2",
+      "query": "Improve this existing skill and compare it to the old version",
+      "should_trigger": true,
+      "expected_terms": [
+        "improve",
+        "skill",
+        "compare",
+        "version"
+      ],
+      "notes": "Existing skill revision"
+    },
+    {
+      "id": "q3",
+      "query": "Help me benchmark with-skill versus baseline behavior",
+      "should_trigger": true,
+      "expected_terms": [
+        "benchmark",
+        "skill",
+        "baseline"
+      ],
+      "notes": "Benchmark-specific use"
+    },
+    {
+      "id": "q4",
+      "query": "Optimize the skill description so it triggers more reliably",
+      "should_trigger": true,
+      "expected_terms": [
+        "optimize",
+        "skill",
+        "description",
+        "trigger"
+      ],
+      "notes": "Triggering work"
+    },
+    {
+      "id": "q5",
+      "query": "Build a dashboard for weekly team metrics",
+      "should_trigger": false,
+      "expected_terms": [],
+      "notes": "General product work"
+    },
+    {
+      "id": "q6",
+      "query": "Fix a bug in our parser tests",
+      "should_trigger": false,
+      "expected_terms": [],
+      "notes": "Normal coding task"
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "skill_name": "incident-summary-helper",
+  "evals": [
+    {
+      "id": 1,
+      "name": "customer-update",
+      "prompt": "Draft a customer-safe update for an API incident that caused elevated error rates for 18 minutes.",
+      "expected_output": "A concise external update that states impact and current status without internal-only detail.",
+      "files": [],
+      "expectations": [
+        "The output uses customer-safe wording.",
+        "The output mentions impact and current status."
+      ]
+    },
+    {
+      "id": 2,
+      "name": "internal-retro-summary",
+      "prompt": "Summarize the incident timeline, impact, and next steps for the engineering retrospective.",
+      "expected_output": "An internal summary with timeline, impact, and follow-up items.",
+      "files": [],
+      "expectations": [
+        "The output includes timeline, impact, and next steps.",
+        "The output is written for an internal engineering audience."
+      ]
+    }
+  ]
+}

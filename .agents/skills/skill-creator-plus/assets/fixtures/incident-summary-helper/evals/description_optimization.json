@@ -1,0 +1,36 @@
+{
+  "skill_name": "incident-summary-helper",
+  "current_description": "Write short summaries when asked.",
+  "suggested_description": "Write short summaries when asked. Use when Codex needs help with incident, summary, api, customer, update, engineering, postmortem, stakeholders, or closely related requests. Strong trigger examples include: Write a customer-safe incident update for our API outage; Summarize the incident postmortem for engineering; Prepare an executive incident summary for stakeholders.",
+  "added_terms": [
+    "incident",
+    "summary",
+    "api",
+    "customer",
+    "update",
+    "engineering",
+    "postmortem",
+    "stakeholders"
+  ],
+  "current_summary": {
+    "query_count": 4,
+    "positive_queries": 3,
+    "negative_queries": 1,
+    "accuracy": 0.25,
+    "mean_coverage": 0.0,
+    "false_positives": 0,
+    "false_negatives": 3,
+    "threshold": 0.34
+  },
+  "suggested_summary": {
+    "query_count": 4,
+    "positive_queries": 3,
+    "negative_queries": 1,
+    "accuracy": 1.0,
+    "mean_coverage": 0.75,
+    "false_positives": 0,
+    "false_negatives": 0,
+    "threshold": 0.34
+  },
+  "queries_path": "/workspaces/nova-parser/.agents/skills/skill-creator-plus/assets/fixtures/incident-summary-helper/evals/trigger_queries.json"
+}

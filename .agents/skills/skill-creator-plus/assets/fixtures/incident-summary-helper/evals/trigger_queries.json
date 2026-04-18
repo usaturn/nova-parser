@@ -1,0 +1,47 @@
+{
+  "skill_name": "incident-summary-helper",
+  "queries": [
+    {
+      "id": "q1",
+      "query": "Write a customer-safe incident update for our API outage",
+      "should_trigger": true,
+      "expected_terms": [
+        "customer",
+        "incident",
+        "update",
+        "api"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "q2",
+      "query": "Summarize the incident postmortem for engineering",
+      "should_trigger": true,
+      "expected_terms": [
+        "incident",
+        "postmortem",
+        "engineering",
+        "summary"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "q3",
+      "query": "Prepare an executive incident summary for stakeholders",
+      "should_trigger": true,
+      "expected_terms": [
+        "incident",
+        "summary",
+        "stakeholders"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "q4",
+      "query": "Build a bug triage checklist for the mobile app",
+      "should_trigger": false,
+      "expected_terms": [],
+      "notes": ""
+    }
+  ]
+}

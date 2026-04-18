@@ -1,0 +1,46 @@
+{
+  "skill_name": "skill-creator-plus",
+  "evals": [
+    {
+      "id": 1,
+      "name": "create-new-codex-skill",
+      "prompt": "Create a new Codex skill named deployment-checklist in a temporary skills directory. The skill should scaffold a release checklist workflow, include eval templates, and generate Codex UI metadata.",
+      "expected_output": "A new benchmark-ready skill directory with SKILL.md, agents/openai.yaml, evals/, and validation notes.",
+      "files": [],
+      "expectations": [
+        "The created skill directory contains SKILL.md and agents/openai.yaml.",
+        "The created skill directory contains evals/evals.json and evals/trigger_queries.json.",
+        "Validation succeeds with scripts/quick_validate.py."
+      ]
+    },
+    {
+      "id": 2,
+      "name": "improve-existing-skill",
+      "prompt": "Improve the sample skill at assets/fixtures/incident-summary-helper. Tighten its instructions, broaden its trigger description, and benchmark the revised version against the original snapshot baseline.",
+      "expected_output": "An updated skill plus a workspace iteration containing with_skill and baseline outputs, grading, and benchmark summaries.",
+      "files": [
+        "assets/fixtures/incident-summary-helper"
+      ],
+      "expectations": [
+        "The benchmark workspace includes benchmark.json and benchmark.md.",
+        "Both with_skill and baseline runs have outputs and grading artifacts.",
+        "The updated description mentions incident summaries, incident updates, or postmortems."
+      ]
+    },
+    {
+      "id": 3,
+      "name": "optimize-triggering",
+      "prompt": "Run trigger-query evaluation for assets/fixtures/incident-summary-helper, propose a stronger description, and save both the trigger report and the suggested description.",
+      "expected_output": "A trigger evaluation report plus a suggested description that raises coverage for positive trigger queries.",
+      "files": [
+        "assets/fixtures/incident-summary-helper",
+        "assets/fixtures/incident-summary-helper/evals/trigger_queries.json"
+      ],
+      "expectations": [
+        "The run writes a JSON trigger evaluation report.",
+        "The run writes a suggested description text file.",
+        "The suggested description explicitly tells Codex when to use the skill."
+      ]
+    }
+  ]
+}
