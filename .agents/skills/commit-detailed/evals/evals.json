@@ -1,0 +1,39 @@
+{
+  "skill_name": "commit-detailed",
+  "evals": [
+    {
+      "id": 1,
+      "name": "commit-staged-docs-change",
+      "prompt": "Commit only the staged documentation changes on main with a detailed message.",
+      "expected_output": "A commit on main that includes only the staged docs files and uses a detailed Conventional Commits message with a Japanese body.",
+      "files": [],
+      "expectations": [
+        "The result confirms the current branch is main before committing.",
+        "The commit message includes a Conventional Commits subject and a multi-line body.",
+        "The skill does not run git add or git push."
+      ]
+    },
+    {
+      "id": 2,
+      "name": "refuse-non-main-branch",
+      "prompt": "Commit the staged files with a detailed message while the current branch is feature/parser-cleanup.",
+      "expected_output": "A refusal that explains the branch is not main and asks the user to switch or confirm a different plan.",
+      "files": [],
+      "expectations": [
+        "The result refuses to commit when the current branch is not main.",
+        "The skill does not switch branches automatically."
+      ]
+    },
+    {
+      "id": 3,
+      "name": "refuse-empty-stage",
+      "prompt": "Commit with a detailed message, but there are no staged changes.",
+      "expected_output": "A refusal that explains nothing is staged and does not add files automatically.",
+      "files": [],
+      "expectations": [
+        "The result says there are no staged changes to commit.",
+        "The skill does not run git add."
+      ]
+    }
+  ]
+}

@@ -1,0 +1,51 @@
+{
+  "skill_name": "commit-detailed",
+  "queries": [
+    {
+      "id": "q1",
+      "query": "Commit only the staged files on main with a detailed message.",
+      "should_trigger": true,
+      "expected_terms": [
+        "commit",
+        "staged",
+        "main",
+        "detailed",
+        "message"
+      ],
+      "notes": "Direct staged-only request"
+    },
+    {
+      "id": "q2",
+      "query": "Write a rich Conventional Commits message and commit what is already staged.",
+      "should_trigger": true,
+      "expected_terms": [
+        "commit",
+        "staged",
+        "conventional",
+        "message"
+      ],
+      "notes": "Detailed message wording without saying main explicitly"
+    },
+    {
+      "id": "q3",
+      "query": "Stage these files and then commit them.",
+      "should_trigger": false,
+      "expected_terms": [],
+      "notes": "Requires git add, which this skill must not do"
+    },
+    {
+      "id": "q4",
+      "query": "Push the current branch to origin after committing.",
+      "should_trigger": false,
+      "expected_terms": [],
+      "notes": "Push is out of scope"
+    },
+    {
+      "id": "q5",
+      "query": "Switch to main and commit the staged files.",
+      "should_trigger": false,
+      "expected_terms": [],
+      "notes": "Branch switching is out of scope even though commit is relevant"
+    }
+  ]
+}

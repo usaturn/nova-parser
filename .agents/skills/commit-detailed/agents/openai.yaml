@@ -1,0 +1,6 @@
+interface:
+  display_name: "Commit Detailed"
+  short_description: "Commit staged files to main with rich messages"
+  default_prompt: "Use $commit-detailed to commit only the staged files on main with a detailed message."
+policy:
+  allow_implicit_invocation: true
