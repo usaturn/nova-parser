@@ -15,6 +15,7 @@ import nova_parser.perf as perf_mod
 
 def _make_images(tmp_path: Path, *names: str) -> list[Path]:
     """テスト用のダミー画像ファイルを作成する。"""
+    tmp_path.mkdir(parents=True, exist_ok=True)
     images: list[Path] = []
     for name in names:
         image_path = tmp_path / name
@@ -295,14 +296,6 @@ def test_run_extract_failure_does_not_commit(monkeypatch, tmp_path):
     existing_text = "name\tpower\tsource\nold\t9\told.png\n"
     existing_card.write_text(existing_text, encoding="utf-8")
 
-    append_calls = 0
-    original_append = main_mod._append_to_tsv
-
-    def tracking_append(*args, **kwargs):
-        nonlocal append_calls
-        append_calls += 1
-        return original_append(*args, **kwargs)
-
     def fake_extract_with_schema(
         image_path: Path,
         schema: dict,
@@ -324,15 +317,16 @@ def test_run_extract_failure_does_not_commit(monkeypatch, tmp_path):
         }
 
     monkeypatch.setattr(documentai_mod, "extract_with_schema", fake_extract_with_schema)
-    monkeypatch.setattr(main_mod, "_append_to_tsv", tracking_append)
     monkeypatch.setattr(main_mod, "OUTPUT_DIR", output_dir)
 
     with pytest.raises(RuntimeError, match="boom"):
         main_mod.run_extract(images, schema_path, parallel_files=2)
 
-    assert append_calls == 0
     assert existing_card.read_text(encoding="utf-8") == existing_text
     assert not (output_dir / "none_Unknown.tsv").exists()
+    # 成功した first.png はキャッシュとして残っているので次回再実行で再利用できる
+    assert (output_dir / "cache" / "extract" / "first.json").exists()
+    assert not (output_dir / "cache" / "extract" / "second.json").exists()
 
 
 def test_run_extract_reports_retry_timings(monkeypatch, tmp_path, capsys):
@@ -414,6 +408,418 @@ def test_run_extract_does_not_retry_json_errors(monkeypatch, tmp_path):
         main_mod.run_extract([image_path], schema_path, parallel_files=1)
 
     assert attempts == 1
+    assert not (output_dir / "Card.tsv").exists()
+
+
+def _extract_fake(
+    results_by_stem: dict[str, dict] | None = None,
+    *,
+    calls: list[str] | None = None,
+):
+    """テスト用の `extract_with_schema` 差し替え関数を組み立てる。"""
+
+    def fake(
+        image_path: Path,
+        schema: dict,
+        *,
+        show_progress: bool = True,
+        output_dir: Path = Path("Output"),
+    ) -> dict:
+        if calls is not None:
+            calls.append(image_path.name)
+        if results_by_stem is not None and image_path.stem in results_by_stem:
+            return results_by_stem[image_path.stem]
+        return {
+            "matched_types": [
+                {
+                    "type_name": "Card",
+                    "items": [{"name": image_path.stem, "power": str(len(image_path.stem))}],
+                }
+            ],
+            "unmatched_types": [],
+        }
+
+    return fake
+
+
+def test_run_extract_reuses_cached_results(monkeypatch, tmp_path):
+    images = _make_images(tmp_path, "first.png", "second.png")
+    schema_path = tmp_path / "schema.json"
+    _write_schema(schema_path)
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    calls: list[str] = []
+    monkeypatch.setattr(documentai_mod, "extract_with_schema", _extract_fake(calls=calls))
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", output_dir)
+
+    main_mod.run_extract(images, schema_path, parallel_files=1)
+    first_tsv = (output_dir / "Card.tsv").read_text(encoding="utf-8")
+    assert sorted(calls) == ["first.png", "second.png"]
+
+    calls.clear()
+    main_mod.run_extract(images, schema_path, parallel_files=1)
+
+    assert calls == []
+    assert (output_dir / "Card.tsv").read_text(encoding="utf-8") == first_tsv
+
+
+def test_run_extract_invalidates_on_schema_change(monkeypatch, tmp_path):
+    images = _make_images(tmp_path, "first.png")
+    schema_path = tmp_path / "schema.json"
+    _write_schema(schema_path)
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    calls: list[str] = []
+    monkeypatch.setattr(documentai_mod, "extract_with_schema", _extract_fake(calls=calls))
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", output_dir)
+
+    main_mod.run_extract(images, schema_path, parallel_files=1)
+    calls.clear()
+
+    schema_path.write_text(
+        '{"types":[{"type_name":"Card","fields":["name","power","rarity"]}]}',
+        encoding="utf-8",
+    )
+
+    def fake_with_rarity(
+        image_path: Path,
+        schema: dict,
+        *,
+        show_progress: bool = True,
+        output_dir: Path = Path("Output"),
+    ) -> dict:
+        calls.append(image_path.name)
+        return {
+            "matched_types": [
+                {
+                    "type_name": "Card",
+                    "items": [{"name": image_path.stem, "power": "1", "rarity": "R"}],
+                }
+            ],
+            "unmatched_types": [],
+        }
+
+    monkeypatch.setattr(documentai_mod, "extract_with_schema", fake_with_rarity)
+    main_mod.run_extract(images, schema_path, parallel_files=1)
+
+    assert calls == ["first.png"]
+    assert "rarity" in (output_dir / "Card.tsv").read_text(encoding="utf-8")
+
+
+def test_run_extract_invalidates_on_cache_version_change(monkeypatch, tmp_path):
+    images = _make_images(tmp_path, "first.png")
+    schema_path = tmp_path / "schema.json"
+    _write_schema(schema_path)
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    calls: list[str] = []
+    monkeypatch.setattr(documentai_mod, "extract_with_schema", _extract_fake(calls=calls))
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", output_dir)
+
+    main_mod.run_extract(images, schema_path, parallel_files=1)
+    calls.clear()
+
+    monkeypatch.setattr(main_mod, "CACHE_VERSION", "99")
+    main_mod.run_extract(images, schema_path, parallel_files=1)
+
+    assert calls == ["first.png"]
+
+
+def test_run_extract_invalidates_on_image_content_change(monkeypatch, tmp_path):
+    images = _make_images(tmp_path, "first.png")
+    schema_path = tmp_path / "schema.json"
+    _write_schema(schema_path)
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    calls: list[str] = []
+    monkeypatch.setattr(documentai_mod, "extract_with_schema", _extract_fake(calls=calls))
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", output_dir)
+
+    main_mod.run_extract(images, schema_path, parallel_files=1)
+    calls.clear()
+
+    images[0].write_bytes(b"different bytes")
+    main_mod.run_extract(images, schema_path, parallel_files=1)
+
+    assert calls == ["first.png"]
+
+
+def test_run_extract_resumes_after_failure(monkeypatch, tmp_path):
+    images = _make_images(tmp_path, "first.png", "second.png")
+    schema_path = tmp_path / "schema.json"
+    _write_schema(schema_path)
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    calls: list[str] = []
+
+    def fake_fail_second(
+        image_path: Path,
+        schema: dict,
+        *,
+        show_progress: bool = True,
+        output_dir: Path = Path("Output"),
+    ) -> dict:
+        calls.append(image_path.name)
+        if image_path.name == "second.png":
+            raise RuntimeError("boom")
+        return {
+            "matched_types": [
+                {"type_name": "Card", "items": [{"name": image_path.stem, "power": "1"}]}
+            ],
+            "unmatched_types": [],
+        }
+
+    monkeypatch.setattr(documentai_mod, "extract_with_schema", fake_fail_second)
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", output_dir)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        main_mod.run_extract(images, schema_path, parallel_files=1)
+
+    assert "first.png" in calls and "second.png" in calls
+    calls.clear()
+
+    def fake_succeed_all(
+        image_path: Path,
+        schema: dict,
+        *,
+        show_progress: bool = True,
+        output_dir: Path = Path("Output"),
+    ) -> dict:
+        calls.append(image_path.name)
+        return {
+            "matched_types": [
+                {"type_name": "Card", "items": [{"name": image_path.stem, "power": "2"}]}
+            ],
+            "unmatched_types": [],
+        }
+
+    monkeypatch.setattr(documentai_mod, "extract_with_schema", fake_succeed_all)
+    main_mod.run_extract(images, schema_path, parallel_files=1)
+
+    assert calls == ["second.png"]
+    tsv = (output_dir / "Card.tsv").read_text(encoding="utf-8")
+    assert "first\t1\tfirst.png" in tsv
+    assert "second\t2\tsecond.png" in tsv
+
+
+def test_run_extract_detects_duplicate_stems(monkeypatch, tmp_path):
+    images = _make_images(tmp_path, "same.png", "same.jpg")
+    schema_path = tmp_path / "schema.json"
+    _write_schema(schema_path)
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    def fail_if_called(*args, **kwargs):
+        msg = "extract_with_schema should not be called when cache stems collide"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(documentai_mod, "extract_with_schema", fail_if_called)
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", output_dir)
+
+    with pytest.raises(ValueError, match=r"same\.json"):
+        main_mod.run_extract(images, schema_path, parallel_files=1)
+
+
+def test_run_extract_ignores_corrupted_cache(monkeypatch, tmp_path):
+    images = _make_images(tmp_path, "first.png")
+    schema_path = tmp_path / "schema.json"
+    _write_schema(schema_path)
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    cache_dir = output_dir / "cache" / "extract"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "first.json").write_text("{ not json", encoding="utf-8")
+
+    calls: list[str] = []
+    monkeypatch.setattr(documentai_mod, "extract_with_schema", _extract_fake(calls=calls))
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", output_dir)
+
+    main_mod.run_extract(images, schema_path, parallel_files=1)
+
+    assert calls == ["first.png"]
+    assert (output_dir / "Card.tsv").read_text(encoding="utf-8") == (
+        "name\tpower\tsource\nfirst\t5\tfirst.png\n"
+    )
+
+
+def test_run_extract_stable_row_order_parallel(monkeypatch, tmp_path):
+    images = _make_images(tmp_path, "alpha.png", "beta.png", "gamma.png")
+    schema_path = tmp_path / "schema.json"
+    _write_schema(schema_path)
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    def fake(
+        image_path: Path,
+        schema: dict,
+        *,
+        show_progress: bool = True,
+        output_dir: Path = Path("Output"),
+    ) -> dict:
+        # 先頭ほど遅く返すことで完了順と入力順をずらす
+        if image_path.name == "alpha.png":
+            time.sleep(0.1)
+        elif image_path.name == "beta.png":
+            time.sleep(0.05)
+        return {
+            "matched_types": [
+                {"type_name": "Card", "items": [{"name": image_path.stem, "power": "1"}]}
+            ],
+            "unmatched_types": [],
+        }
+
+    monkeypatch.setattr(documentai_mod, "extract_with_schema", fake)
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", output_dir)
+
+    main_mod.run_extract(images, schema_path, parallel_files=3)
+
+    tsv_lines = (output_dir / "Card.tsv").read_text(encoding="utf-8").splitlines()
+    assert tsv_lines[0] == "name\tpower\tsource"
+    assert tsv_lines[1].endswith("\talpha.png")
+    assert tsv_lines[2].endswith("\tbeta.png")
+    assert tsv_lines[3].endswith("\tgamma.png")
+
+
+def test_run_extract_regenerates_all_schema_type_tsvs(monkeypatch, tmp_path):
+    images = _make_images(tmp_path, "first.png")
+    schema_path = tmp_path / "schema.json"
+    schema_path.write_text(
+        """
+{
+  "types": [
+    {"type_name": "Card", "fields": ["name", "power"]},
+    {"type_name": "Empty", "fields": ["x"]}
+  ]
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    monkeypatch.setattr(documentai_mod, "extract_with_schema", _extract_fake())
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", output_dir)
+
+    main_mod.run_extract(images, schema_path, parallel_files=1)
+
+    empty_tsv = (output_dir / "Empty.tsv").read_text(encoding="utf-8")
+    assert empty_tsv == "x\tsource\n"
+
+
+def test_run_extract_tsv_overwrites_previous_run(monkeypatch, tmp_path):
+    images_a = _make_images(tmp_path / "A", "a.png")
+    images_b = _make_images(tmp_path / "B", "b.png")
+    schema_path = tmp_path / "schema.json"
+    _write_schema(schema_path)
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    monkeypatch.setattr(documentai_mod, "extract_with_schema", _extract_fake())
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", output_dir)
+
+    main_mod.run_extract(images_a, schema_path, parallel_files=1)
+    assert "a.png" in (output_dir / "Card.tsv").read_text(encoding="utf-8")
+
+    main_mod.run_extract(images_b, schema_path, parallel_files=1)
+    tsv = (output_dir / "Card.tsv").read_text(encoding="utf-8")
+    assert "a.png" not in tsv
+    assert "b.png" in tsv
+
+
+def test_run_extract_sanitizes_unmatched_type_filename(monkeypatch, tmp_path):
+    images = _make_images(tmp_path, "first.png")
+    schema_path = tmp_path / "schema.json"
+    _write_schema(schema_path)
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    def fake(
+        image_path: Path,
+        schema: dict,
+        *,
+        show_progress: bool = True,
+        output_dir: Path = Path("Output"),
+    ) -> dict:
+        return {
+            "matched_types": [],
+            "unmatched_types": [
+                {
+                    "type_name": "../weird/\u0001name",
+                    "items": [{"raw": "danger"}],
+                }
+            ],
+        }
+
+    monkeypatch.setattr(documentai_mod, "extract_with_schema", fake)
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", output_dir)
+
+    main_mod.run_extract(images, schema_path, parallel_files=1)
+
+    produced = sorted(output_dir.glob("none_*.tsv"))
+    assert len(produced) == 1
+    assert "/" not in produced[0].name
+    assert "\x01" not in produced[0].name
+
+
+def test_run_extract_leaves_unrelated_stale_none_tsv(monkeypatch, tmp_path):
+    """plan 通り、今回 run に現れない旧 run の `none_*.tsv` は放置される。"""
+    images = _make_images(tmp_path, "only.png")
+    schema_path = tmp_path / "schema.json"
+    _write_schema(schema_path)
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    stale = output_dir / "none_Old.tsv"
+    stale.write_text("stale content\n", encoding="utf-8")
+
+    monkeypatch.setattr(documentai_mod, "extract_with_schema", _extract_fake())
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", output_dir)
+
+    main_mod.run_extract(images, schema_path, parallel_files=1)
+
+    assert stale.exists(), "今回 run に出現しない旧 none_*.tsv は削除されない"
+    assert stale.read_text(encoding="utf-8") == "stale content\n"
+
+
+def test_run_extract_parallel_failure_preserves_partial_cache(monkeypatch, tmp_path):
+    """並列実行で一部が失敗しても、成功済み画像のキャッシュは保持される。"""
+    images = _make_images(tmp_path, "good.png", "bad.png")
+    schema_path = tmp_path / "schema.json"
+    _write_schema(schema_path)
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    def fake(
+        image_path: Path,
+        schema: dict,
+        *,
+        show_progress: bool = True,
+        output_dir: Path = Path("Output"),
+    ) -> dict:
+        if image_path.name == "bad.png":
+            msg = "boom"
+            raise RuntimeError(msg)
+        return {
+            "matched_types": [
+                {"type_name": "Card", "items": [{"name": "Alpha", "power": "1"}]},
+            ],
+            "unmatched_types": [],
+        }
+
+    monkeypatch.setattr(documentai_mod, "extract_with_schema", fake)
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", output_dir)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        main_mod.run_extract(images, schema_path, parallel_files=2)
+
+    assert (output_dir / "cache" / "extract" / "good.json").exists()
+    assert not (output_dir / "cache" / "extract" / "bad.json").exists()
     assert not (output_dir / "Card.tsv").exists()
 
 

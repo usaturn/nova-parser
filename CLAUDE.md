@@ -34,6 +34,13 @@ uv run task ruff
 
 画像から Gemini および Document AI を使って OCR・構造化抽出を行うアプリケーション。主なモードは `plain`、`structured`、`structured_tsv`、`gamedata`、`schema`、`docai`、`docai_plain`、`schema_propose`、`extract`。`google-genai` SDK を使用し、Vertex AI Express モード（API キー認証）で動作する。環境変数は `.env` で管理（`GOOGLE_GENAI_USE_VERTEXAI`, `VERTEX_AI_API_KEY` 等）。
 
+### 基本ルール
+
+- 配置場所を指定せずにドキュメントを書けと言われた際は、 @docs_draft/ 配下にドキュメントを作成すること。 @docs_draft/ 配下のドキュメントはレビューした上で手動で @docs/ 配下に正式ドキュメントとして配置する
+- @docs_draft/ 配下のドキュメントは下書きレベルであり、誤りがある場合もあるので、あまり参考にしない。
+
+## 使用ツール
+
 <!-- context7 -->
 Use the `ctx7` CLI to fetch current documentation whenever the user asks about a library, framework, SDK, API, CLI tool, or cloud service -- even well-known ones like React, Next.js, Prisma, Express, Tailwind, Django, or Spring Boot. This includes API syntax, configuration, version migration, library-specific debugging, setup instructions, and CLI tool usage. Use even when you think you know the answer -- your training data may not reflect recent changes. Prefer this over web search for library docs.
 

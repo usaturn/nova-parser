@@ -1,8 +1,8 @@
 # nova-parser
 
-書籍からゲームデータを Gemini / Document AI で抽出する OCR アプリケーション。
+Gemini と Document AI を使って、書籍やゲーム資料の画像/PDF から OCR・構造化抽出を行う CLI ツールです。
 
-`Images/` ディレクトリに配置した画像や PDF を Gemini または Document AI で処理し、Markdown テキスト、構造化 JSON、TSV として `Output/` に出力します。
+入力は `Images/` 配下のファイル、または CLI で指定した画像/PDF/ディレクトリです。結果は `Output/` 配下に Markdown、JSON、TSV、クロップ画像として保存されます。
 
 ## セットアップ
 
@@ -17,66 +17,87 @@
 uv sync
 ```
 
+ローカル実行は `uv run nova-parser ...`、インストール済み環境では `nova-parser ...` を使えます。
+
 ### 環境変数
 
-`.env` ファイルを作成し、必要な変数を設定してください。
+`.env` を作成し、必要な値を設定します。
 
-| 変数名 | 説明 | 必須 |
-|--------|------|------|
-| `VERTEX_AI_API_KEY` | Gemini / Pydantic AI / Gemini Vision 用の Vertex AI API キー | `plain` / `structured` / `structured_tsv` / `gamedata` / `schema` / `docai` / `extract` / `crop` で必要 |
-| `DOCUMENT_AI_PROCESSOR` | Document AI OCR プロセッサのリソース名 | `docai` / `docai_plain` / `extract` で必須、`crop` の Document AI フォールバックでも使用 |
+| 変数名 | 用途 | 必要なモード |
+|--------|------|--------------|
+| `VERTEX_AI_API_KEY` | Gemini / Pydantic AI / Gemini Vision 用の API キー | `plain` / `structured` / `structured_tsv` / `gamedata` / `schema` / `docai` / `extract` / `crop` |
+| `DOCUMENT_AI_PROCESSOR` | Document AI OCR プロセッサのリソース名 | `docai` / `docai_plain` / `extract` / `crop` の Document AI フォールバック |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Document AI 用サービスアカウントキーのパス | 任意 |
 
-Document AI の認証は `GOOGLE_APPLICATION_CREDENTIALS`、`.secrets/docai-sa.json`、または ADC の順で解決されます。詳細は [docs/usage.md](docs/usage.md) を参照してください。
+Document AI の認証は `GOOGLE_APPLICATION_CREDENTIALS`、`.secrets/docai-sa.json`、ADC の順で解決されます。
 
 ## クイックスタート
 
 ```bash
-# Images/ 内の全画像・PDF を OCR（Markdown 出力）
+# Images/ 直下の対応ファイルを Gemini OCR で Markdown 出力
 uv run nova-parser
 
-# 構造化抽出モード（JSON 出力）
+# Pydantic AI で構造化抽出して JSON 出力
 uv run nova-parser --mode structured Images/NAN_067.tif
 
-# 構造化抽出モード（TSV 出力）
+# 構造化抽出を TSV 出力
 uv run nova-parser --mode structured_tsv Images/NAN_067.tif
 
-# ゲームデータ動的抽出モード（JSON 出力）
+# 画像内容から動的に型を発見して JSON 出力
 uv run nova-parser --mode gamedata Images/TNX_OFC_020.tif
 
-# スキーマ抽出モード（型名・フィールド名のみ、TSV 出力）
+# 型名とフィールド名だけを TSV 出力
 uv run nova-parser --mode schema Images/TNX_OFC_020.tif
 
-# Document AI OCR（Markdown 出力）
+# Document AI OCR を Markdown 出力
 uv run nova-parser --mode docai_plain Images/NAN_067.tif
 
-# Document AI OCR + 構造化 TSV 出力
-uv run nova-parser --mode docai Images/NAN_067.tif
+# Document AI OCR + Gemini 構造化抽出を TSV 出力
+uv run nova-parser --mode docai --parallel-files 4 Images/dx3/DX3_EA
 
-# 確定スキーマに従って型別 TSV を並列抽出
+# docai TSV からスキーマ提案を生成
+uv run nova-parser --mode schema_propose
+uv run nova-parser --mode schema_propose Output/TNX_OFC_020.docai.tsv
+
+# 確定スキーマに従って型別 TSV を抽出
+uv run nova-parser --mode extract --schema Output/schema.json Images/TNX_OFC_020.tif
 uv run nova-parser --mode extract --parallel-files 4 --schema Output/schema.json Images/dx3/DX3_EA
 
-# 特定のファイルを指定して処理
-uv run nova-parser path/to/image.png
-uv run nova-parser path/to/document.pdf
+# Gemini Vision でカード領域を切り出し
+uv run nova-parser --mode crop --min-card-area 0.03 --max-card-area 0.60 --padding 20 Images/sample.png
 ```
 
-`Output/` ディレクトリに各ファイルに対応する `.plain.md`、`.structured.json`、`.structured.tsv`、`.gamedata.json`、`.schema.tsv`、`.docai_plain.md`、`.docai.tsv`、型別 TSV、`.crop.json`、`.crop_001.png`、`.gemini_json_error.json` などが出力されます。`docai` / `extract` など一部モードでは、実行時に標準出力へ性能サマリーも表示されます。Gemini が `JSONDecodeError` になる不正 JSON を返した場合は 1 秒待って 1 回だけ再試行し、それでも失敗した場合や想定外形状を返した場合は調査用の `*.gemini_json_error.json` を残します。
+- 対応入力形式は `.png`、`.jpg`、`.jpeg`、`.gif`、`.bmp`、`.webp`、`.tiff`、`.tif`、`.pdf`
+- ディレクトリを指定した場合は直下の対応ファイルだけを処理
+- `schema_propose` は画像ではなく `*.docai.tsv` を入力として扱う
+- `extract` では `--schema` が必須
+- `crop` は PDF 非対応
 
-## ドキュメント
+## 出力と挙動
 
-- [使い方の詳細](docs/usage.md) — CLI オプション、並列実行、サポート形式、ログ、出力仕様
-- [Document AI 期待値最適化ガイド](docs/documentai-expected-output.md) — 入力品質、processor 選定、レスポンス診断、`docai` モードへの適用
-- [MCP サーバー設定](docs/mcp-servers.md) — Claude Code 用の外部ドキュメント検索設定
-- [Context7 を Codex CLI + Skills で使う](docs/context7-codex-cli-skills.md) — Codex CLI 向けの `ctx7 setup --codex --cli --project` 手順と使い方
-- [Codex CLI Subagents（マルチエージェント）運用ガイド](docs/codex-subagents.md) — Subagents の基本、カスタム agent 定義、推奨運用
-- [Claude Code Agent Teams 運用ガイド](docs/agent-teams.md) — Agent Teams の有効化、標準 Team 設計、運用手順
-- [Claude Code feature-dev 詳解ガイド](docs/feature-dev.md) — 7 フェーズの詳細、補助エージェントの役割、導入と基本的な使い方
-- [Claude Code feature-dev インストール復旧手順](docs/feature-dev-install-recovery.md) — 壊れた marketplace キャッシュや古いパス参照を修正する手順
+主な出力は次の通りです。
+
+- `plain`: `Output/*.plain.md`
+- `structured`: `Output/*.structured.json`
+- `structured_tsv`: `Output/*.structured.tsv`
+- `gamedata`: `Output/*.gamedata.json`
+- `schema`: `Output/*.schema.tsv`
+- `docai_plain`: `Output/*.docai_plain.md`
+- `docai`: `Output/*.docai.tsv`
+- `schema_propose`: `Output/schema_proposal.json`
+- `extract`: `Output/*.tsv`、`Output/none_*.tsv`、`Output/cache/extract/*.json`
+- `crop`: `Output/*.crop.json`、`Output/*.crop_001.png` など
+
+Gemini が不正な JSON や想定外形状を返した場合は、調査用の `*.gemini_json_error.json` を `Output/` に保存します。`extract` は画像内容とスキーマハッシュが一致する場合に `Output/cache/extract/*.json` を再利用します。一部モードでは既存の出力ファイルをスキップし、`plain` / `docai_plain` / `docai` / `extract` では標準出力に性能サマリーも表示されます。
+
+詳細な CLI オプション、ログ、出力仕様は [docs/usage.md](docs/usage.md) を参照してください。
 
 ## 開発
 
 ```bash
+# tests
+uv run pytest -q
+
 # lint & format
 uv run task ruff
 ```

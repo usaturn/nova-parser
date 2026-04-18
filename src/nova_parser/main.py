@@ -1,8 +1,12 @@
 import argparse
+import hashlib
+import json
+import re
 import sys
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, TypeVar
 
@@ -22,6 +26,10 @@ OUTPUT_DIR = Path("Output")
 
 MAX_RETRIES = 5
 INITIAL_WAIT = 30
+
+# extract モードのキャッシュ形式／抽出挙動の版。プロンプト・モデル・正規化ロジック等の
+# 更新で既存キャッシュを全無効化したい場合は値を bump する。
+CACHE_VERSION = "1"
 
 T = TypeVar("T")
 
@@ -461,102 +469,269 @@ def run_docai_plain(images: list[Path]) -> None:
         print(f"完了{_format_perf_suffix(str(img))} -> {output_file}")
 
 
-def _append_to_tsv(
-    type_data: dict,
-    schema_fields: list[str] | None,
-    source_name: str,
-    *,
-    matched: bool,
-) -> None:
-    """抽出結果を型別 TSV ファイルに追記する。"""
-    type_name = type_data["type_name"]
-    items = type_data.get("items", [])
-    if not items:
+_EXTRACT_CACHE_SUBDIR = Path("cache") / "extract"
+_UNSAFE_FILENAME_RE = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
+
+
+@dataclass(frozen=True, slots=True)
+class _CacheMiss:
+    """extract キャッシュをヒットと見なせなかった理由。"""
+
+    reason: str
+
+
+def _schema_fingerprint(schema: dict) -> str:
+    """スキーマ内容の SHA-256 を算出する。"""
+    canonical = json.dumps(schema, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return f"sha256:{digest}"
+
+
+def _image_content_hash(image: Path) -> str:
+    """画像バイト列の SHA-256 を逐次読みで算出する。"""
+    hasher = hashlib.sha256()
+    with image.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            hasher.update(chunk)
+    return f"sha256:{hasher.hexdigest()}"
+
+
+def _extract_cache_path(image: Path, output_dir: Path) -> Path:
+    """extract キャッシュの保存パスを返す。"""
+    return output_dir / _EXTRACT_CACHE_SUBDIR / f"{image.stem}.json"
+
+
+def _ensure_unique_extract_caches(images: list[Path]) -> None:
+    """extract キャッシュファイル名（image.stem）の衝突を事前検出する。"""
+    stem_to_images: dict[str, list[Path]] = {}
+    for img in images:
+        stem_to_images.setdefault(img.stem, []).append(img)
+
+    collisions = {stem: paths for stem, paths in stem_to_images.items() if len(paths) > 1}
+    if not collisions:
         return
 
-    prefix = "" if matched else "none_"
-    tsv_path = OUTPUT_DIR / f"{prefix}{type_name}.tsv"
+    details = "; ".join(
+        f"{stem}.json <- {', '.join(str(p) for p in paths)}" for stem, paths in sorted(collisions.items())
+    )
+    msg = f"extract モードで stem が衝突しキャッシュを一意に決められません: {details}"
+    raise ValueError(msg)
 
-    # フィールド決定
-    if schema_fields is not None:
-        fields = list(schema_fields)
-    else:
-        fields: list[str] = []
-        seen: set[str] = set()
-        for item in items:
-            for key in item:
-                if key not in seen:
-                    fields.append(key)
-                    seen.add(key)
 
-    file_exists = tsv_path.exists() and tsv_path.stat().st_size > 0
-    with tsv_path.open("a", encoding="utf-8") as f:
-        if not file_exists:
-            f.write("\t".join(fields + ["source"]) + "\n")
-        for item in items:
-            row = [_normalize_dash(str(item.get(field, ""))) for field in fields] + [source_name]
-            f.write("\t".join(row) + "\n")
+def _sanitize_type_filename(name: str) -> str:
+    """モデル由来の type_name を OS 安全なファイル名断片に整える。"""
+    sanitized = _UNSAFE_FILENAME_RE.sub("_", name).strip(" .")
+    sanitized = sanitized.encode("utf-8")[:200].decode("utf-8", errors="ignore")
+    return sanitized or "_"
+
+
+def _load_extract_cache(
+    image: Path,
+    schema_fingerprint: str,
+    schema: dict,
+    output_dir: Path,
+) -> dict | _CacheMiss:
+    """キャッシュが存在し全ての整合条件を満たす場合のみ結果 dict を返す。"""
+    from nova_parser.json_contracts import validate_extract_result
+
+    cache_path = _extract_cache_path(image, output_dir)
+    if not cache_path.exists():
+        return _CacheMiss("missing")
+    try:
+        payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    except OSError, json.JSONDecodeError:
+        return _CacheMiss("corrupted")
+    if not isinstance(payload, dict):
+        return _CacheMiss("corrupted")
+    if payload.get("cache_version") != CACHE_VERSION:
+        return _CacheMiss("cache_version_mismatch")
+    if payload.get("schema_hash") != schema_fingerprint:
+        return _CacheMiss("schema_mismatch")
+    try:
+        current_hash = _image_content_hash(image)
+    except OSError:
+        return _CacheMiss("source_mismatch")
+    if payload.get("source_sha256") != current_hash:
+        return _CacheMiss("source_mismatch")
+
+    result = {
+        "matched_types": payload.get("matched_types"),
+        "unmatched_types": payload.get("unmatched_types"),
+    }
+    try:
+        validate_extract_result(result, schema)
+    except TypeError, ValueError:
+        return _CacheMiss("invalid_shape")
+    return result
+
+
+def _save_extract_cache(
+    image: Path,
+    schema_fingerprint: str,
+    result: dict,
+    output_dir: Path,
+) -> None:
+    """抽出結果と整合情報をキャッシュ JSON として永続化する。"""
+    cache_path = _extract_cache_path(image, output_dir)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        relpath = str(image.resolve().relative_to(Path.cwd().resolve()))
+    except ValueError:
+        relpath = str(image)
+    payload = {
+        "cache_version": CACHE_VERSION,
+        "schema_hash": schema_fingerprint,
+        "source_file": image.name,
+        "source_relpath": relpath,
+        "source_sha256": _image_content_hash(image),
+        "matched_types": result.get("matched_types", []),
+        "unmatched_types": result.get("unmatched_types", []),
+    }
+    _atomic_write_text(cache_path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+
+
+def _write_extract_tsv_from_cache(
+    ordered_results: list[tuple[Path, dict]],
+    schema: dict,
+    output_dir: Path,
+) -> None:
+    """現在の run の抽出結果から型別 TSV を原子的に書き直す。"""
+    schema_type_order: list[str] = [t["type_name"] for t in schema["types"]]
+    schema_fields: dict[str, list[str]] = {t["type_name"]: list(t["fields"]) for t in schema["types"]}
+
+    matched_rows: dict[str, list[tuple[Path, dict]]] = {tn: [] for tn in schema_type_order}
+    for img, result in ordered_results:
+        for type_data in result.get("matched_types", []):
+            tn = type_data.get("type_name")
+            if tn in matched_rows:
+                for item in type_data.get("items", []):
+                    matched_rows[tn].append((img, item))
+
+    for tn in schema_type_order:
+        fields = schema_fields[tn]
+        lines: list[str] = ["\t".join([*fields, "source"])]
+        for img, item in matched_rows[tn]:
+            row = [_normalize_dash(str(item.get(field, ""))) for field in fields]
+            row.append(img.name)
+            lines.append("\t".join(row))
+        tsv_path = output_dir / f"{tn}.tsv"
+        _atomic_write_text(tsv_path, "\n".join(lines) + "\n")
+
+    unmatched_rows: dict[str, list[tuple[Path, dict]]] = {}
+    unmatched_fields: dict[str, list[str]] = {}
+    for img, result in ordered_results:
+        for type_data in result.get("unmatched_types", []):
+            tn = type_data.get("type_name")
+            if not isinstance(tn, str):
+                continue
+            rows = unmatched_rows.setdefault(tn, [])
+            fields = unmatched_fields.setdefault(tn, [])
+            for item in type_data.get("items", []):
+                rows.append((img, item))
+                for key in item:
+                    if key not in fields:
+                        fields.append(key)
+
+    for tn, rows in unmatched_rows.items():
+        fields = unmatched_fields[tn]
+        tsv_path = output_dir / f"none_{_sanitize_type_filename(tn)}.tsv"
+        if tsv_path.exists():
+            tsv_path.unlink()
+        lines = ["\t".join([*fields, "source"])]
+        for img, item in rows:
+            row = [_normalize_dash(str(item.get(field, ""))) for field in fields]
+            row.append(img.name)
+            lines.append("\t".join(row))
+        _atomic_write_text(tsv_path, "\n".join(lines) + "\n")
+
+
+_CACHE_REASON_LABELS = [
+    ("missing", "新規"),
+    ("corrupted", "壊れ"),
+    ("cache_version_mismatch", "版不一致"),
+    ("schema_mismatch", "スキーマ不一致"),
+    ("source_mismatch", "画像不一致"),
+    ("invalid_shape", "shape不正"),
+]
+
+
+def _format_cache_summary(hits: int, misses: dict[str, int]) -> str:
+    total_miss = sum(misses.values())
+    detail = ", ".join(f"{label} {misses[key]}" for key, label in _CACHE_REASON_LABELS if misses.get(key))
+    if detail:
+        return f"キャッシュ: ヒット {hits} / ミス {total_miss} ({detail})"
+    return f"キャッシュ: ヒット {hits} / ミス {total_miss}"
 
 
 def run_extract(images: list[Path], schema_path: Path, *, parallel_files: int = 1) -> None:
     """extract モード: スキーマに従って Document AI OCR → Gemini 構造化抽出 → 型別 TSV。"""
-    import json
-
     from nova_parser.documentai import extract_with_schema
 
     parallel_files = _validate_parallel_files(parallel_files)
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
-    schema_fields = {t["type_name"]: t["fields"] for t in schema["types"]}
+    schema_fp = _schema_fingerprint(schema)
 
-    if parallel_files == 1:
-        for img in images:
+    _ensure_unique_extract_caches(images)
+    (OUTPUT_DIR / _EXTRACT_CACHE_SUBDIR).mkdir(parents=True, exist_ok=True)
+
+    hits = 0
+    misses: dict[str, int] = {key: 0 for key, _ in _CACHE_REASON_LABELS}
+    results: dict[int, dict] = {}
+    miss_items: list[tuple[int, Path]] = []
+
+    for index, img in enumerate(images):
+        cache_result = _load_extract_cache(img, schema_fp, schema, OUTPUT_DIR)
+        if isinstance(cache_result, _CacheMiss):
+            misses[cache_result.reason] = misses.get(cache_result.reason, 0) + 1
+            miss_items.append((index, img))
+        else:
+            hits += 1
+            results[index] = cache_result
+            print(f"キャッシュ再利用: {img.name}")
+
+    use_parallel = parallel_files > 1 and len(miss_items) > 1
+    if not use_parallel:
+        for index, img in miss_items:
             print(f"処理中: {img.name} ... ", end="", flush=True)
             result = _run_with_retries(
                 lambda img=img: extract_with_schema(img, schema, output_dir=OUTPUT_DIR),
                 file_key=str(img),
                 item_label=img.name,
             )
-            for t in result.get("matched_types", []):
-                _append_to_tsv(t, schema_fields.get(t["type_name"]), img.name, matched=True)
-            for t in result.get("unmatched_types", []):
-                _append_to_tsv(t, None, img.name, matched=False)
+            _save_extract_cache(img, schema_fp, result, OUTPUT_DIR)
+            results[index] = result
             print(f"完了{_format_perf_suffix(str(img))}")
-        return
+    else:
+        for _, img in miss_items:
+            print(f"処理中: {img.name} ...")
 
-    results_by_index: dict[int, dict] = {}
-    work_items = list(enumerate(images))
+        with ThreadPoolExecutor(max_workers=parallel_files) as executor:
+            future_to_job = {
+                executor.submit(
+                    _run_with_retries,
+                    lambda img=img: extract_with_schema(img, schema, show_progress=False, output_dir=OUTPUT_DIR),
+                    file_key=str(img),
+                    item_label=img.name,
+                ): (index, img)
+                for index, img in miss_items
+            }
 
-    for _, img in work_items:
-        print(f"処理中: {img.name} ...")
+            try:
+                for future in as_completed(future_to_job):
+                    index, img = future_to_job[future]
+                    result = future.result()
+                    _save_extract_cache(img, schema_fp, result, OUTPUT_DIR)
+                    results[index] = result
+                    print(f"完了: {img.name}{_format_perf_suffix(str(img))}")
+            except Exception:
+                for pending in future_to_job:
+                    pending.cancel()
+                raise
 
-    with ThreadPoolExecutor(max_workers=parallel_files) as executor:
-        future_to_job = {
-            executor.submit(
-                _run_with_retries,
-                lambda img=img: extract_with_schema(img, schema, show_progress=False, output_dir=OUTPUT_DIR),
-                file_key=str(img),
-                item_label=img.name,
-            ): (index, img)
-            for index, img in work_items
-        }
+    ordered_results = [(img, results[idx]) for idx, img in enumerate(images)]
+    _write_extract_tsv_from_cache(ordered_results, schema, OUTPUT_DIR)
 
-        try:
-            for future in as_completed(future_to_job):
-                index, img = future_to_job[future]
-                result = future.result()
-                results_by_index[index] = result
-                print(f"完了: {img.name}{_format_perf_suffix(str(img))}")
-        except Exception:
-            for pending in future_to_job:
-                pending.cancel()
-            raise
-
-    for index, img in work_items:
-        result = results_by_index[index]
-        for t in result.get("matched_types", []):
-            _append_to_tsv(t, schema_fields.get(t["type_name"]), img.name, matched=True)
-        for t in result.get("unmatched_types", []):
-            _append_to_tsv(t, None, img.name, matched=False)
+    print(_format_cache_summary(hits, misses))
 
 
 def run_crop(images: list[Path], *, min_card_area: float, max_card_area: float, padding: int) -> None:
