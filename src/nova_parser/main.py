@@ -2,6 +2,7 @@ import argparse
 import hashlib
 import json
 import re
+import shutil
 import sys
 import tempfile
 import time
@@ -474,6 +475,7 @@ _EXTRACT_TSV_META_SUBDIR = _EXTRACT_CACHE_SUBDIR / "_meta"
 _EXTRACT_TSV_MANIFEST_NAME = "tsv_manifest.json"
 _EXTRACT_TSV_MANIFEST_VERSION = 1
 _EXTRACT_TSV_STAGE_PREFIX = ".extract_tsv_stage."
+_EXTRACT_TSV_BACKUP_PREFIX = ".extract_tsv_backup."
 _NON_EXTRACT_TSV_SUFFIXES = (".docai.tsv", ".structured.tsv", ".schema.tsv")
 _UNSAFE_FILENAME_RE = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 
@@ -703,13 +705,18 @@ def _managed_extract_tsv_paths(output_dir: Path) -> set[Path]:
     return _infer_legacy_extract_tsv_paths(output_dir)
 
 
-def _write_extract_tsv_manifest(output_paths: set[Path], output_dir: Path) -> None:
-    """成功 run の TSV 出力集合を manifest として保存する。"""
+def _extract_tsv_manifest_text(output_paths: set[Path], output_dir: Path) -> str:
+    """extract TSV manifest の JSON 文字列を返す。"""
     payload = {
         "manifest_version": _EXTRACT_TSV_MANIFEST_VERSION,
         "files": sorted(path.relative_to(output_dir).as_posix() for path in output_paths),
     }
-    _atomic_write_text(_extract_tsv_manifest_path(output_dir), json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+    return json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+
+
+def _write_extract_tsv_manifest(output_paths: set[Path], output_dir: Path) -> None:
+    """成功 run の TSV 出力集合を manifest として保存する。"""
+    _atomic_write_text(_extract_tsv_manifest_path(output_dir), _extract_tsv_manifest_text(output_paths, output_dir))
 
 
 def _commit_extract_tsv_outputs(outputs: dict[Path, str], output_dir: Path) -> None:
@@ -718,34 +725,54 @@ def _commit_extract_tsv_outputs(outputs: dict[Path, str], output_dir: Path) -> N
     previous_paths = _managed_extract_tsv_paths(output_dir)
     manifest_path = _extract_tsv_manifest_path(output_dir)
     manifest_stage_relpath = manifest_path.relative_to(output_dir)
+    manifest_text = _extract_tsv_manifest_text(current_paths, output_dir)
+    backup_targets = set(previous_paths)
+    if manifest_path.exists():
+        backup_targets.add(manifest_path)
 
-    with tempfile.TemporaryDirectory(dir=output_dir, prefix=_EXTRACT_TSV_STAGE_PREFIX) as stage_dir_name:
-        stage_dir = Path(stage_dir_name)
+    stage_dir = Path(tempfile.mkdtemp(dir=output_dir, prefix=_EXTRACT_TSV_STAGE_PREFIX))
+    backup_dir = Path(tempfile.mkdtemp(dir=output_dir, prefix=_EXTRACT_TSV_BACKUP_PREFIX))
+    backed_up_paths: list[tuple[Path, Path]] = []
+    published_paths: list[Path] = []
+
+    try:
         for relpath, text in sorted(outputs.items(), key=lambda item: item[0].as_posix()):
             _atomic_write_text(stage_dir / relpath, text)
-        _atomic_write_text(
-            stage_dir / manifest_stage_relpath,
-            json.dumps(
-                {
-                    "manifest_version": _EXTRACT_TSV_MANIFEST_VERSION,
-                    "files": sorted(path.relative_to(output_dir).as_posix() for path in current_paths),
-                },
-                ensure_ascii=False,
-                indent=2,
-            )
-            + "\n",
-        )
+        _atomic_write_text(stage_dir / manifest_stage_relpath, manifest_text)
+
+        for original_path in sorted(backup_targets, key=lambda path: path.as_posix()):
+            if not original_path.exists():
+                continue
+            backup_path = backup_dir / original_path.relative_to(output_dir)
+            backup_path.parent.mkdir(parents=True, exist_ok=True)
+            original_path.replace(backup_path)
+            backed_up_paths.append((original_path, backup_path))
 
         for relpath in sorted(outputs, key=lambda path: path.as_posix()):
             final_path = output_dir / relpath
             final_path.parent.mkdir(parents=True, exist_ok=True)
             (stage_dir / relpath).replace(final_path)
+            published_paths.append(final_path)
+
         manifest_path.parent.mkdir(parents=True, exist_ok=True)
         (stage_dir / manifest_stage_relpath).replace(manifest_path)
-
-    for stale_path in sorted(previous_paths - current_paths, key=lambda path: path.as_posix()):
-        if stale_path.exists():
-            stale_path.unlink()
+        published_paths.append(manifest_path)
+    except Exception:
+        restored_paths = {original_path for original_path, _ in backed_up_paths}
+        for original_path, backup_path in reversed(backed_up_paths):
+            if not backup_path.exists():
+                continue
+            original_path.parent.mkdir(parents=True, exist_ok=True)
+            backup_path.replace(original_path)
+        for published_path in reversed(published_paths):
+            if published_path in restored_paths:
+                continue
+            if published_path.exists():
+                published_path.unlink()
+        raise
+    finally:
+        shutil.rmtree(stage_dir, ignore_errors=True)
+        shutil.rmtree(backup_dir, ignore_errors=True)
 
 
 def _write_extract_tsv_from_cache(

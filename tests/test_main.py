@@ -1142,6 +1142,124 @@ def test_run_extract_manifest_stage_failure_preserves_previous_outputs(monkeypat
     assert manifest["files"] == ["Card.tsv", "none_Unknown.tsv"]
 
 
+def test_run_extract_stale_cleanup_failure_preserves_previous_outputs(monkeypatch, tmp_path):
+    images = _make_images(tmp_path, "only.png")
+    schema_path = tmp_path / "schema.json"
+    _write_schema(schema_path)
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    old_card = output_dir / "Card.tsv"
+    old_card.write_text("name\tpower\tsource\nold\t9\told.png\n", encoding="utf-8")
+    old_none = output_dir / "none_Unknown.tsv"
+    old_none.write_text("raw\tsource\nold\told.png\n", encoding="utf-8")
+    manifest_path = output_dir / "cache" / "extract" / "_meta" / "tsv_manifest.json"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(
+        json.dumps({"manifest_version": 1, "files": ["Card.tsv", "none_Unknown.tsv"]}, ensure_ascii=False, indent=2)
+        + "\n",
+        encoding="utf-8",
+    )
+
+    def fake(
+        image_path: Path,
+        schema: dict,
+        *,
+        show_progress: bool = True,
+        output_dir: Path = Path("Output"),
+    ) -> dict:
+        return {
+            "matched_types": [
+                {"type_name": "Card", "items": [{"name": image_path.stem, "power": "1"}]},
+            ],
+            "unmatched_types": [
+                {"type_name": "New", "items": [{"raw": "fresh"}]},
+            ],
+        }
+
+    original_replace = Path.replace
+
+    def fail_stale_backup(self: Path, target: Path) -> Path:
+        target_path = Path(target)
+        if self == old_none and any(part.startswith(main_mod._EXTRACT_TSV_BACKUP_PREFIX) for part in target_path.parts):
+            raise OSError("stale cleanup failed")
+        return original_replace(self, target)
+
+    monkeypatch.setattr(documentai_mod, "extract_with_schema", fake)
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", output_dir)
+    monkeypatch.setattr(Path, "replace", fail_stale_backup)
+
+    with pytest.raises(OSError, match="stale cleanup failed"):
+        main_mod.run_extract(images, schema_path, parallel_files=1)
+
+    assert old_card.read_text(encoding="utf-8") == "name\tpower\tsource\nold\t9\told.png\n"
+    assert old_none.read_text(encoding="utf-8") == "raw\tsource\nold\told.png\n"
+    assert not (output_dir / "none_New.tsv").exists()
+    manifest = _read_extract_tsv_manifest(output_dir)
+    assert manifest["files"] == ["Card.tsv", "none_Unknown.tsv"]
+
+
+def test_run_extract_retries_stale_cleanup_after_failed_commit(monkeypatch, tmp_path):
+    images = _make_images(tmp_path, "only.png")
+    schema_path = tmp_path / "schema.json"
+    _write_schema(schema_path)
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    old_card = output_dir / "Card.tsv"
+    old_card.write_text("name\tpower\tsource\nold\t9\told.png\n", encoding="utf-8")
+    old_none = output_dir / "none_Unknown.tsv"
+    old_none.write_text("raw\tsource\nold\told.png\n", encoding="utf-8")
+    manifest_path = output_dir / "cache" / "extract" / "_meta" / "tsv_manifest.json"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(
+        json.dumps({"manifest_version": 1, "files": ["Card.tsv", "none_Unknown.tsv"]}, ensure_ascii=False, indent=2)
+        + "\n",
+        encoding="utf-8",
+    )
+
+    def fake(
+        image_path: Path,
+        schema: dict,
+        *,
+        show_progress: bool = True,
+        output_dir: Path = Path("Output"),
+    ) -> dict:
+        return {
+            "matched_types": [
+                {"type_name": "Card", "items": [{"name": image_path.stem, "power": "1"}]},
+            ],
+            "unmatched_types": [
+                {"type_name": "New", "items": [{"raw": "fresh"}]},
+            ],
+        }
+
+    original_replace = Path.replace
+
+    def fail_stale_backup(self: Path, target: Path) -> Path:
+        target_path = Path(target)
+        if self == old_none and any(part.startswith(main_mod._EXTRACT_TSV_BACKUP_PREFIX) for part in target_path.parts):
+            raise OSError("stale cleanup failed")
+        return original_replace(self, target)
+
+    monkeypatch.setattr(documentai_mod, "extract_with_schema", fake)
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", output_dir)
+    monkeypatch.setattr(Path, "replace", fail_stale_backup)
+
+    with pytest.raises(OSError, match="stale cleanup failed"):
+        main_mod.run_extract(images, schema_path, parallel_files=1)
+
+    monkeypatch.setattr(Path, "replace", original_replace)
+
+    main_mod.run_extract(images, schema_path, parallel_files=1)
+
+    assert (output_dir / "Card.tsv").read_text(encoding="utf-8") == "name\tpower\tsource\nonly\t1\tonly.png\n"
+    assert not old_none.exists()
+    assert (output_dir / "none_New.tsv").read_text(encoding="utf-8") == "raw\tsource\nfresh\tonly.png\n"
+    manifest = _read_extract_tsv_manifest(output_dir)
+    assert manifest["files"] == ["Card.tsv", "none_New.tsv"]
+
+
 def test_run_schema_omits_empty_perf_summary(monkeypatch, tmp_path, capsys):
     image_path = _make_images(tmp_path, "alpha.png")[0]
     output_dir = tmp_path / "output"
