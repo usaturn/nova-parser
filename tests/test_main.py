@@ -1199,6 +1199,77 @@ def test_run_extract_stale_cleanup_failure_preserves_previous_outputs(monkeypatc
     assert manifest["files"] == ["Card.tsv", "none_Unknown.tsv"]
 
 
+def test_run_extract_rollback_secondary_failure_preserves_backup(monkeypatch, tmp_path, capsys):
+    images = _make_images(tmp_path, "only.png")
+    schema_path = tmp_path / "schema.json"
+    _write_schema(schema_path)
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    old_card = output_dir / "Card.tsv"
+    old_card.write_text("name\tpower\tsource\nold\t9\told.png\n", encoding="utf-8")
+    old_none = output_dir / "none_Unknown.tsv"
+    old_none.write_text("raw\tsource\nold\told.png\n", encoding="utf-8")
+    manifest_path = output_dir / "cache" / "extract" / "_meta" / "tsv_manifest.json"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(
+        json.dumps({"manifest_version": 1, "files": ["Card.tsv", "none_Unknown.tsv"]}, ensure_ascii=False, indent=2)
+        + "\n",
+        encoding="utf-8",
+    )
+
+    def fake(
+        image_path: Path,
+        schema: dict,
+        *,
+        show_progress: bool = True,
+        output_dir: Path = Path("Output"),
+    ) -> dict:
+        return {
+            "matched_types": [
+                {"type_name": "Card", "items": [{"name": image_path.stem, "power": "1"}]},
+            ],
+            "unmatched_types": [
+                {"type_name": "New", "items": [{"raw": "fresh"}]},
+            ],
+        }
+
+    original_replace = Path.replace
+
+    def fail_publish_and_manifest_restore(self: Path, target: Path) -> Path:
+        target_path = Path(target)
+        if (
+            any(part.startswith(main_mod._EXTRACT_TSV_STAGE_PREFIX) for part in self.parts)
+            and target_path == output_dir / "none_New.tsv"
+        ):
+            raise OSError("publish failed")
+        if (
+            any(part.startswith(main_mod._EXTRACT_TSV_BACKUP_PREFIX) for part in self.parts)
+            and target_path == manifest_path
+        ):
+            raise OSError("manifest restore failed")
+        return original_replace(self, target)
+
+    monkeypatch.setattr(documentai_mod, "extract_with_schema", fake)
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", output_dir)
+    monkeypatch.setattr(Path, "replace", fail_publish_and_manifest_restore)
+
+    with pytest.raises(OSError, match="publish failed"):
+        main_mod.run_extract(images, schema_path, parallel_files=1)
+
+    backup_dirs = [
+        d
+        for d in output_dir.iterdir()
+        if d.is_dir() and d.name.startswith(main_mod._EXTRACT_TSV_BACKUP_PREFIX)
+    ]
+    assert len(backup_dirs) == 1
+    backup_manifest = backup_dirs[0] / "cache" / "extract" / "_meta" / "tsv_manifest.json"
+    assert backup_manifest.exists()
+
+    captured = capsys.readouterr()
+    assert "rollback during TSV commit did not complete cleanly" in captured.err
+
+
 def test_run_extract_retries_stale_cleanup_after_failed_commit(monkeypatch, tmp_path):
     images = _make_images(tmp_path, "only.png")
     schema_path = tmp_path / "schema.json"

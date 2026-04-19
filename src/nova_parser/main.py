@@ -734,6 +734,7 @@ def _commit_extract_tsv_outputs(outputs: dict[Path, str], output_dir: Path) -> N
     backup_dir = Path(tempfile.mkdtemp(dir=output_dir, prefix=_EXTRACT_TSV_BACKUP_PREFIX))
     backed_up_paths: list[tuple[Path, Path]] = []
     published_paths: list[Path] = []
+    backup_dir_safe_to_delete = True
 
     try:
         for relpath, text in sorted(outputs.items(), key=lambda item: item[0].as_posix()):
@@ -759,20 +760,39 @@ def _commit_extract_tsv_outputs(outputs: dict[Path, str], output_dir: Path) -> N
         published_paths.append(manifest_path)
     except Exception:
         restored_paths = {original_path for original_path, _ in backed_up_paths}
+        restore_failed = False
+
         for original_path, backup_path in reversed(backed_up_paths):
             if not backup_path.exists():
                 continue
-            original_path.parent.mkdir(parents=True, exist_ok=True)
-            backup_path.replace(original_path)
+            try:
+                original_path.parent.mkdir(parents=True, exist_ok=True)
+                backup_path.replace(original_path)
+            except Exception:
+                restore_failed = True
+                continue
+
         for published_path in reversed(published_paths):
             if published_path in restored_paths:
                 continue
             if published_path.exists():
-                published_path.unlink()
+                try:
+                    published_path.unlink()
+                except Exception:
+                    restore_failed = True
+
+        if restore_failed:
+            backup_dir_safe_to_delete = False
+            sys.stderr.write(
+                "[extract] WARNING: rollback during TSV commit did not complete cleanly;"
+                f" backup retained at {backup_dir.resolve()}\n"
+            )
+
         raise
     finally:
         shutil.rmtree(stage_dir, ignore_errors=True)
-        shutil.rmtree(backup_dir, ignore_errors=True)
+        if backup_dir_safe_to_delete:
+            shutil.rmtree(backup_dir, ignore_errors=True)
 
 
 def _write_extract_tsv_from_cache(
