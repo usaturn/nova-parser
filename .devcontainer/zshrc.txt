@@ -12,49 +12,55 @@ setopt correct
 # PCRE 互換の正規表現を使う
 setopt re_match_pcre
 
-# For Git
-function git-prompt {
-  local branchname branch st remote pushed upstream
-  branchname=`git symbolic-ref --short HEAD 2> /dev/null`
-  if [ -z $branchname ]; then
-    return
-  fi
-  st=`git status 2> /dev/null`
-  if [[ -n `echo "$st" | grep "^nothing to"` ]]; then
-    branch="%{${fg[green]}%}($branchname)%{$reset_color%}"
-  elif [[ -n `echo "$st" | grep "^nothing added"` ]]; then
-    branch="%{${fg[yellow]}%}($branchname)%{$reset_color%}"
-  else
-    branch="%{${fg[red]}%}($branchname)%{$reset_color%}"
-  fi
+autoload -U compinit && compinit -C
 
-  remote=`git config branch.${branchname}.remote 2> /dev/null`
-
-  if [ -z $remote ]; then
-    pushed=''
-  else
-    upstream="${remote}/${branchname}"
-    if [[ -z `git log ${upstream}..${branchname}` ]]; then
-      pushed="%{${fg[green]}%}[up]%{$reset_color%}"
-    else
-      pushed="%{${fg[red]}%}[up]%{$reset_color%}"
-    fi
-  fi
-
-  echo "$branch$pushed"
-}
-
-# 右側プロンプトを無効化
-# RPROMPT='`git-prompt`%{$fg_bold[cyan]%}[%~]%{$reset_color%}'
-local p_git='`git-prompt`%{$fg_bold[cyan]%}%{$reset_color%}'
+# erase beep
+setopt no_beep
 
 # プロンプトが表示されるたびにプロンプト文字列を評価、置換する
 setopt prompt_subst
 
-# プロンプト指定（git情報を1行目に追加）
+function prompt_repo_name(){
+    emulate -L zsh
+    local repo_root
+    repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || {
+        print -r -- "Dev Container"
+        return 0
+    }
+    repo_root="${repo_root:A}"
+    print -r -- "${repo_root:t}"
+}
+repo_name=$(prompt_repo_name)
+#
+# for Google Cloud
+function genv(){
+        GOOGLE_CLOUD_SDK_CONFIG=$(gcloud config configurations list  --format="value(name)" | fzf)
+        gcloud config configurations activate ${GOOGLE_CLOUD_SDK_CONFIG}
+}
+load_current_gcp_config() {
+  local config_path="$HOME/.config/gcloud/active_config"
+  if [ -f $config_path ]; then
+    GCP_PROFILE=$(cat $config_path)
+  fi
+}
+precmd() {
+    psvar=()
+    load_current_gcp_config
+    psvar[1]=$GCP_PROFILE
+}
+
+# プロンプト変数
+local p_time="%{$fg_bold[cyan]%}[%T]%{${reset_color}%}"
+local p_host='%{$fg_bold[blue]%}${repo_name}%{${reset_color}%}'
+local p_user="%{$fg_bold[green]%}[%n]%{${reset_color}%}"
+local p_gcp="%{$fg_bold[magenta]%}[GCP:%1v]%{${reset_color}%}"
+local p_cwd="%{${fg[yellow]}%}%~%{${reset_color}%}"
+local p_mark="%(?.%{$fg[green]%}.%{$fg[blue]%})%(?!(*'-') <!(*;-;%)? <)%{${reset_color}%}"
+
+# プロンプト指定
 PROMPT="
-%{$fg_bold[cyan]%}[%T] %{$fg_bold[blue]%}[Dev Container] %{$fg_bold[green]%}[%n] %{$fg_bold[red]%}[AWS: \$AWS_DEFAULT_PROFILE] %{$fg_bold[magenta]%} %{${fg[yellow]}%}%~%{${reset_color}%} $p_git
-%(?.%{$fg[green]%}.%{$fg[blue]%})%(?!(*'-') <!(*;-;%)? <)%{${reset_color}%} "
+${p_time} ${p_host} ${p_user} ${p_gcp} ${p_cwd}
+${p_mark} "
 
 # プロンプト指定(コマンドの続き)
 PROMPT2='[%n]> '
@@ -62,132 +68,52 @@ PROMPT2='[%n]> '
 # もしかして時のプロンプト指定
 SPROMPT="%{$fg[red]%}%{$suggest%}(*'~'%)? < もしかして %B%r%b %{$fg[red]%}かな? [そう!(y), 違う!(n),a,e]:${reset_color} "
 
-autoload -U compinit && compinit -C
+if [ -d "$HOME/bin" ] ; then
+    PATH="$HOME/bin:$PATH"
+fi
 
-function _ssh {
-      compadd `fgrep 'Host ' ~/.ssh/config | awk '{print $2}' | sort`;
-}
+if [ -d "$HOME/.local/bin" ] ; then
+    PATH="$HOME/.local/bin:$PATH"
+fi
+
+if command -v yarn >/dev/null 2>&1; then
+    yarn_global_bin="$(yarn global bin 2>/dev/null)"
+    if [ -n "$yarn_global_bin" ] && [ -d "$yarn_global_bin" ]; then
+        PATH="$yarn_global_bin:$PATH"
+    fi
+fi
+export PATH
 
 alias gitm="git fetch -p && git checkout origin/main"
 alias gitc="git branch -a| fzf | xargs git checkout"
 alias gitd="git branch | fzf | xargs git branch -D"
 alias gits="git stash list | fzf | awk -F '{|}' '{print $2}' | git stash apply"
-alias ch="sudo chown -R yamada:yamada ."
-alias makea="source ~/.venv/doc/bin/activate && make clean && make html"
-alias ipa='IPAddr=$(curl http://ifconfig.me/)"/32" >/dev/null 2>&1 && echo $IPAddr'
-alias tmuxlog='tmux capture-pane -p -S -100000 > tmux$(date +%Y%m%d_%H%M%S).log'
-#alias dev='source /home/yamada/repo/awx/scripts/dev.bash'
+alias ccd="claude --allow-dangerously-skip-permissions"
+alias cod="codex --dangerously-bypass-approvals-and-sandbox"
+alias gem="gemini --approval-mode=yolo"
 
-# git-fzf.zsh
-# 使い方:
-#   source /workspaces/nova-parser/scripts/git-fzf.zsh
-#   gbd-fzf           # マージ済みでなければ削除失敗（安全）
-#   gbd-fzf -f        # 強制削除
-
-function _gbd_fzf_default_base() {
-  local base
-  base=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
-  if [[ -n "$base" ]]; then
-    echo "$base"
-    return 0
-  fi
-
-  if git show-ref --verify --quiet refs/remotes/origin/main; then
-    echo "origin/main"
-    return 0
-  fi
-
-  if git show-ref --verify --quiet refs/heads/main; then
-    echo "main"
-    return 0
-  fi
-
-  if git show-ref --verify --quiet refs/heads/master; then
-    echo "master"
-    return 0
-  fi
-
-  echo "HEAD"
-}
-
-function gbd-fzf() {
-  emulate -L zsh
-  setopt pipefail
-
-  if ! command -v git >/dev/null 2>&1; then
-    echo "git が見つかりません" >&2
-    return 1
-  fi
-
-  if ! command -v fzf >/dev/null 2>&1; then
-    echo "fzf が見つかりません" >&2
-    return 1
-  fi
-
-  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
-    echo "git リポジトリ内で実行してください" >&2
-    return 1
-  }
-
-  local delete_cmd="-d"
-  if [[ "$1" == "-f" || "$1" == "--force" ]]; then
-    delete_cmd="-D"
-  fi
-
-  local selected
-  selected=$(git for-each-ref refs/heads --format='%(if)%(HEAD)%(then)* %(else)  %(end)%(refname:short)' \
-    | fzf --height=40% --reverse --prompt='Delete local branch > ' --header='Enter: 選択 / ESC: キャンセル') || return 0
-
-  local branch=${selected#\* }
-  branch=${branch##  }
-
-  if [[ "$selected" == \** ]]; then
-    echo "現在のブランチは削除できません: $branch" >&2
-    return 1
-  fi
-
-  local ans
-  read "ans?ローカルブランチ '$branch' を削除しますか？ [y/N]: "
-  if [[ "$ans" != "y" && "$ans" != "Y" ]]; then
-    echo "キャンセルしました"
-    return 0
-  fi
-
-  if [[ "$delete_cmd" == "-D" ]]; then
-    git branch -D -- "$branch"
-    return $?
-  fi
-
-  if git branch -d -- "$branch"; then
-    return 0
-  fi
-
-  local base
-  base=$(_gbd_fzf_default_base)
-
-  local branch_tree
-  local base_tree
-  branch_tree=$(git rev-parse "$branch^{tree}" 2>/dev/null)
-  base_tree=$(git rev-parse "$base^{tree}" 2>/dev/null)
-
-  if [[ -n "$branch_tree" && -n "$base_tree" && "$branch_tree" == "$base_tree" ]]; then
-    echo "注意: 祖先関係はありませんが、'$branch' は '$base' と内容が同一です。"
-    local ans2
-    read "ans2?内容同一のため強制削除しますか？ [y/N]: "
-    if [[ "$ans2" == "y" || "$ans2" == "Y" ]]; then
-      git branch -D -- "$branch"
-      return $?
-    fi
-    echo "キャンセルしました"
-    return 1
-  fi
-
-  echo "削除できませんでした。未マージの場合は gbd-fzf -f を使ってください。" >&2
-  return 1
+# bun completions
+[ -s "/home/vscode/.bun/_bun" ] && source "/home/vscode/.bun/_bun"
+# bun
+export BUN_INSTALL="$HOME/.bun"
+export PATH="$BUN_INSTALL/bin:$PATH"
+function buni(){
+    ls -ld node_modules && rm -rf node_modules
+    bun install
+    bun run test
 }
 
 export EDITOR=code
-export SSH_AUTH_SOCK="/tmp/ssh-auth.sock"
 export LANG=ja_JP.utf8
-alias ccd="claude --dangerously-skip-permissions -c"
 
+function tmuxstart(){
+    if [ -n "$TMUX" ]; then
+        return 0
+    fi
+    project_dir=$(ls -1 /workspaces/)
+    export TZ="${TZ:-Asia/Tokyo}"
+    tmux -u new-session -A -s main -n main -c "/workspaces/${project_dir}" \; \
+        set-environment -g TZ "${TZ}"
+}
+
+tmuxstart

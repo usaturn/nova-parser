@@ -3,15 +3,13 @@
 {
 	"name": "Ubuntu",
 	"mounts": [
-		"source=${localEnv:HOME}${localEnv:USERPROFILE}/.gitconfig,target=/home/vscode/.gitconfig,type=bind,consistency=cached",
-		"source=${localEnv:SSH_AUTH_SOCK},target=/tmp/ssh-auth.sock,type=bind,consistency=cached",
 		"source=${localEnv:HOME}/.codex,target=/home/vscode/.codex,type=bind,consistency=cached",
 		"source=${localEnv:HOME}/.claude,target=/home/vscode/.claude,type=bind,consistency=cached",
-		"source=${localEnv:HOME}/.claude.json,target=/home/vscode/.claude.json,type=bind,consistency=cached"
+		"source=${localEnv:HOME}/.claude.json,target=/home/vscode/.claude.json,type=bind,consistency=cached",
+		"source=${localEnv:HOME}/.config/gh,target=/home/vscode/.config/gh,type=bind,consistency=cached",
+		"source=${localEnv:HOME}/.config/glab-cli,target=/home/vscode/.config/glab-cli,type=bind,consistency=cached",
+		"source=${localEnv:HOME}/.config/gcloud,target=/home/vscode/.config/gcloud,type=bind,consistency=cached"
 	],
-	"remoteEnv": {
-		"SSH_AUTH_SOCK": "/tmp/ssh-auth.sock"
-	},
     "containerEnv": {
         "SHELL": "/usr/bin/zsh"
     },
@@ -22,16 +20,13 @@
 		"${localWorkspaceFolder}/.env"
 	],
   "features": {
-    "ghcr.io/devcontainers/features/node:1": {
-      "nodeGypDependencies": true,
-      "installYarnUsingApt": true,
-      "version": "lts",
-      "pnpmVersion": "latest",
-      "nvmVersion": "latest"
-    },
-    "ghcr.io/jungaretti/features/vim:1": {},
-    "ghcr.io/devcontainers-extra/features/uv:1": {
-      "version": "latest"
+		"ghcr.io/devcontainers/features/github-cli:1": {},
+		"ghcr.io/devcontainers/features/node:1": {
+		"nodeGypDependencies": true,
+		"installYarnUsingApt": true,
+		"version": "lts",
+		"pnpmVersion": "none",
+		"nvmVersion": "latest"
 		}
 	},
 
@@ -43,7 +38,7 @@
 
 	// Use 'postCreateCommand' to run commands after the container is created.
 	// "postCreateCommand": "uname -a",
-	"postCreateCommand": "/bin/bash .devcontainer/prepare.bash"
+	"postCreateCommand": "/bin/bash .devcontainer/install_beforehand.bash",
 
 	// Configure tool-specific properties.
 	// "customizations": {},
