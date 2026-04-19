@@ -28,8 +28,8 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 curl -fsSL https://bun.com/install | bash
 
 mkdir -p "${HOME}/bin"
-cp .devcontainer/tmux-git-prompt.bash "${HOME}/bin/tmux-git-prompt.bash"
-chmod +x "${HOME}/bin/tmux-git-prompt.bash"
+cp .devcontainer/tmux-git-segment.bash "${HOME}/bin/tmux-git-segment.bash"
+chmod +x "${HOME}/bin/tmux-git-segment.bash"
 cp .devcontainer/tmux-url-copy.zsh "${HOME}/bin/tmux-url-copy.zsh"
 chmod +x "${HOME}/bin/tmux-url-copy.zsh"
 
