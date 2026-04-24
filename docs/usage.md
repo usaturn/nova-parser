@@ -13,7 +13,7 @@ nova-parser
 ## CLI 引数
 
 ```
-nova-parser [--mode {plain,structured,structured_tsv,gamedata,schema,docai,docai_plain,schema_propose,extract,crop}] [--schema SCHEMA] [--parallel-files PARALLEL_FILES] [--min-card-area MIN] [--max-card-area MAX] [--padding PX] [files ...]
+nova-parser [--mode {plain,structured,structured_tsv,gamedata,schema,docai,docai_plain,schema_propose,extract,crop}] [--schema SCHEMA] [--parallel-files PARALLEL_FILES] [--output-dir OUTPUT_DIR] [--min-card-area MIN] [--max-card-area MAX] [--padding PX] [files ...]
 ```
 
 | 引数/オプション | 説明 | デフォルト |
@@ -21,6 +21,7 @@ nova-parser [--mode {plain,structured,structured_tsv,gamedata,schema,docai,docai
 | `--mode` | 出力モード（`plain`、`structured`、`structured_tsv`、`gamedata`、`schema`、`docai`、`docai_plain`、`schema_propose`、`extract`、`crop`） | `plain` |
 | `--schema` | スキーマ定義ファイルのパス（`extract` モード時に必須） | — |
 | `--parallel-files` | `docai` / `extract` モードで同時に処理するファイル数（ファイル単位並列） | `1` |
+| `--output-dir` | 結果を保存するディレクトリ。未作成の場合は自動作成 | `Output` |
 | `--min-card-area` | `crop` モード: カード最小面積比率 | `0.05` |
 | `--max-card-area` | `crop` モード: カード最大面積比率 | `0.80` |
 | `--padding` | `crop` モード: クロップ時のパディング（px） | `15` |
@@ -29,6 +30,7 @@ nova-parser [--mode {plain,structured,structured_tsv,gamedata,schema,docai,docai
 - 引数を省略すると、`schema_propose` 以外のモードでは `Images/` ディレクトリ直下のサポート対象画像を全て処理します
 - ディレクトリを指定した場合は、その直下にあるサポート対象ファイルだけを処理します
 - `schema_propose` モードだけは画像ではなく TSV ファイルを受け取ります
+- `--output-dir` を指定した場合、出力ファイル、`extract` キャッシュ、Gemini JSON エラー調査用ファイルは指定先に保存されます。`schema_propose` で TSV 入力を省略した場合も、指定先の `*.docai*.tsv` を走査します
 - 複数ファイルを指定できます
 
 ```bash
@@ -62,7 +64,10 @@ uv run nova-parser --mode docai image1.png
 # Document AI OCR + 構造化 TSV 出力（4ファイル並列）
 uv run nova-parser --mode docai --parallel-files 4 Images/dx3/DX3_EA
 
-# docai TSV からスキーマ提案を生成（Output/ 内の全 docai TSV を走査）
+# 出力先を指定
+uv run nova-parser --output-dir Results --mode docai Images/TNX_OFC_020.tif
+
+# docai TSV からスキーマ提案を生成（既定では Output/ 内の全 docai TSV を走査）
 uv run nova-parser --mode schema_propose
 
 # 特定の TSV ファイルのみからスキーマ提案を生成
@@ -110,6 +115,8 @@ uv run nova-parser --mode extract --parallel-files 4 --schema Output/schema.json
 | `.pdf` | `application/pdf` |
 
 ## 出力モード
+
+この章の `Output/` は未指定時の既定出力先です。`--output-dir` を指定した場合は、指定先ディレクトリに読み替えてください。
 
 ### plain モード（デフォルト）
 

@@ -1126,6 +1126,8 @@ def run_docai(images: list[Path], *, parallel_files: int = 1) -> None:
 
 
 def main():
+    global OUTPUT_DIR
+
     parser = argparse.ArgumentParser(
         description="画像ファイルを Gemini / Document AI で OCR / 構造化抽出する。",
     )
@@ -1165,6 +1167,12 @@ def main():
         help="docai / extract モードで同時に処理するファイル数（デフォルト: 1）",
     )
     parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=OUTPUT_DIR,
+        help="結果を保存するディレクトリ（デフォルト: Output）",
+    )
+    parser.add_argument(
         "--min-card-area",
         type=float,
         default=0.05,
@@ -1197,7 +1205,11 @@ def main():
     if args.parallel_files < 1:
         parser.error("--parallel-files は 1 以上で指定してください。")
 
-    OUTPUT_DIR.mkdir(exist_ok=True)
+    output_dir: Path = args.output_dir
+    if output_dir.exists() and not output_dir.is_dir():
+        parser.error(f"出力先がディレクトリではありません: {output_dir}")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    OUTPUT_DIR = output_dir
 
     # schema_propose は画像ではなく TSV ファイルを受け取る
     if args.mode == "schema_propose":

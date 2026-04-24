@@ -2,7 +2,7 @@
 
 Gemini と Document AI を使って、書籍やゲーム資料の画像/PDF から OCR・構造化抽出を行う CLI ツールです。
 
-入力は `Images/` 配下のファイル、または CLI で指定した画像/PDF/ディレクトリです。結果は `Output/` 配下に Markdown、JSON、TSV、クロップ画像として保存されます。
+入力は `Images/` 配下のファイル、または CLI で指定した画像/PDF/ディレクトリです。結果はデフォルトで `Output/` 配下に Markdown、JSON、TSV、クロップ画像として保存され、`--output-dir` で変更できます。
 
 ## セットアップ
 
@@ -55,6 +55,9 @@ uv run nova-parser --mode docai_plain Images/NAN_067.tif
 # Document AI OCR + Gemini 構造化抽出を TSV 出力
 uv run nova-parser --mode docai --parallel-files 4 Images/dx3/DX3_EA
 
+# 出力先を指定
+uv run nova-parser --output-dir Results --mode docai Images/TNX_OFC_020.tif
+
 # docai TSV からスキーマ提案を生成
 uv run nova-parser --mode schema_propose
 uv run nova-parser --mode schema_propose Output/TNX_OFC_020.docai.tsv
@@ -76,6 +79,8 @@ uv run nova-parser --mode crop --min-card-area 0.03 --max-card-area 0.60 --paddi
 ## 出力と挙動
 
 主な出力は次の通りです。
+
+`Output/` は未指定時の既定出力先です。`--output-dir Results` を指定した場合は、以下の `Output/` を `Results/` に読み替えてください。
 
 - `plain`: `Output/*.plain.md`
 - `structured`: `Output/*.structured.json`

@@ -1563,3 +1563,77 @@ def test_main_passes_parallel_files_to_docai(monkeypatch, tmp_path):
     main_mod.main()
 
     assert called == {"images": [image_path], "parallel_files": 3}
+
+
+def test_main_uses_output_dir_for_docai(monkeypatch, tmp_path):
+    image_path = _make_images(tmp_path, "alpha.png")[0]
+    output_dir = tmp_path / "custom" / "nested"
+
+    called: dict[str, object] = {}
+
+    def fake_run_docai(images: list[Path], *, parallel_files: int = 1) -> None:
+        called["images"] = images
+        called["parallel_files"] = parallel_files
+        called["output_dir"] = main_mod.OUTPUT_DIR
+        called["output_dir_exists"] = main_mod.OUTPUT_DIR.is_dir()
+
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", Path("Output"))
+    monkeypatch.setattr(main_mod, "resolve_images", lambda files: [image_path])
+    monkeypatch.setattr(main_mod, "run_docai", fake_run_docai)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["nova-parser", "--mode", "docai", "--output-dir", str(output_dir), str(image_path)],
+    )
+
+    main_mod.main()
+
+    assert called == {
+        "images": [image_path],
+        "parallel_files": 1,
+        "output_dir": output_dir,
+        "output_dir_exists": True,
+    }
+    assert output_dir.is_dir()
+
+
+def test_main_output_dir_applies_to_schema_propose_default_input(monkeypatch, tmp_path):
+    output_dir = tmp_path / "schema_output"
+    output_dir.mkdir()
+    (output_dir / "alpha.docai.tsv").write_text("## Card\nname\tpower\nalpha\t1\n", encoding="utf-8")
+
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", Path("Output"))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["nova-parser", "--mode", "schema_propose", "--output-dir", str(output_dir)],
+    )
+
+    main_mod.main()
+
+    result = json.loads((output_dir / "schema_proposal.json").read_text(encoding="utf-8"))
+    assert result == {
+        "types": [
+            {
+                "type_name": "Card",
+                "fields": ["name", "power"],
+                "source": "alpha.docai.tsv",
+            }
+        ]
+    }
+
+
+def test_main_rejects_output_dir_file(monkeypatch, tmp_path, capsys):
+    output_file = tmp_path / "not_a_dir"
+    output_file.write_text("already exists\n", encoding="utf-8")
+
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", Path("Output"))
+    monkeypatch.setattr(sys, "argv", ["nova-parser", "--output-dir", str(output_file)])
+
+    with pytest.raises(SystemExit) as excinfo:
+        main_mod.main()
+
+    captured = capsys.readouterr()
+    assert excinfo.value.code == 2
+    assert "出力先がディレクトリではありません" in captured.err
+    assert str(output_file) in captured.err
