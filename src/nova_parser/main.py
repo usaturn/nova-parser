@@ -525,6 +525,62 @@ def _ensure_unique_extract_caches(images: list[Path]) -> None:
     raise ValueError(msg)
 
 
+def _validate_schema_type_names(schema: dict) -> None:
+    """extract schema の matched 側 type_name をファイル名として検証する。"""
+
+    def invalid_type_name(name: object, reason: str) -> None:
+        if isinstance(name, str):
+            display_name = name.encode("unicode_escape").decode("ascii")
+        else:
+            display_name = repr(name)
+        msg = f'extract schema の type_name "{display_name}" はファイル名として使えません: {reason}'
+        raise ValueError(msg)
+
+    types = schema.get("types")
+    if not isinstance(types, list):
+        raise ValueError("extract schema の types は list である必要があります")
+
+    seen_type_names: set[str] = set()
+    seen_sanitized_names: dict[str, str] = {}
+    for index, type_data in enumerate(types):
+        if not isinstance(type_data, dict):
+            raise ValueError(f"extract schema の types[{index}] は object である必要があります")
+
+        type_name = type_data.get("type_name")
+        if not isinstance(type_name, str):
+            invalid_type_name(type_name, "文字列である必要があります")
+        if not type_name.strip():
+            invalid_type_name(type_name, "空文字や空白だけの名前は使えません")
+        if ".." in type_name:
+            invalid_type_name(type_name, '".." を含められません')
+        if "\\" in type_name:
+            invalid_type_name(type_name, "バックスラッシュを含められません")
+        if re.search(r"[\x00-\x1f]", type_name):
+            invalid_type_name(type_name, "制御文字を含められません")
+        if type_name.startswith("/"):
+            invalid_type_name(type_name, "先頭を / にできません")
+        if type_name.startswith("."):
+            invalid_type_name(type_name, "先頭を . にできません")
+        if type_name.endswith((".", " ")):
+            invalid_type_name(type_name, "末尾を . や空白にできません")
+        if len(type_name.encode("utf-8")) > 200:
+            invalid_type_name(type_name, "UTF-8 で 200 バイトを超えています")
+        if any(f"{type_name}.tsv".endswith(suffix) for suffix in _NON_EXTRACT_TSV_SUFFIXES):
+            invalid_type_name(type_name, "予約された suffix と衝突します")
+        if type_name.startswith("none_"):
+            invalid_type_name(type_name, "none_ は unmatched TSV 用の予約 prefix です")
+        if type_name in seen_type_names:
+            invalid_type_name(type_name, "schema 内で重複しています")
+        seen_type_names.add(type_name)
+        sanitized_name = _sanitize_type_filename(type_name)
+        if sanitized_name.startswith("none_"):
+            invalid_type_name(type_name, 'sanitize 後に "none_" で始まり unmatched TSV と衝突します')
+        if sanitized_name in seen_sanitized_names:
+            other_name = seen_sanitized_names[sanitized_name].encode("unicode_escape").decode("ascii")
+            invalid_type_name(type_name, f'sanitize 後のファイル名が "{other_name}" と衝突します')
+        seen_sanitized_names[sanitized_name] = type_name
+
+
 def _sanitize_type_filename(name: str) -> str:
     """モデル由来の type_name を OS 安全なファイル名断片に整える。"""
     sanitized = _UNSAFE_FILENAME_RE.sub("_", name).strip(" .")
@@ -607,6 +663,27 @@ def _is_non_extract_tsv_path(path: Path) -> bool:
     return any(path.name.endswith(suffix) for suffix in _NON_EXTRACT_TSV_SUFFIXES)
 
 
+def _is_legacy_extract_tsv_path(output_dir: Path, path: Path) -> bool:
+    """manifest 導入前 cleanup の対象として安全に扱える TSV なら True を返す。"""
+    if not path.is_file():
+        return False
+    try:
+        relpath = path.relative_to(output_dir)
+    except ValueError:
+        return False
+    if relpath.parts and relpath.parts[0] == "cache":
+        return False
+    if any(
+        part.startswith(prefix)
+        for part in relpath.parts
+        for prefix in (_EXTRACT_TSV_STAGE_PREFIX, _EXTRACT_TSV_BACKUP_PREFIX)
+    ):
+        return False
+    if _is_non_extract_tsv_path(path):
+        return False
+    return True
+
+
 def _build_extract_tsv_outputs(ordered_results: list[tuple[Path, dict]], schema: dict) -> dict[Path, str]:
     """現在の run で出力すべき TSV 一式を組み立てる。"""
     schema_type_order: list[str] = [t["type_name"] for t in schema["types"]]
@@ -628,7 +705,7 @@ def _build_extract_tsv_outputs(ordered_results: list[tuple[Path, dict]], schema:
             row = [_normalize_dash(str(item.get(field, ""))) for field in fields]
             row.append(img.name)
             lines.append("\t".join(row))
-        outputs[Path(f"{tn}.tsv")] = "\n".join(lines) + "\n"
+        outputs[Path(f"{_sanitize_type_filename(tn)}.tsv")] = "\n".join(lines) + "\n"
 
     unmatched_rows: dict[str, list[tuple[Path, dict]]] = {}
     unmatched_fields: dict[str, list[str]] = {}
@@ -683,26 +760,41 @@ def _load_extract_tsv_manifest_paths(output_dir: Path) -> set[Path] | None:
     return paths
 
 
-def _infer_legacy_extract_tsv_paths(output_dir: Path) -> set[Path]:
+def _infer_legacy_extract_tsv_paths(output_dir: Path, schema: dict | None = None) -> set[Path]:
     """manifest 導入前の extract TSV 群を推定する。"""
-    paths = {path for path in output_dir.glob("none_*.tsv") if path.is_file() and not _is_non_extract_tsv_path(path)}
-    for path in output_dir.glob("*.tsv"):
-        if not path.is_file():
+    paths = {path for path in output_dir.glob("*.tsv") if _is_legacy_extract_tsv_path(output_dir, path)}
+    if not isinstance(schema, dict):
+        return paths
+
+    types = schema.get("types")
+    if not isinstance(types, list):
+        return paths
+
+    for type_data in types:
+        if not isinstance(type_data, dict):
             continue
-        if path.name.startswith("none_"):
+        type_name = type_data.get("type_name")
+        if not isinstance(type_name, str) or not type_name.strip():
             continue
-        if _is_non_extract_tsv_path(path):
+
+        legacy_relpath = Path(f"{type_name}.tsv")
+        if legacy_relpath.is_absolute() or ".." in legacy_relpath.parts:
             continue
-        paths.add(path)
+        if legacy_relpath.parent == Path():
+            continue
+
+        legacy_path = output_dir / legacy_relpath
+        if _is_legacy_extract_tsv_path(output_dir, legacy_path):
+            paths.add(legacy_path)
     return paths
 
 
-def _managed_extract_tsv_paths(output_dir: Path) -> set[Path]:
+def _managed_extract_tsv_paths(output_dir: Path, schema: dict | None = None) -> set[Path]:
     """cleanup 対象となる既存 extract TSV パス集合を返す。"""
     manifest_paths = _load_extract_tsv_manifest_paths(output_dir)
     if manifest_paths is not None:
         return manifest_paths
-    return _infer_legacy_extract_tsv_paths(output_dir)
+    return _infer_legacy_extract_tsv_paths(output_dir, schema)
 
 
 def _extract_tsv_manifest_text(output_paths: set[Path], output_dir: Path) -> str:
@@ -719,10 +811,10 @@ def _write_extract_tsv_manifest(output_paths: set[Path], output_dir: Path) -> No
     _atomic_write_text(_extract_tsv_manifest_path(output_dir), _extract_tsv_manifest_text(output_paths, output_dir))
 
 
-def _commit_extract_tsv_outputs(outputs: dict[Path, str], output_dir: Path) -> None:
+def _commit_extract_tsv_outputs(outputs: dict[Path, str], output_dir: Path, schema: dict | None = None) -> None:
     """staging 経由で TSV 一式を更新し、stale TSV を整理する。"""
     current_paths = {output_dir / relpath for relpath in outputs}
-    previous_paths = _managed_extract_tsv_paths(output_dir)
+    previous_paths = _managed_extract_tsv_paths(output_dir, schema)
     manifest_path = _extract_tsv_manifest_path(output_dir)
     manifest_stage_relpath = manifest_path.relative_to(output_dir)
     manifest_text = _extract_tsv_manifest_text(current_paths, output_dir)
@@ -802,7 +894,7 @@ def _write_extract_tsv_from_cache(
 ) -> None:
     """現在の run の抽出結果から型別 TSV 一式を書き出す。"""
     outputs = _build_extract_tsv_outputs(ordered_results, schema)
-    _commit_extract_tsv_outputs(outputs, output_dir)
+    _commit_extract_tsv_outputs(outputs, output_dir, schema)
 
 
 _CACHE_REASON_LABELS = [
@@ -829,6 +921,7 @@ def run_extract(images: list[Path], schema_path: Path, *, parallel_files: int = 
 
     parallel_files = _validate_parallel_files(parallel_files)
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    _validate_schema_type_names(schema)
     schema_fp = _schema_fingerprint(schema)
 
     _ensure_unique_extract_caches(images)

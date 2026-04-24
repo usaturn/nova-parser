@@ -43,6 +43,14 @@ def _write_schema(schema_path: Path) -> None:
     )
 
 
+def _write_schema_with_type_names(schema_path: Path, *type_names: str) -> None:
+    """指定した type_name 群で extract テスト用 schema を書き出す。"""
+    payload = {
+        "types": [{"type_name": type_name, "fields": ["name"]} for type_name in type_names],
+    }
+    schema_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+
 def _read_output_texts(output_dir: Path, pattern: str) -> dict[str, str]:
     """出力ディレクトリ内の対象ファイル内容を読み込む。"""
     return {path.name: path.read_text(encoding="utf-8") for path in sorted(output_dir.glob(pattern))}
@@ -449,6 +457,29 @@ def _extract_fake(
     return fake
 
 
+def _assert_run_extract_rejects_schema_type_names(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    type_names: list[str],
+    pattern: str,
+) -> None:
+    """matched 側 schema の不正 type_name が run_extract 入口で reject されることを確認する。"""
+    images = _make_images(tmp_path, "first.png")
+    schema_path = tmp_path / "schema.json"
+    _write_schema_with_type_names(schema_path, *type_names)
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    def fail_if_called(*args, **kwargs):
+        pytest.fail("extract_with_schema should not be called when schema type_name validation fails")
+
+    monkeypatch.setattr(documentai_mod, "extract_with_schema", fail_if_called)
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", output_dir)
+
+    with pytest.raises(ValueError, match=pattern):
+        main_mod.run_extract(images, schema_path, parallel_files=1)
+
+
 def test_run_extract_reuses_cached_results(monkeypatch, tmp_path):
     images = _make_images(tmp_path, "first.png", "second.png")
     schema_path = tmp_path / "schema.json"
@@ -796,6 +827,108 @@ def test_run_extract_sanitizes_unmatched_type_filename(monkeypatch, tmp_path):
     assert "\x01" not in produced[0].name
 
 
+def test_run_extract_accepts_matched_type_name_with_slash(monkeypatch, tmp_path):
+    images = _make_images(tmp_path, "first.png")
+    schema_path = tmp_path / "schema.json"
+    _write_schema_with_type_names(schema_path, "リレーション/コネ")
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    monkeypatch.setattr(
+        documentai_mod,
+        "extract_with_schema",
+        _extract_fake(
+            {
+                "first": {
+                    "matched_types": [
+                        {"type_name": "リレーション/コネ", "items": [{"name": "danger"}]},
+                    ],
+                    "unmatched_types": [],
+                }
+            }
+        ),
+    )
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", output_dir)
+
+    main_mod.run_extract(images, schema_path, parallel_files=1)
+
+    assert (output_dir / "リレーション_コネ.tsv").read_text(encoding="utf-8") == "name\tsource\ndanger\tfirst.png\n"
+    assert not (output_dir / "リレーション").exists()
+
+
+def test_run_extract_accepts_matched_type_name_with_colon(monkeypatch, tmp_path):
+    images = _make_images(tmp_path, "first.png")
+    schema_path = tmp_path / "schema.json"
+    _write_schema_with_type_names(schema_path, "ユニークアイテム:武器")
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    monkeypatch.setattr(
+        documentai_mod,
+        "extract_with_schema",
+        _extract_fake(
+            {
+                "first": {
+                    "matched_types": [
+                        {"type_name": "ユニークアイテム:武器", "items": [{"name": "sword"}]},
+                    ],
+                    "unmatched_types": [],
+                }
+            }
+        ),
+    )
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", output_dir)
+
+    main_mod.run_extract(images, schema_path, parallel_files=1)
+
+    assert (output_dir / "ユニークアイテム_武器.tsv").read_text(encoding="utf-8") == "name\tsource\nsword\tfirst.png\n"
+
+
+def test_run_extract_rejects_matched_type_name_with_path_traversal(monkeypatch, tmp_path):
+    _assert_run_extract_rejects_schema_type_names(monkeypatch, tmp_path, ["../escape"], r"\.\./escape")
+
+
+def test_run_extract_rejects_matched_type_name_with_backslash(monkeypatch, tmp_path):
+    _assert_run_extract_rejects_schema_type_names(monkeypatch, tmp_path, [r"a\b"], r"バックスラッシュ")
+
+
+def test_run_extract_rejects_matched_type_name_starts_with_slash(monkeypatch, tmp_path):
+    _assert_run_extract_rejects_schema_type_names(monkeypatch, tmp_path, ["/absolute"], r"先頭を / にできません")
+
+
+def test_run_extract_rejects_matched_type_name_with_control_char(monkeypatch, tmp_path):
+    _assert_run_extract_rejects_schema_type_names(monkeypatch, tmp_path, ["a\x00b"], r"a\\x00b")
+
+
+def test_run_extract_rejects_matched_type_name_with_reserved_prefix(monkeypatch, tmp_path):
+    _assert_run_extract_rejects_schema_type_names(monkeypatch, tmp_path, ["none_Custom"], r"none_Custom")
+
+
+def test_run_extract_rejects_matched_type_name_sanitizing_to_none_prefix(monkeypatch, tmp_path):
+    _assert_run_extract_rejects_schema_type_names(monkeypatch, tmp_path, ["none/Custom"], r"sanitize 後.*none_")
+
+
+def test_run_extract_rejects_matched_type_name_with_reserved_suffix(monkeypatch, tmp_path):
+    _assert_run_extract_rejects_schema_type_names(monkeypatch, tmp_path, ["foo.docai"], r"foo\.docai")
+
+
+def test_run_extract_rejects_matched_type_name_duplicate(monkeypatch, tmp_path):
+    _assert_run_extract_rejects_schema_type_names(
+        monkeypatch,
+        tmp_path,
+        ["Card", "Card"],
+        r"schema 内で重複しています",
+    )
+
+
+def test_run_extract_rejects_matched_type_name_empty_or_whitespace(monkeypatch, tmp_path):
+    _assert_run_extract_rejects_schema_type_names(monkeypatch, tmp_path, ["   "], r"空文字や空白だけ")
+
+
+def test_run_extract_rejects_matched_type_name_sanitize_collision(monkeypatch, tmp_path):
+    _assert_run_extract_rejects_schema_type_names(monkeypatch, tmp_path, ["a/b", "a_b"], r"衝突します")
+
+
 def test_run_extract_cleans_stale_tsvs_using_manifest(monkeypatch, tmp_path):
     images = _make_images(tmp_path, "only.png")
     schema_path = tmp_path / "schema.json"
@@ -881,6 +1014,63 @@ def test_run_extract_bootstraps_cleanup_without_manifest(monkeypatch, tmp_path):
     assert keep_none_docai.exists()
     assert keep_none_schema.exists()
     assert keep_none_structured.exists()
+    manifest = _read_extract_tsv_manifest(output_dir)
+    assert manifest["files"] == ["Card.tsv"]
+
+
+def test_run_extract_legacy_cleanup_removes_nested_tsv(monkeypatch, tmp_path):
+    images = _make_images(tmp_path, "only.png")
+    schema_path = tmp_path / "schema.json"
+    _write_schema_with_type_names(schema_path, "sub/old")
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    stale_nested = output_dir / "sub" / "old.tsv"
+    stale_nested.parent.mkdir(parents=True, exist_ok=True)
+    stale_nested.write_text("stale nested\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        documentai_mod,
+        "extract_with_schema",
+        _extract_fake(
+            {
+                "only": {
+                    "matched_types": [
+                        {"type_name": "sub/old", "items": [{"name": "legacy"}]},
+                    ],
+                    "unmatched_types": [],
+                }
+            }
+        ),
+    )
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", output_dir)
+
+    main_mod.run_extract(images, schema_path, parallel_files=1)
+
+    assert not stale_nested.exists()
+    assert (output_dir / "sub_old.tsv").read_text(encoding="utf-8") == "name\tsource\nlegacy\tonly.png\n"
+    manifest = _read_extract_tsv_manifest(output_dir)
+    assert manifest["files"] == ["sub_old.tsv"]
+
+
+def test_run_extract_legacy_cleanup_preserves_unrelated_nested_tsv(monkeypatch, tmp_path):
+    images = _make_images(tmp_path, "only.png")
+    schema_path = tmp_path / "schema.json"
+    _write_schema(schema_path)
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    unrelated_nested = output_dir / "reports" / "summary.tsv"
+    unrelated_nested.parent.mkdir(parents=True, exist_ok=True)
+    unrelated_nested.write_text("keep me\n", encoding="utf-8")
+
+    monkeypatch.setattr(documentai_mod, "extract_with_schema", _extract_fake())
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", output_dir)
+
+    main_mod.run_extract(images, schema_path, parallel_files=1)
+
+    assert unrelated_nested.read_text(encoding="utf-8") == "keep me\n"
+    assert (output_dir / "Card.tsv").exists()
     manifest = _read_extract_tsv_manifest(output_dir)
     assert manifest["files"] == ["Card.tsv"]
 

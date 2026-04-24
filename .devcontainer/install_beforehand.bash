@@ -16,6 +16,7 @@ curl -fsSL https://claude.ai/install.sh | bash
 echo "Installing Codex CLI..."
 yarn global add @openai/codex@latest
 yarn global add @google/gemini-cli@latest
+yarn global add @github/copilot@latest
 
 YARN_GLOBAL_BIN="$(yarn global bin)"
 export PATH="$YARN_GLOBAL_BIN:$HOME/.local/bin:$PATH"
