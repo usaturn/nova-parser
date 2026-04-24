@@ -1557,7 +1557,16 @@ def test_main_passes_parallel_files_to_docai(monkeypatch, tmp_path):
     monkeypatch.setattr(
         sys,
         "argv",
-        ["nova-parser", "--mode", "docai", "--parallel-files", "3", str(image_path)],
+        [
+            "nova-parser",
+            "--mode",
+            "docai",
+            "--parallel-files",
+            "3",
+            "--output-dir",
+            str(output_dir),
+            str(image_path),
+        ],
     )
 
     main_mod.main()
@@ -1595,6 +1604,61 @@ def test_main_uses_output_dir_for_docai(monkeypatch, tmp_path):
         "output_dir_exists": True,
     }
     assert output_dir.is_dir()
+    assert main_mod.OUTPUT_DIR == Path("Output")
+
+
+def test_main_output_dir_does_not_persist_between_invocations(monkeypatch, tmp_path):
+    image_path = _make_images(tmp_path, "alpha.png")[0]
+    custom_output = tmp_path / "custom_output"
+    default_output = tmp_path / "default_output"
+    observed_output_dirs: list[Path] = []
+
+    def fake_run_docai(images: list[Path], *, parallel_files: int = 1) -> None:
+        observed_output_dirs.append(main_mod.OUTPUT_DIR)
+
+    monkeypatch.setattr(main_mod, "DEFAULT_OUTPUT_DIR", default_output)
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", Path("Output"))
+    monkeypatch.setattr(main_mod, "resolve_images", lambda files: [image_path])
+    monkeypatch.setattr(main_mod, "run_docai", fake_run_docai)
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["nova-parser", "--mode", "docai", "--output-dir", str(custom_output), str(image_path)],
+    )
+    main_mod.main()
+
+    monkeypatch.setattr(sys, "argv", ["nova-parser", "--mode", "docai", str(image_path)])
+    main_mod.main()
+
+    assert observed_output_dirs == [custom_output, default_output]
+    assert main_mod.OUTPUT_DIR == Path("Output")
+    assert custom_output.is_dir()
+    assert default_output.is_dir()
+
+
+def test_main_restores_output_dir_when_run_fails(monkeypatch, tmp_path):
+    image_path = _make_images(tmp_path, "alpha.png")[0]
+    initial_output = tmp_path / "initial_output"
+    custom_output = tmp_path / "custom_output"
+
+    def fail_run_docai(images: list[Path], *, parallel_files: int = 1) -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", initial_output)
+    monkeypatch.setattr(main_mod, "resolve_images", lambda files: [image_path])
+    monkeypatch.setattr(main_mod, "run_docai", fail_run_docai)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["nova-parser", "--mode", "docai", "--output-dir", str(custom_output), str(image_path)],
+    )
+
+    with pytest.raises(RuntimeError, match="boom"):
+        main_mod.main()
+
+    assert main_mod.OUTPUT_DIR == initial_output
+    assert custom_output.is_dir()
 
 
 def test_main_output_dir_applies_to_schema_propose_default_input(monkeypatch, tmp_path):

@@ -23,7 +23,8 @@ load_dotenv()
 
 
 IMAGES_DIR = Path("Images")
-OUTPUT_DIR = Path("Output")
+DEFAULT_OUTPUT_DIR = Path("Output")
+OUTPUT_DIR = DEFAULT_OUTPUT_DIR
 
 MAX_RETRIES = 5
 INITIAL_WAIT = 30
@@ -1169,7 +1170,7 @@ def main():
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=OUTPUT_DIR,
+        default=DEFAULT_OUTPUT_DIR,
         help="結果を保存するディレクトリ（デフォルト: Output）",
     )
     parser.add_argument(
@@ -1209,45 +1210,50 @@ def main():
     if output_dir.exists() and not output_dir.is_dir():
         parser.error(f"出力先がディレクトリではありません: {output_dir}")
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    previous_output_dir = OUTPUT_DIR
     OUTPUT_DIR = output_dir
 
-    # schema_propose は画像ではなく TSV ファイルを受け取る
-    if args.mode == "schema_propose":
-        tsv_files = [Path(f) for f in args.files] if args.files else None
-        run_schema_propose(tsv_files)
+    try:
+        # schema_propose は画像ではなく TSV ファイルを受け取る
+        if args.mode == "schema_propose":
+            tsv_files = [Path(f) for f in args.files] if args.files else None
+            run_schema_propose(tsv_files)
+            print(f"\n全ての結果を {OUTPUT_DIR}/ に保存しました。")
+            return
+
+        images = resolve_images(args.files)
+
+        if not images:
+            print("対象ファイルが見つかりません。")
+            return
+
+        print(f"{len(images)} 件のファイルを処理します。（モード: {args.mode}）\n")
+        tracker.start_run()
+
+        if args.mode == "plain":
+            run_plain(images)
+        elif args.mode == "structured":
+            run_structured(images)
+        elif args.mode == "structured_tsv":
+            run_structured_tsv(images)
+        elif args.mode == "gamedata":
+            run_gamedata(images)
+        elif args.mode == "docai":
+            run_docai(images, parallel_files=args.parallel_files)
+        elif args.mode == "docai_plain":
+            run_docai_plain(images)
+        elif args.mode == "extract":
+            run_extract(images, Path(args.schema), parallel_files=args.parallel_files)
+        elif args.mode == "crop":
+            run_crop(images, min_card_area=args.min_card_area, max_card_area=args.max_card_area, padding=args.padding)
+        else:
+            run_schema(images)
+
+        tracker.print_summary()
         print(f"\n全ての結果を {OUTPUT_DIR}/ に保存しました。")
-        return
-
-    images = resolve_images(args.files)
-
-    if not images:
-        print("対象ファイルが見つかりません。")
-        return
-
-    print(f"{len(images)} 件のファイルを処理します。（モード: {args.mode}）\n")
-    tracker.start_run()
-
-    if args.mode == "plain":
-        run_plain(images)
-    elif args.mode == "structured":
-        run_structured(images)
-    elif args.mode == "structured_tsv":
-        run_structured_tsv(images)
-    elif args.mode == "gamedata":
-        run_gamedata(images)
-    elif args.mode == "docai":
-        run_docai(images, parallel_files=args.parallel_files)
-    elif args.mode == "docai_plain":
-        run_docai_plain(images)
-    elif args.mode == "extract":
-        run_extract(images, Path(args.schema), parallel_files=args.parallel_files)
-    elif args.mode == "crop":
-        run_crop(images, min_card_area=args.min_card_area, max_card_area=args.max_card_area, padding=args.padding)
-    else:
-        run_schema(images)
-
-    tracker.print_summary()
-    print(f"\n全ての結果を {OUTPUT_DIR}/ に保存しました。")
+    finally:
+        OUTPUT_DIR = previous_output_dir
 
 
 if __name__ == "__main__":
