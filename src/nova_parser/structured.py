@@ -1,12 +1,11 @@
 """Pydantic AI を使った構造化データ抽出。"""
 
-import os
 from pathlib import Path
 
 from pydantic_ai import Agent, BinaryContent
 from pydantic_ai.models.google import GoogleModel
-from pydantic_ai.providers.google import GoogleProvider
 
+from nova_parser import gemini_backend
 from nova_parser.models import PageExtraction
 from nova_parser.ocr import MIME_TYPES, MODEL
 
@@ -28,11 +27,12 @@ STRUCTURED_PROMPT = """\
 
 
 def _build_agent() -> Agent[None, PageExtraction]:
-    """構造化抽出用の Agent を構築する。"""
-    provider = GoogleProvider(
-        vertexai=True,
-        api_key=os.environ.get("VERTEX_AI_API_KEY"),
-    )
+    """構造化抽出用の Agent を構築する。
+
+    バックエンド切替時に provider を再生成する必要があるため、毎回最新の
+    provider を取得する。
+    """
+    provider = gemini_backend.get_provider()
     model = GoogleModel(MODEL, provider=provider)
     return Agent(
         model,
@@ -43,15 +43,15 @@ def _build_agent() -> Agent[None, PageExtraction]:
 
 def extract_structured(image_path: Path) -> PageExtraction:
     """画像からゲームデータを構造化抽出する。"""
-    agent = _build_agent()
     mime_type = MIME_TYPES[image_path.suffix.lower()]
     image_bytes = image_path.read_bytes()
 
-    result = agent.run_sync(
-        [
-            "この画像からゲームデータを構造化抽出してください。",
-            BinaryContent(data=image_bytes, media_type=mime_type),
-        ],
+    contents = [
+        "この画像からゲームデータを構造化抽出してください。",
+        BinaryContent(data=image_bytes, media_type=mime_type),
+    ]
+    result = gemini_backend.call_with_backend_fallback(
+        lambda: _build_agent().run_sync(contents),
     )
 
     result.output.source_file = image_path.name

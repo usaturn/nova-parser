@@ -25,9 +25,12 @@ uv sync
 
 | 変数名 | 用途 | 必要なモード |
 |--------|------|--------------|
-| `VERTEX_AI_API_KEY` | Gemini / Pydantic AI / Gemini Vision 用の API キー | `plain` / `structured` / `structured_tsv` / `gamedata` / `schema` / `docai` / `extract` / `crop` |
+| `GEMINI_API_KEY` | Google AI Studio の API キー（優先利用） | `plain` / `structured` / `structured_tsv` / `gamedata` / `schema` / `docai` / `extract` / `crop` |
+| `VERTEX_AI_API_KEY` | Vertex AI Express モードの API キー（AI Studio が 429 を返した時のフォールバック先） | 同上 |
 | `DOCUMENT_AI_PROCESSOR` | Document AI OCR プロセッサのリソース名 | `docai` / `docai_plain` / `extract` / `crop` の Document AI フォールバック |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Document AI 用サービスアカウントキーのパス | 任意 |
+
+Gemini バックエンドは `GEMINI_API_KEY` が設定されていれば AI Studio を優先し、レート制限（HTTP 429）を観測した時点で **同一プロセス内 sticky** に Vertex AI へ切り替えます。AI Studio キーが未設定なら起動時から `VERTEX_AI_API_KEY` のみで動作します。両方未設定の場合は起動時にエラーで停止します。
 
 Document AI の認証は `GOOGLE_APPLICATION_CREDENTIALS`、`.secrets/docai-sa.json`、ADC の順で解決されます。
 

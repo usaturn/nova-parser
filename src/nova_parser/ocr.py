@@ -1,7 +1,6 @@
 """既存の OCR（プレーンテキスト抽出）ロジック。"""
 
 import json
-import os
 import tempfile
 import time
 from dataclasses import dataclass
@@ -11,6 +10,7 @@ from typing import Any, Callable
 from google import genai
 from google.genai import types
 
+from nova_parser import gemini_backend
 from nova_parser.perf import tracker
 
 MIME_TYPES: dict[str, str] = {
@@ -54,11 +54,12 @@ class JSONFailureArtifact:
 
 
 def get_client() -> genai.Client:
-    """Gemini クライアントを初期化する（Vertex AI Express モード）。"""
-    return genai.Client(
-        vertexai=True,
-        api_key=os.environ.get("VERTEX_AI_API_KEY"),
-    )
+    """Gemini クライアントを取得する。
+
+    バックエンド選択（AI Studio 優先 / Vertex AI フォールバック）は
+    :mod:`nova_parser.gemini_backend` に集約されている。
+    """
+    return gemini_backend.get_client()
 
 
 def _atomic_write_text(output_file: Path, text: str) -> None:
@@ -160,7 +161,6 @@ def generate_json(
     failure_artifact: JSONFailureArtifact | None = None,
 ) -> dict | list:
     """Gemini に JSON レスポンスを要求し、パース結果を返す。"""
-    client = get_client()
     config = types.GenerateContentConfig(
         response_mime_type="application/json",
         response_json_schema=response_json_schema,
@@ -168,10 +168,12 @@ def generate_json(
     )
 
     for attempt in range(JSON_DECODE_RETRY_ATTEMPTS):
-        response = client.models.generate_content(
-            model=model,
-            contents=contents,
-            config=config,
+        response = gemini_backend.call_with_backend_fallback(
+            lambda: get_client().models.generate_content(
+                model=model,
+                contents=contents,
+                config=config,
+            )
         )
         response_text = response.text or ""
 
@@ -224,17 +226,19 @@ def generate_json(
     raise RuntimeError(msg)
 
 
-def ocr_image(client: genai.Client, image_path: Path) -> str:
+def ocr_image(image_path: Path) -> str:
     """画像ファイルを Gemini に送信し、OCR 結果のテキストを返す。"""
     mime_type = MIME_TYPES[image_path.suffix.lower()]
     image_bytes = image_path.read_bytes()
 
     with tracker.timer("Gemini OCR", str(image_path)):
-        response = client.models.generate_content(
-            model=MODEL,
-            contents=[
-                OCR_PROMPT,
-                types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
-            ],
+        response = gemini_backend.call_with_backend_fallback(
+            lambda: get_client().models.generate_content(
+                model=MODEL,
+                contents=[
+                    OCR_PROMPT,
+                    types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+                ],
+            )
         )
     return response.text

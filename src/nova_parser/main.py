@@ -13,6 +13,7 @@ from typing import Callable, TypeVar
 
 from dotenv import load_dotenv
 
+from nova_parser import gemini_backend
 from nova_parser.ocr import MIME_TYPES
 from nova_parser.perf import RETRY_WAIT_STEP, tracker
 
@@ -72,14 +73,7 @@ def resolve_images(file_args: list[str]) -> list[Path]:
 
 def _is_rate_limit_error(exc: Exception) -> bool:
     """例外が 429 レート制限エラーかどうか判定する。"""
-    from google.genai.errors import ClientError
-    from pydantic_ai.exceptions import ModelHTTPError
-
-    if isinstance(exc, ClientError) and exc.code == 429:
-        return True
-    if isinstance(exc, ModelHTTPError) and exc.status_code == 429:
-        return True
-    return False
+    return gemini_backend.is_rate_limit_error(exc)
 
 
 def _validate_parallel_files(parallel_files: int) -> int:
@@ -171,9 +165,8 @@ def _format_perf_suffix(file_key: str) -> str:
 
 def run_plain(images: list[Path]) -> None:
     """plain モード: 画像を OCR してMarkdown として出力する。"""
-    from nova_parser.ocr import get_client, ocr_image
+    from nova_parser.ocr import ocr_image
 
-    client = get_client()
     for img in images:
         output_file = OUTPUT_DIR / f"{img.stem}.plain.md"
         if output_file.exists():
@@ -181,7 +174,7 @@ def run_plain(images: list[Path]) -> None:
             continue
         print(f"処理中: {img.name} ... ", end="", flush=True)
         text = _run_with_retries(
-            lambda img=img: ocr_image(client, img),
+            lambda img=img: ocr_image(img),
             file_key=str(img),
             item_label=img.name,
         )
