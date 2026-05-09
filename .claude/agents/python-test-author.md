@@ -30,10 +30,22 @@ tools: Read, Write, Edit, Bash
    - 想定異常系を漏らさない: 空入力 / 不正型 / Gemini 呼び出し失敗 / Document AI 失敗 / トークン上限超過 / 文字化け / ファイル未存在 / 環境変数欠落 / 画像 0 枚 / 巨大入力
    - 外部 API はデフォルトでモック（`monkeypatch.setattr` / fakes）
    - 実 API での確認が必須なテストは `@pytest.mark.skipif(not os.environ.get("VERTEX_AI_API_KEY"), reason="...")` でガード
-4. **red 確認（必須）**
-   - 追加直後に `uv run pytest tests/test_<feature>.py -v` を実行
-   - **すべて fail / error であることを確認**（追加した assertion がまだ実装が無い状態で通ってしまった場合は設計矛盾。親に即座に差し戻す）
-   - エラーメッセージが「実装が存在しないことに起因」していることを確認（import 失敗、`AttributeError`、`NotImplementedError` など）
+4. **red 確認（必須・受入条件単位）**
+   - **編集前ベースライン取得**: `uv run pytest tests/ -v --no-header` を実行し、既存テストの状態（どれが PASSED / FAILED か）を記録してから編集に入る
+   - テスト追加直後に `uv run pytest tests/test_<feature>.py -v` を実行
+   - **受入条件ごと**（requirements 出力の `criteria[].id` に対応）に以下のいずれかに分類する:
+     - **red**: その受入条件に対応するテストが少なくとも 1 件、未実装に起因して fail / error している（NotImplementedError / AttributeError / ImportError / 期待値ミスマッチ等）
+     - **preexisting-green**: その受入条件は既に実装済み。証跡として **すべて** 必須:
+       - `passed_test`: 受入条件をカバーする **編集前から存在していた** green テスト関数名（**新規追加した green test は不可**。新規追加分は必ず red にする）
+       - `pre_edit_pytest_evidence`: 編集前ベースラインで該当 test が PASSED であった行抜粋
+       - `post_edit_pytest_evidence`: 編集後の同じ test が依然 PASSED である行抜粋
+       - `assertion_evidence`: その既存テストが受入条件 description を実際に検証している assertion の `file:line` と該当行（vacuous test を除外）
+       - `supplementary_evidence`（任意）: 該当する既存実装の `file:line`
+   - **失格条件（即差し戻し）**:
+     - 「red でも preexisting-green でもない受入条件」（テスト無し / fail だが原因が typo・fixture バグ等）が 1 件でも残る
+     - 「全テスト green」かつ preexisting-green 根拠を全受入条件で示せない
+     - `criteria[].id` が requirements 出力の ID 集合と一致しない（欠落・余剰・重複）
+   - fail / error の原因が assertion ではなく typo / fixture バグの場合は自分で直す（テスト品質保証は test-author の責務）
 
 ## 禁止事項
 
@@ -46,7 +58,7 @@ tools: Read, Write, Edit, Bash
 
 ## 出力コントラクト
 
-```
+````
 ## Result
 red 確認済み / 設計矛盾あり（差し戻し）
 
@@ -59,17 +71,47 @@ red 確認済み / 設計矛盾あり（差し戻し）
 - test_foo_handles_gemini_api_failure — 外部 API 失敗
 - ...
 
-## red 確認結果
+## 受入条件 ↔ テスト ↔ 状態 マッピング（必須・per-criterion）
+
+```json
+{
+  "criteria": [
+    {
+      "id": "AC-1",
+      "description": "<受入条件の文言（requirements の description を echo）>",
+      "status": "red|preexisting-green",
+      "red_tests": [
+        {"test": "test_<name>", "fail_reason": "NotImplementedError|AttributeError|ImportError|期待値ミスマッチ|..."}
+      ],
+      "preexisting_green_evidence": {
+        "passed_test": "test_<name>",
+        "pre_edit_pytest_evidence": "tests/test_<feature>.py::test_<name> PASSED ...",
+        "post_edit_pytest_evidence": "tests/test_<feature>.py::test_<name> PASSED ...",
+        "assertion_evidence": "tests/test_<feature>.py:42 assert foo(...) == expected"
+      },
+      "supplementary_evidence": ["src/nova_parser/<file>:<line>"]
+    }
+  ]
+}
 ```
+
+### バリデーションルール（自己チェック）
+- `status` が `red` のとき: `red_tests[]` が 1 件以上、各要素に `fail_reason` 必須。`preexisting_green_evidence` は不要
+- `status` が `preexisting-green` のとき: `preexisting_green_evidence` の `passed_test` / `pre_edit_pytest_evidence` / `post_edit_pytest_evidence` / `assertion_evidence` の **4 フィールドすべて** 空でないこと必須。`red_tests` は空でよい
+- `passed_test` は **編集前から存在していた** テストであること（新規追加 test を挙げるのは契約違反）
+- `supplementary_evidence` は任意（実装 file:line 補足。これだけで preexisting-green を主張することは不可）
+- `criteria[].id` は requirements 出力の `criteria[].id` と **set equality**（欠落・余剰・重複・並び替え無し）
+
+## pytest 実行結果（要約）
 $ uv run pytest tests/test_<feature>.py -v
-（失敗内容の要約。FAILED 行と原因の一行サマリ）
-```
+（FAILED 行と PASSED 行を分けて要約）
 
 ## implementer への申し送り
 - 受入条件 → テスト関数の対応表
+- **green 化対象テスト一覧**（status=red の test 関数名のみ）
 - モック対象（どの SDK / どの関数を `monkeypatch` しているか）
 - fixture 一覧（`tmp_path` 利用、自前 fixture 追加の有無）
 - 実装すべき公開 I/F（architect 出力の再掲ではなく、テストが要求する最小契約）
-```
+````
 
-red 確認のために `uv run pytest` を実行して以降、テスト実装の妥当性に自信が持てない部分があれば「要再確認」と明示する。
+テスト実装の妥当性に自信が持てない部分があれば「要再確認」と明示する。

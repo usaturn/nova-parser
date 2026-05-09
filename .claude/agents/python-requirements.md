@@ -46,9 +46,26 @@ tools: Read, Grep, Glob, Bash
 - 想定する失敗モード: API 失敗 / 入力ファイル不正 / 文字化け / トークン上限超過 / 環境変数欠落 / Document AI クォータ超過 等
 - 各失敗の期待挙動（例外で落とす / リトライ / フォールバック / ユーザに警告）
 
-### 受入条件（チェックリスト）
-- 完成判定に使える具体条件を `- [ ]` 形式で列挙
-- 「動く」だけでなく「どう動けば OK か」を観測可能な形で書く
+### 受入条件（機械可読 ID 付き、必須）
+- 各受入条件は **テストで検証可能な粒度** に分解する（観測点が複数あるなら受入条件を分ける）
+- ID は `AC-N`（N は 1 始まりの整数）。description は **何を / どんな入力で / 何が起きるべきか** が一意に決まる文言にする
+- 「動く」「正しい」のような曖昧表現は禁止。具体的な振る舞い・出力・例外型を書く
+- category enum:
+  - `functional`: 入力 → 出力の機能要件
+  - `nonfunctional`: 性能・互換性・依存
+  - `error_handling`: エラー条件と期待挙動
+
+### ID 安定性（複数回呼び出し対応）
+
+requirements は状態を持たないため、orchestrator から `prior_criteria` 引数（前回の `criteria[]` JSON）が渡される場合がある:
+
+- **初回呼び出し** (`prior_criteria` 無し / 空): 新規に `AC-1` から連番で発行
+- **再呼び出し** (`prior_criteria` あり):
+  - 既存の意味的に同じ受入条件には **同じ ID を維持**（description 変更があっても意味が同等なら ID 据え置き）
+  - 削除された受入条件の ID は **再利用しない**（欠番として残し、`change_log` に `removed` 記録）
+  - 新規追加分は `prior_criteria` の最大 ID + 1 から連番続行（欠番を埋めない）
+  - active な criteria の ID は連番でない場合がある（例: `AC-1`, `AC-3`, `AC-4`）
+- 出力 JSON の `change_log` に各 ID の `kept|added|removed|description_updated` を必ず記録
 
 ## 禁止事項
 
@@ -79,9 +96,31 @@ tools: Read, Grep, Glob, Bash
 ## エラー条件
 - ...: ...（期待挙動）
 
-## 受入条件
-- [ ] ...
-- [ ] ...
+## 受入条件（必須・機械可読）
+
+````json
+{
+  "criteria": [
+    {
+      "id": "AC-1",
+      "description": "<観測可能な受入条件の文言>",
+      "category": "functional|nonfunctional|error_handling"
+    },
+    {
+      "id": "AC-2",
+      "description": "...",
+      "category": "..."
+    }
+  ],
+  "change_log": [
+    {"action": "kept|added|removed|description_updated", "id": "AC-1", "note": "<必要なら補足>"}
+  ]
+}
+````
+
+## 受入条件（読み下し・人間向け補足、任意）
+- [ ] AC-1: ...
+- [ ] AC-2: ...
 
 ## 既存資産で参考になるもの
 - src/nova_parser/<file>:<line> — 概要

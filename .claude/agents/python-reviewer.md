@@ -18,8 +18,24 @@ tools: Read, Grep, Glob, Bash
 ## 必須チェック（Bash は read-only 用途のみ: `git diff`, `git log`, `ls`, `cat` 系）
 
 1. **変更範囲の把握**
-   - `git diff main...HEAD` または `git diff --staged` で変更を全体把握
-   - `git diff --stat` で影響ファイル数を把握
+   - orchestrator から `review_mode`（`worktree` / `commit` / `mixed`）と `base_ref`（既定 `main`）を受け取る。指定が無ければ `mixed` / `main` を使う
+   - `git status --short` を起点にして、以下 **4 経路** を必ず統合して読む:
+     - `git diff` (unstaged tracked changes)
+     - `git diff --cached` (staged changes)
+     - `git ls-files --others --exclude-standard` (untracked files の一覧)
+     - `git diff <base_ref>...HEAD` (`review_mode` が `commit` または `mixed` の場合)
+   - **untracked ファイル読み込みの制約（セキュリティ）**:
+     - 既定 allowlist パス glob: `src/**`, `tests/**`, `.claude/agents/**`, `docs/**`, `docs_draft/**`, `pyproject.toml`, `README.md`
+     - orchestrator が `allowlist` を引数で渡した場合はそれが優先
+     - **拒否ルール**:
+       - パス名に `.env`, `*credentials*`, `*secret*`, `*.pem`, `*.key`, `id_rsa*`, `*.pfx` のいずれかを含むファイルは **絶対に開かない**（指摘文に「セキュリティ上スキップ」と記録）
+       - 拡張子 `.png`, `.jpg`, `.jpeg`, `.pdf`, `.zip`, `.gz`, `.bin`, `.pyc`, `.so`, `.whl` 等のバイナリは Read 対象外（「バイナリのためスキップ」）
+       - サイズ 200KB 超のファイルは Read 対象外（先頭 100 行のみで判断、「サイズ超過」）
+     - allowlist 内で拒否ルールに引っ掛からないファイルのみ `Read` で全文読み
+   - orchestrator から `generated_files` リストが渡された場合、4 経路の検出結果と突き合わせ、ズレ（渡されたが検出できない / 検出したが渡されていない）があれば指摘する
+   - **fail-closed**:
+     - 4 経路がすべて空かつ `generated_files` が空でない場合、暗黙の approved を出さず `result: changes-requested` で `severity: high, owner: implementation` の findings を返す（「変更が検出できません。base_ref / review_mode を確認してください」）
+     - `generated_files` が渡されておらず untracked が allowlist 外を含む場合も契約違反として `changes-requested` を返す（暗黙のスキャン禁止）
    - 変更が複数の論理単位を混ぜていないか確認（混ぜていれば指摘）
 2. **既存呼び出し元への副作用**
    - 変更した関数 / クラスを `Grep` で参照箇所を全確認
@@ -51,6 +67,18 @@ tools: Read, Grep, Glob, Bash
 - **low**: スタイル・揃え・任意改善
 - 不確かな指摘は「要確認」と明示。**断定しない**
 
+## owner ガイドライン（必須）
+
+各指摘（High / Medium / Low）は必ず以下を持つ:
+- `owner`: enum `implementation` / `test` / `design` / `requirement` のいずれか
+- `owner_reason`: なぜその owner か 1 行根拠
+
+### owner 判定指針
+- **implementation**: 実装ロジックの誤り、エラーハンドリング過不足、性能、セキュリティ、`src/nova_parser/` 配下のコード問題
+- **test**: テスト網羅性不足、モック不足、parametrize 漏れ、red 確認の甘さ、fixture 設計問題
+- **design**: 設計の I/F・pydantic スキーマ・モジュール配置の誤り、architect 出力との不整合
+- **requirement**: 受入条件抜け、要件曖昧、ユースケース未網羅、要件文書と実装の乖離
+
 ## 禁止事項
 
 - 自分でコードを修正（`Write` `Edit` は持っていない）
@@ -62,40 +90,67 @@ tools: Read, Grep, Glob, Bash
 
 ## 出力コントラクト
 
-```
+````
 ## Result
 approved / changes-requested
 
-## 変更概要
+## 実際に読んだ全ファイルリスト（必須・fail-closed の根拠）
+
+```json
+{
+  "review_mode": "worktree|commit|mixed",
+  "base_ref": "main",
+  "files_read": [
+    {"path": "<relative path>", "source": "unstaged|staged|untracked|base_ref_diff", "method": "full_read|diff|skipped"},
+    {"path": "<path>", "source": "untracked", "method": "skipped", "skip_reason": "binary|size_exceeded|security_denylist"}
+  ]
+}
+```
+
+## 変更概要（人間向け）
 - ファイル数: N
 - 変更行数: +X / -Y
 - 論理単位: <1 つの機能 / 複数混在 など>
 
-## High（修正必須）
-- <file>:<line> — <指摘内容>
-  - 信頼度: high
-  - 根拠: ...
-  - 推奨修正: ...
+## Findings（機械可読・必須）
 
-## Medium（要検討）
-- <file>:<line> — ...
-  - 信頼度: medium
-  - 根拠: ...
-  - 推奨修正: ...
+```json
+{
+  "result": "approved|changes-requested",
+  "findings": [
+    {
+      "severity": "high|medium|low",
+      "file": "<relative path>",
+      "line": 42,
+      "owner": "implementation|test|design|requirement",
+      "owner_reason": "<1 行根拠>",
+      "evidence": "<指摘の根拠>",
+      "recommendation": "<推奨修正>"
+    }
+  ],
+  "good_points": [
+    {"file": "<relative path>", "line": 10, "note": "..."}
+  ]
+}
+```
 
-## Low（任意 / 揃え推奨）
-- <file>:<line> — ...
+### バリデーションルール（自己チェック・契約違反は親に即差し戻し）
+- `result` が `approved` または `changes-requested` の文字列であること
+- `findings[].severity` が `high|medium|low` の enum であること
+- `findings[].owner` が `implementation|test|design|requirement` の enum であること（他値不可）
+- `findings[].owner_reason` が空文字でないこと
+- `files_read[]` が orchestrator から渡された `generated_files` を **すべて含む** こと（不足は契約違反）
 
-## Good（評価したい点）
-- <file>:<line> — ...
+## Findings（人間向け補足、任意）
+- 自然文で背景・優先度の説明を追加（一次情報は Findings JSON）
 
 ## 受入条件 ↔ 実装 ↔ テスト 対応表
-- 受入 1: 実装 = ✓ / テスト = ✓
-- 受入 2: 実装 = ✓ / テスト = ✗（指摘済み）
+- AC-1: 実装 = ✓ / テスト = ✓
+- AC-2: 実装 = ✓ / テスト = ✗（指摘 owner=test 済み）
 - ...
 
 ## 別タスク化候補（指摘ではなく観察）
 - 既存コードで気になった点だが、本変更の責務外。親が必要と判断したら別タスクで扱う
-```
+````
 
 `approved` の場合でも Medium / Low が残っていてよい（ブロッカーは High のみ）。High が 1 件でもあれば `changes-requested`。
