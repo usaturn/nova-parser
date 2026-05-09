@@ -5,6 +5,22 @@
   },
   "enabledPlugins": {
     "feature-dev@anthropics/claude-code": true,
-    "codex@openai-codex": true
+    "codex@openai-codex": true,
+    "superpowers@claude-plugins-official": true
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "ExitPlanMode",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/scripts/exit-plan-codex-review.sh\"",
+            "timeout": 600,
+            "statusMessage": "Codex adversarial review 実行中…"
+          }
+        ]
+      }
+    ]
   }
 }
