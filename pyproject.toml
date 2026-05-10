@@ -16,6 +16,7 @@ dependencies = [
     "google-cloud-documentai>=3.10.0",
     "pypdf>=6.8.0",
     "pillow>=10.0.0",
+    "google-cloud-vision>=3.14.0",
 ]
 
 [project.scripts]
