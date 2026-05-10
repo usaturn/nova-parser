@@ -17,7 +17,13 @@
 	"image": "mcr.microsoft.com/devcontainers/base:noble",
 	"runArgs": [
 		"--env-file",
-		"${localWorkspaceFolder}/.env"
+		"${localWorkspaceFolder}/.env",
+		// Required for Codex CLI's Linux sandbox (bubblewrap/user namespaces) in devcontainer/WSL2.
+		"--cap-add=SYS_ADMIN",
+		"--security-opt",
+		"seccomp=unconfined",
+		"--security-opt",
+		"apparmor=unconfined"
 	],
   "features": {
 		"ghcr.io/devcontainers/features/github-cli:1": {},
@@ -58,4 +64,3 @@
 	// Uncomment to connect as root instead. More info: https://aka.ms/dev-containers-non-root.
 	// "remoteUser": "root"
 }
-
