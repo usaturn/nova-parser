@@ -22,15 +22,7 @@ def make_project(tmp_path: Path) -> Path:
 def make_fake_home(tmp_path: Path) -> tuple[Path, Path]:
     home = tmp_path / "home"
     companion = (
-        home
-        / ".claude"
-        / "plugins"
-        / "cache"
-        / "openai-codex"
-        / "codex"
-        / "1.0.0"
-        / "scripts"
-        / "codex-companion.mjs"
+        home / ".claude" / "plugins" / "cache" / "openai-codex" / "codex" / "1.0.0" / "scripts" / "codex-companion.mjs"
     )
     companion.parent.mkdir(parents=True)
     companion.write_text(

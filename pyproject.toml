@@ -17,13 +17,17 @@ dependencies = [
     "pypdf>=6.8.0",
     "pillow>=10.0.0",
     "google-cloud-vision>=3.14.0",
+    "fastapi>=0.136.1",
+    "uvicorn[standard]>=0.41.0",
 ]
 
 [project.scripts]
 nova-parser = "nova_parser.main:main"
+nova-parser-regional = "nova_parser.regional_ocr.main:main"
 
 [dependency-groups]
 dev = [
+    "httpx>=0.28.1",
     "pytest>=9.0.2",
     "taskipy",
 ]
@@ -56,5 +60,5 @@ fixable = ["ALL"]
 line-ending = "auto"
 
 [tool.taskipy.tasks]
-ruff = "uvx ruff check --fix --unsafe-fixes src/ && uvx ruff format src/"
+ruff = "uvx ruff check --fix --unsafe-fixes src/ tests/ && uvx ruff format src/ tests/"
 

@@ -1,0 +1,840 @@
+"""regional_ocr FastAPI ルート層のテスト（AC-C-01〜AC-C-20）。
+
+テスト戦略:
+- 外部 API（Cloud Vision）は FakeVisionClient でモック（conftest.py から共有）
+- FastAPI は TestClient（httpx ベース）を使用
+- SSE ストリームは client.stream() + iter_lines() で受信
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from PIL import Image
+
+from tests.conftest import FakeVisionClient, _FakeResponse
+
+# ---------------------------------------------------------------------------
+# ヘルパー
+# ---------------------------------------------------------------------------
+
+
+def _write_png(path: Path, size: tuple[int, int] = (100, 100)) -> None:
+    """テスト用 PNG を tmp_path 下に生成する。"""
+    Image.new("RGB", size, color=(128, 128, 128)).save(path)
+
+
+def _make_client(image_dir: Path, output_dir: Path, factory):
+    """create_app + TestClient を組み立てて返す。"""
+    from fastapi.testclient import TestClient
+
+    from nova_parser.regional_ocr.app import create_app
+    from nova_parser.regional_ocr.state import AppState
+
+    state = AppState(image_dir=image_dir, output_dir=output_dir, vision_client_factory=factory)
+    return TestClient(create_app(state), raise_server_exceptions=False)
+
+
+def _simple_factory(client: FakeVisionClient):
+    """vision_client_factory として使うシンプルな callable。"""
+
+    def _factory():
+        return client
+
+    return _factory
+
+
+# ---------------------------------------------------------------------------
+# AC-C-01: GET /api/images — PNG 2 件存在時に 200 + images に 2 件
+# ---------------------------------------------------------------------------
+
+
+def test_get_images_returns_200_and_two_filenames_when_two_pngs_exist(tmp_path):
+    """AC-C-01: GET /api/images を、image_dir に PNG ファイルが 2 件存在する AppState を持つ
+    TestClient で呼び出したとき、HTTP 200 かつレスポンス JSON の images フィールドに
+    2 件のファイル名が含まれる。
+    """
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "a.png")
+    _write_png(image_dir / "b.png")
+    output_dir = tmp_path / "output"
+
+    client = _make_client(image_dir, output_dir, _simple_factory(FakeVisionClient()))
+    resp = client.get("/api/images")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["images"]) == 2
+    assert "a.png" in data["images"]
+    assert "b.png" in data["images"]
+
+
+# ---------------------------------------------------------------------------
+# AC-C-02: GET /api/images — stem 衝突時に 200 + warnings に 'stem collision: '
+# ---------------------------------------------------------------------------
+
+
+def test_get_images_returns_warnings_on_stem_collision(tmp_path):
+    """AC-C-02: GET /api/images を、image_dir に stem 衝突（foo.png と foo.webp）が存在する
+    AppState で呼び出したとき、HTTP 200 かつレスポンス JSON の warnings フィールドに
+    'stem collision: ' を含む文字列が 1 件以上存在する。
+    """
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "foo.png")
+    Image.new("RGB", (50, 50)).save(image_dir / "foo.webp")
+    output_dir = tmp_path / "output"
+
+    client = _make_client(image_dir, output_dir, _simple_factory(FakeVisionClient()))
+    resp = client.get("/api/images")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert any("stem collision: " in w for w in data["warnings"])
+
+
+# ---------------------------------------------------------------------------
+# AC-C-03: GET /api/image/{name} — 存在する PNG で 200 + image_width/image_height/mime_type
+# ---------------------------------------------------------------------------
+
+
+def test_get_image_meta_returns_200_with_width_height_and_png_mime(tmp_path):
+    """AC-C-03: GET /api/image/{name} を、name に実在する PNG ファイル名を渡した TestClient で
+    呼び出したとき、HTTP 200 かつレスポンス JSON に image_width, image_height, mime_type が存在し、
+    mime_type が 'image/png' である。
+    """
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "test.png", size=(200, 150))
+    output_dir = tmp_path / "output"
+
+    client = _make_client(image_dir, output_dir, _simple_factory(FakeVisionClient()))
+    resp = client.get("/api/image/test.png")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["image_width"] == 200
+    assert data["image_height"] == 150
+    assert data["mime_type"] == "image/png"
+
+
+# ---------------------------------------------------------------------------
+# AC-C-04: GET /api/image/{name} — 存在しないファイル名で 404
+# ---------------------------------------------------------------------------
+
+
+def test_get_image_meta_returns_404_for_nonexistent_file(tmp_path):
+    """AC-C-04: GET /api/image/{name} を、image_dir に存在しないファイル名で呼び出したとき、
+    HTTP 404 が返る。
+    """
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    output_dir = tmp_path / "output"
+
+    client = _make_client(image_dir, output_dir, _simple_factory(FakeVisionClient()))
+    resp = client.get("/api/image/nonexistent.png")
+
+    assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# AC-C-05: GET /api/image/{name} — name='../etc/passwd' で 400
+# ---------------------------------------------------------------------------
+
+
+def test_get_image_meta_returns_400_for_path_traversal(tmp_path):
+    """AC-C-05: name に '..' セグメントを含むパス（URL エンコード）で 400 が返る。
+
+    '/api/image/../etc/passwd' は httpx が RFC 準拠で '/api/etc/passwd' に正規化するため、
+    ルート '/api/image/{name}' にマッチしなくなる。また '%2F' を含むパスは Starlette の
+    単一セグメント {name} コンバータがマッチさせない（スラッシュを含むセグメントは不可）。
+
+    回避策: '..' を '%2E%2E' と URL エンコードし、'/api/image/%2E%2E' として送信する。
+    FastAPI はパスパラメータを自動デコードするため、ハンドラには name='..' が渡り、
+    resolve_image() の segment == ".." チェックで ImagePathTraversalError が raise → 400。
+    """
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    output_dir = tmp_path / "output"
+
+    client = _make_client(image_dir, output_dir, _simple_factory(FakeVisionClient()))
+    # '..' を %2E%2E でエンコードして httpx の path 正規化と Starlette のルートマッチング制約を回避する
+    resp = client.get("/api/image/%2E%2E")
+
+    assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# AC-C-06: GET /api/image/{name}/raw — Content-Type が 'image/png'、PNG シグネチャ一致
+# ---------------------------------------------------------------------------
+
+
+def test_get_image_raw_returns_png_content_type_and_png_signature(tmp_path):
+    """AC-C-06: GET /api/image/{name}/raw を呼び出したとき、Content-Type が 'image/png'、
+    ボディ先頭 8 バイトが PNG シグネチャと一致する。
+    """
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "photo.png")
+    output_dir = tmp_path / "output"
+
+    client = _make_client(image_dir, output_dir, _simple_factory(FakeVisionClient()))
+    resp = client.get("/api/image/photo.png/raw")
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "image/png"
+    png_signature = b"\x89PNG\r\n\x1a\n"
+    assert resp.content[:8] == png_signature
+
+
+# ---------------------------------------------------------------------------
+# AC-C-07: GET /api/session/{name} — 未保存状態で regions が空リスト
+# ---------------------------------------------------------------------------
+
+
+def test_get_session_returns_empty_regions_when_no_session_saved(tmp_path):
+    """AC-C-07: GET /api/session/{name} を未保存状態で呼び出したとき regions が空リスト。"""
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "img.png")
+    output_dir = tmp_path / "output"
+
+    client = _make_client(image_dir, output_dir, _simple_factory(FakeVisionClient()))
+    resp = client.get("/api/session/img.png")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["regions"] == []
+
+
+# ---------------------------------------------------------------------------
+# AC-C-08: GET /api/session/{name} — 保存済み状態で RegionRecord が 1 件含まれる
+# ---------------------------------------------------------------------------
+
+
+def test_get_session_returns_saved_region_record(tmp_path):
+    """AC-C-08: GET /api/session/{name} を保存済み状態で呼び出したとき RegionRecord が 1 件含まれる。"""
+    from nova_parser.regional_ocr.models import ImageSession, Rectangle, RegionRecord
+    from nova_parser.regional_ocr.sessions import save_session
+
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "img.png")
+    output_dir = tmp_path / "output"
+    output_dir.mkdir(parents=True)
+
+    rect = Rectangle(rect_id="r1", draw_order=0, x=0, y=0, width=50, height=50)
+    record = RegionRecord(rectangle=rect, ocr_status="pending")
+    session = ImageSession(image_name="img.png", image_width=100, image_height=100, regions=[record])
+    save_session(session, output_dir)
+
+    client = _make_client(image_dir, output_dir, _simple_factory(FakeVisionClient()))
+    resp = client.get("/api/session/img.png")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["regions"]) == 1
+    assert data["regions"][0]["rectangle"]["rect_id"] == "r1"
+
+
+# ---------------------------------------------------------------------------
+# AC-C-09: PUT /api/session/{name} — pending 1 件を含む body で regions.json 生成
+# ---------------------------------------------------------------------------
+
+
+def test_put_session_creates_regions_json_with_pending_record(tmp_path):
+    """AC-C-09: PUT /api/session/{name} に pending RegionRecord 1 件を含む body で呼び出すと、
+    output_dir に {stem}.regions.json が生成され regions[0].ocr_status が 'pending'。
+    """
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "img.png")
+    output_dir = tmp_path / "output"
+
+    client = _make_client(image_dir, output_dir, _simple_factory(FakeVisionClient()))
+
+    body = {
+        "image_name": "img.png",
+        "image_width": 100,
+        "image_height": 100,
+        "regions": [
+            {
+                "rectangle": {"rect_id": "r1", "draw_order": 0, "x": 0, "y": 0, "width": 50, "height": 50},
+                "ocr_status": "pending",
+            }
+        ],
+    }
+    resp = client.put("/api/session/img.png", json=body)
+
+    assert resp.status_code == 200
+    json_path = output_dir / "img.regions.json"
+    assert json_path.exists()
+    saved = json.loads(json_path.read_text(encoding="utf-8"))
+    assert saved["regions"][0]["ocr_status"] == "pending"
+
+
+# ---------------------------------------------------------------------------
+# AC-C-10: PUT /api/session/{name} — done レコードの保護ロジック
+# ---------------------------------------------------------------------------
+
+
+def test_put_session_preserves_done_record_when_pending_request_sent(tmp_path):
+    """AC-C-10: PUT /api/session/{name} で既存 done レコードがあるとき、
+    同 rect_id の pending リクエストに対して text/ocr_status='done'/ocr_completed_at が保持される。
+    """
+    import datetime
+
+    from nova_parser.regional_ocr.models import ImageSession, Rectangle, RegionRecord
+    from nova_parser.regional_ocr.sessions import save_session
+
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "img.png")
+    output_dir = tmp_path / "output"
+    output_dir.mkdir(parents=True)
+
+    completed_at = datetime.datetime(2025, 1, 1, 12, 0, 0, tzinfo=datetime.timezone.utc)
+    rect = Rectangle(rect_id="r1", draw_order=0, x=0, y=0, width=50, height=50)
+    done_record = RegionRecord(
+        rectangle=rect, text="OCR完了テキスト", ocr_status="done", ocr_completed_at=completed_at
+    )
+    session = ImageSession(image_name="img.png", image_width=100, image_height=100, regions=[done_record])
+    save_session(session, output_dir)
+
+    client = _make_client(image_dir, output_dir, _simple_factory(FakeVisionClient()))
+
+    # 同じ rect_id を pending で PUT
+    body = {
+        "image_name": "img.png",
+        "image_width": 100,
+        "image_height": 100,
+        "regions": [
+            {
+                "rectangle": {"rect_id": "r1", "draw_order": 0, "x": 0, "y": 0, "width": 50, "height": 50},
+                "ocr_status": "pending",
+            }
+        ],
+    }
+    resp = client.put("/api/session/img.png", json=body)
+
+    assert resp.status_code == 200
+    data = resp.json()
+    region = data["regions"][0]
+    # done が保護される
+    assert region["ocr_status"] == "done"
+    assert region["text"] == "OCR完了テキスト"
+    assert region["ocr_completed_at"] is not None
+
+
+# ---------------------------------------------------------------------------
+# AC-C-11: PUT 保護ロジック — rectangle 座標はリクエスト側を採用
+# ---------------------------------------------------------------------------
+
+
+def test_put_session_adopts_request_rectangle_coordinates_even_for_done_record(tmp_path):
+    """AC-C-11: PUT 保護ロジックで rectangle 座標はリクエスト側を採用する。"""
+    from nova_parser.regional_ocr.models import ImageSession, Rectangle, RegionRecord
+    from nova_parser.regional_ocr.sessions import save_session
+
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "img.png")
+    output_dir = tmp_path / "output"
+    output_dir.mkdir(parents=True)
+
+    rect = Rectangle(rect_id="r1", draw_order=0, x=0, y=0, width=50, height=50)
+    done_record = RegionRecord(rectangle=rect, text="text", ocr_status="done")
+    session = ImageSession(image_name="img.png", image_width=100, image_height=100, regions=[done_record])
+    save_session(session, output_dir)
+
+    client = _make_client(image_dir, output_dir, _simple_factory(FakeVisionClient()))
+
+    # 新しい座標でリクエスト（x=10, y=20, width=60, height=70）
+    body = {
+        "image_name": "img.png",
+        "image_width": 100,
+        "image_height": 100,
+        "regions": [
+            {
+                "rectangle": {"rect_id": "r1", "draw_order": 0, "x": 10, "y": 20, "width": 60, "height": 70},
+                "ocr_status": "pending",
+            }
+        ],
+    }
+    resp = client.put("/api/session/img.png", json=body)
+
+    assert resp.status_code == 200
+    data = resp.json()
+    rect_data = data["regions"][0]["rectangle"]
+    # リクエスト側の座標が採用される
+    assert rect_data["x"] == 10
+    assert rect_data["y"] == 20
+    assert rect_data["width"] == 60
+    assert rect_data["height"] == 70
+
+
+# ---------------------------------------------------------------------------
+# AC-C-11b: PUT /api/session/{name} — URL name と body image_name が異なる → 400
+# ---------------------------------------------------------------------------
+
+
+def test_put_session_returns_400_when_url_name_and_body_image_name_differ(tmp_path):
+    """AC-C-11b: PUT /api/session/{name} で URL の name と body.image_name が異なる場合、
+    400 (ValueError ハンドラ経由) が返り detail に不整合メッセージが含まれる。
+    """
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "photo.png", (100, 100))
+    _write_png(image_dir / "other.png", (100, 100))
+    output_dir = tmp_path / "output"
+
+    client = _make_client(image_dir, output_dir, _simple_factory(FakeVisionClient()))
+    body = {
+        "image_name": "other.png",  # URL の name="photo.png" と一致しない
+        "image_width": 100,
+        "image_height": 100,
+        "regions": [],
+        "schema_version": 1,
+    }
+    resp = client.put("/api/session/photo.png", json=body)
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert "image_name" in detail or "一致しません" in detail
+
+
+# ---------------------------------------------------------------------------
+# AC-C-12: POST /api/ocr/{name}/{rect_id} — FakeVisionClient が text='OCR結果' → 200 + done
+# ---------------------------------------------------------------------------
+
+
+def test_post_ocr_returns_200_with_done_status_and_text(tmp_path):
+    """AC-C-12: POST /api/ocr/{name}/{rect_id} で FakeVisionClient が text='OCR結果' を返す状態のとき、
+    200 + text='OCR結果'/ocr_status='done'。
+    """
+    from nova_parser.regional_ocr.models import ImageSession, Rectangle, RegionRecord
+    from nova_parser.regional_ocr.sessions import save_session
+
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "img.png")
+    output_dir = tmp_path / "output"
+    output_dir.mkdir(parents=True)
+
+    rect = Rectangle(rect_id="r1", draw_order=0, x=0, y=0, width=50, height=50)
+    record = RegionRecord(rectangle=rect, ocr_status="pending")
+    session = ImageSession(image_name="img.png", image_width=100, image_height=100, regions=[record])
+    save_session(session, output_dir)
+
+    fake_client = FakeVisionClient(_FakeResponse(text="OCR結果"))
+    client = _make_client(image_dir, output_dir, _simple_factory(fake_client))
+
+    resp = client.post("/api/ocr/img.png/r1")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["text"] == "OCR結果"
+    assert data["ocr_status"] == "done"
+
+
+# ---------------------------------------------------------------------------
+# AC-C-13: POST /api/ocr/{name}/{rect_id} — OcrBackendError 相当 → 200 + status='error'
+# ---------------------------------------------------------------------------
+
+
+def test_post_ocr_returns_200_with_error_status_when_vision_returns_error_message(tmp_path):
+    """AC-C-13: POST /api/ocr/{name}/{rect_id} で OcrBackendError 相当（FakeVisionClient が
+    error_message を返す）なら 200 + ocr_status='error' + ocr_error 非空。
+    """
+    from nova_parser.regional_ocr.models import ImageSession, Rectangle, RegionRecord
+    from nova_parser.regional_ocr.sessions import save_session
+
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "img.png")
+    output_dir = tmp_path / "output"
+    output_dir.mkdir(parents=True)
+
+    rect = Rectangle(rect_id="r1", draw_order=0, x=0, y=0, width=50, height=50)
+    record = RegionRecord(rectangle=rect, ocr_status="pending")
+    session = ImageSession(image_name="img.png", image_width=100, image_height=100, regions=[record])
+    save_session(session, output_dir)
+
+    fake_client = FakeVisionClient(_FakeResponse(error_message="backend error"))
+    client = _make_client(image_dir, output_dir, _simple_factory(fake_client))
+
+    resp = client.post("/api/ocr/img.png/r1")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ocr_status"] == "error"
+    assert data["ocr_error"]  # 非空
+
+
+# ---------------------------------------------------------------------------
+# AC-C-14: POST /api/ocr/{name}/{rect_id} — AdcNotConfiguredError → 502
+# ---------------------------------------------------------------------------
+
+
+def test_post_ocr_returns_502_when_adc_not_configured(tmp_path):
+    """AC-C-14: POST /api/ocr/{name}/{rect_id} で vision_client_factory が
+    AdcNotConfiguredError を raise → 502 + detail に 'gcloud auth application-default login' を含む。
+    """
+    from nova_parser.regional_ocr.errors import AdcNotConfiguredError
+    from nova_parser.regional_ocr.models import ImageSession, Rectangle, RegionRecord
+    from nova_parser.regional_ocr.sessions import save_session
+
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "img.png")
+    output_dir = tmp_path / "output"
+    output_dir.mkdir(parents=True)
+
+    rect = Rectangle(rect_id="r1", draw_order=0, x=0, y=0, width=50, height=50)
+    record = RegionRecord(rectangle=rect, ocr_status="pending")
+    session = ImageSession(image_name="img.png", image_width=100, image_height=100, regions=[record])
+    save_session(session, output_dir)
+
+    def _adc_fail_factory():
+        raise AdcNotConfiguredError("gcloud auth application-default login が必要です")
+
+    client = _make_client(image_dir, output_dir, _adc_fail_factory)
+
+    resp = client.post("/api/ocr/img.png/r1")
+
+    assert resp.status_code == 502
+    data = resp.json()
+    assert "gcloud auth application-default login" in data.get("detail", "")
+
+
+# ---------------------------------------------------------------------------
+# AC-C-15: POST /api/ocr/{name}/{rect_id} — rect_id が session に存在しない → 404
+# ---------------------------------------------------------------------------
+
+
+def test_post_ocr_returns_404_when_rect_id_not_found(tmp_path):
+    """AC-C-15: POST /api/ocr/{name}/{rect_id} で rect_id が session に存在しない → 404。"""
+    from nova_parser.regional_ocr.models import ImageSession, Rectangle, RegionRecord
+    from nova_parser.regional_ocr.sessions import save_session
+
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "img.png")
+    output_dir = tmp_path / "output"
+    output_dir.mkdir(parents=True)
+
+    rect = Rectangle(rect_id="r1", draw_order=0, x=0, y=0, width=50, height=50)
+    record = RegionRecord(rectangle=rect, ocr_status="pending")
+    session = ImageSession(image_name="img.png", image_width=100, image_height=100, regions=[record])
+    save_session(session, output_dir)
+
+    fake_client = FakeVisionClient(_FakeResponse(text="text"))
+    client = _make_client(image_dir, output_dir, _simple_factory(fake_client))
+
+    resp = client.post("/api/ocr/img.png/nonexistent_rect")
+
+    assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# AC-C-16: POST /api/ocr/batch/stream — stem 衝突あり → 409
+# ---------------------------------------------------------------------------
+
+
+def test_post_ocr_batch_stream_returns_409_on_stem_collision(tmp_path):
+    """AC-C-16: POST /api/ocr/batch/stream で stem 衝突あり → 409。"""
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "foo.png")
+    Image.new("RGB", (50, 50)).save(image_dir / "foo.webp")
+    output_dir = tmp_path / "output"
+
+    fake_client = FakeVisionClient(_FakeResponse(text="text"))
+    client = _make_client(image_dir, output_dir, _simple_factory(fake_client))
+
+    resp = client.post("/api/ocr/batch/stream")
+
+    assert resp.status_code == 409
+
+
+# ---------------------------------------------------------------------------
+# AC-C-17: POST /api/ocr/batch/stream — 2 画像 × 矩形 2 個 → SSE 4 イベント (draw_order 昇順)
+# ---------------------------------------------------------------------------
+
+
+def test_post_ocr_batch_stream_emits_four_sse_events_in_draw_order(tmp_path):
+    """AC-C-17: 2 画像 × 矩形 2 個（pending 4 件）を draw_order 昇順で push、
+    各イベントの status='done' であり、同一画像内では draw_order=0 が draw_order=1 より先に来る。
+    """
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "img_a.png", (100, 100))
+    _write_png(image_dir / "img_b.png", (100, 100))
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    # FakeVisionClient は 4 回呼ばれる
+    responses = [
+        _FakeResponse(text="A0"),
+        _FakeResponse(text="A1"),
+        _FakeResponse(text="B0"),
+        _FakeResponse(text="B1"),
+    ]
+    client = _make_client(image_dir, output_dir, _simple_factory(FakeVisionClient(responses)))
+
+    # 各画像に 2 個ずつ region (draw_order=1 と draw_order=0、保存順は逆) を PUT
+    for image_name, prefix in [("img_a.png", "a"), ("img_b.png", "b")]:
+        client.put(
+            f"/api/session/{image_name}",
+            json={
+                "image_name": image_name,
+                "image_width": 100,
+                "image_height": 100,
+                "regions": [
+                    {
+                        "rectangle": {
+                            "rect_id": f"{prefix}1",
+                            "draw_order": 1,
+                            "x": 50,
+                            "y": 0,
+                            "width": 40,
+                            "height": 40,
+                        },
+                        "text": None,
+                        "ocr_status": "pending",
+                        "ocr_error": None,
+                        "ocr_completed_at": None,
+                    },
+                    {
+                        "rectangle": {
+                            "rect_id": f"{prefix}0",
+                            "draw_order": 0,
+                            "x": 0,
+                            "y": 0,
+                            "width": 40,
+                            "height": 40,
+                        },
+                        "text": None,
+                        "ocr_status": "pending",
+                        "ocr_error": None,
+                        "ocr_completed_at": None,
+                    },
+                ],
+                "schema_version": 1,
+            },
+        )
+
+    with client.stream("POST", "/api/ocr/batch/stream") as resp:
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/event-stream")
+        lines = [line for line in resp.iter_lines() if line.startswith("data: ")]
+
+    items = [json.loads(line[len("data: ") :]) for line in lines]
+    assert len(items) == 4
+    assert all(item["status"] == "done" for item in items)
+
+    # 同一画像内では draw_order 0 → 1 の順
+    a_items = [i for i in items if i["image_name"] == "img_a.png"]
+    b_items = [i for i in items if i["image_name"] == "img_b.png"]
+    assert len(a_items) == 2 and len(b_items) == 2
+    assert a_items[0]["rect_id"] == "a0"
+    assert a_items[1]["rect_id"] == "a1"
+    assert b_items[0]["rect_id"] == "b0"
+    assert b_items[1]["rect_id"] == "b1"
+
+
+# ---------------------------------------------------------------------------
+# AC-C-18: POST /api/ocr/batch/stream — vision_client_factory の呼び出しが正確に 1 回
+# ---------------------------------------------------------------------------
+
+
+def test_post_ocr_batch_stream_calls_vision_client_factory_exactly_once(tmp_path):
+    """AC-C-18: POST /api/ocr/batch/stream で vision_client_factory の呼び出しが正確に 1 回。"""
+    from nova_parser.regional_ocr.models import ImageSession, Rectangle, RegionRecord
+    from nova_parser.regional_ocr.sessions import save_session
+    from tests.conftest import make_fake_factory
+
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "img1.png")
+    _write_png(image_dir / "img2.png")
+    output_dir = tmp_path / "output"
+    output_dir.mkdir(parents=True)
+
+    for img_name in ["img1.png", "img2.png"]:
+        rect = Rectangle(rect_id="r1", draw_order=0, x=0, y=0, width=50, height=50)
+        record = RegionRecord(rectangle=rect, ocr_status="pending")
+        session = ImageSession(image_name=img_name, image_width=100, image_height=100, regions=[record])
+        save_session(session, output_dir)
+
+    fake_client = FakeVisionClient([_FakeResponse(text="t1"), _FakeResponse(text="t2")])
+    factory = make_fake_factory(fake_client)
+
+    from fastapi.testclient import TestClient
+
+    from nova_parser.regional_ocr.app import create_app
+    from nova_parser.regional_ocr.state import AppState
+
+    state = AppState(image_dir=image_dir, output_dir=output_dir, vision_client_factory=factory)
+    client = TestClient(create_app(state), raise_server_exceptions=False)
+
+    with client.stream("POST", "/api/ocr/batch/stream") as resp:
+        assert resp.status_code == 200
+        list(resp.iter_lines())  # consume all
+
+    assert factory.calls["calls"] == 1
+
+
+# ---------------------------------------------------------------------------
+# AC-C-19: POST /api/ocr/batch/stream — 1 件 error_message → status='error'、後続継続
+# ---------------------------------------------------------------------------
+
+
+def test_post_ocr_batch_stream_continues_after_one_error(tmp_path):
+    """AC-C-19: POST /api/ocr/batch/stream で 1 件 error_message → 該当 item status='error'、後続継続。"""
+    from nova_parser.regional_ocr.models import ImageSession, Rectangle, RegionRecord
+    from nova_parser.regional_ocr.sessions import save_session
+
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "img1.png")
+    _write_png(image_dir / "img2.png")
+    output_dir = tmp_path / "output"
+    output_dir.mkdir(parents=True)
+
+    for img_name in ["img1.png", "img2.png"]:
+        rect = Rectangle(rect_id="r1", draw_order=0, x=0, y=0, width=50, height=50)
+        record = RegionRecord(rectangle=rect, ocr_status="pending")
+        session = ImageSession(image_name=img_name, image_width=100, image_height=100, regions=[record])
+        save_session(session, output_dir)
+
+    # 最初の画像はエラー、2 番目は成功
+    fake_client = FakeVisionClient([_FakeResponse(error_message="backend error"), _FakeResponse(text="ok")])
+    client = _make_client(image_dir, output_dir, _simple_factory(fake_client))
+
+    with client.stream("POST", "/api/ocr/batch/stream") as resp:
+        assert resp.status_code == 200
+        lines = [line for line in resp.iter_lines() if line.startswith("data: ")]
+        items = [json.loads(line[len("data: ") :]) for line in lines]
+
+    assert len(items) == 2
+    statuses = {item["status"] for item in items}
+    assert "error" in statuses
+    assert "done" in statuses
+
+
+# ---------------------------------------------------------------------------
+# AC-C-10b: PUT /api/session/{name} — rect_id 重複 body → 422
+# ---------------------------------------------------------------------------
+
+
+def test_put_session_returns_422_when_rect_ids_duplicate(tmp_path):
+    """AC-C-10: PUT /api/session/{name} で rect_id が重複する body → 422 (Pydantic ValidationError)。"""
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "photo.png", (200, 150))
+    output_dir = tmp_path / "output"
+
+    client = _make_client(image_dir, output_dir, _simple_factory(FakeVisionClient()))
+    body = {
+        "image_name": "photo.png",
+        "image_width": 200,
+        "image_height": 150,
+        "regions": [
+            {
+                "rectangle": {"rect_id": "r1", "draw_order": 0, "x": 0, "y": 0, "width": 50, "height": 50},
+                "text": None,
+                "ocr_status": "pending",
+                "ocr_error": None,
+                "ocr_completed_at": None,
+            },
+            {
+                "rectangle": {"rect_id": "r1", "draw_order": 1, "x": 60, "y": 0, "width": 50, "height": 50},
+                "text": None,
+                "ocr_status": "pending",
+                "ocr_error": None,
+                "ocr_completed_at": None,
+            },
+        ],
+        "schema_version": 1,
+    }
+    resp = client.put("/api/session/photo.png", json=body)
+    assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# AC-C-15b: POST /api/ocr/{name}/{rect_id} 成功後 .regions.json と .regions.md 更新
+# ---------------------------------------------------------------------------
+
+
+def test_post_ocr_writes_regions_json_and_md_after_success(tmp_path):
+    """AC-C-15: POST /api/ocr/{name}/{rect_id} 成功後、output_dir 配下に
+    {stem}.regions.json と {stem}.regions.md が更新される。
+    """
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "photo.png", (100, 100))
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    # 事前に session を PUT で作成（pending 状態の region を 1 件）
+    client = _make_client(image_dir, output_dir, _simple_factory(FakeVisionClient([_FakeResponse(text="OCR結果")])))
+    put_body = {
+        "image_name": "photo.png",
+        "image_width": 100,
+        "image_height": 100,
+        "regions": [
+            {
+                "rectangle": {"rect_id": "r1", "draw_order": 0, "x": 0, "y": 0, "width": 50, "height": 50},
+                "text": None,
+                "ocr_status": "pending",
+                "ocr_error": None,
+                "ocr_completed_at": None,
+            },
+        ],
+        "schema_version": 1,
+    }
+    client.put("/api/session/photo.png", json=put_body)
+
+    # OCR 実行
+    resp = client.post("/api/ocr/photo.png/r1")
+    assert resp.status_code == 200
+
+    # サイドカ JSON と Markdown が作成されている
+    assert (output_dir / "photo.regions.json").exists()
+    assert (output_dir / "photo.regions.md").exists()
+    assert "OCR結果" in (output_dir / "photo.regions.md").read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# AC-C-20: create_app(state) が FastAPI を返し routes に必要なパスが含まれる
+# ---------------------------------------------------------------------------
+
+
+def test_create_app_returns_fastapi_with_required_routes(tmp_path):
+    """AC-C-20: create_app(state) が FastAPI を返し、routes に
+    '/api/images', '/api/image/{name}', '/api/image/{name}/raw',
+    '/api/session/{name}', '/api/ocr/{name}/{rect_id}', '/api/ocr/batch/stream' が含まれる。
+    """
+    from fastapi import FastAPI
+
+    from nova_parser.regional_ocr.app import create_app
+    from nova_parser.regional_ocr.state import AppState
+
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    output_dir = tmp_path / "output"
+    factory = _simple_factory(FakeVisionClient())
+    state = AppState(image_dir=image_dir, output_dir=output_dir, vision_client_factory=factory)
+    app = create_app(state)
+
+    assert isinstance(app, FastAPI)
+
+    route_paths = {route.path for route in app.routes}
+    assert "/api/images" in route_paths
+    assert "/api/image/{name}" in route_paths
+    assert "/api/image/{name}/raw" in route_paths
+    assert "/api/session/{name}" in route_paths
+    assert "/api/ocr/{name}/{rect_id}" in route_paths
+    assert "/api/ocr/batch/stream" in route_paths

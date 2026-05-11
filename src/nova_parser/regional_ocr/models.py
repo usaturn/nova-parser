@@ -75,3 +75,21 @@ class ImageListResponse(BaseModel):
 
     images: list[str]
     warnings: list[str] = Field(default_factory=list)
+
+
+class ImageMetaResponse(BaseModel):
+    """画像メタ情報の取得結果を表すモデル。"""
+
+    image_width: int = Field(gt=0)
+    image_height: int = Field(gt=0)
+    mime_type: str = Field(min_length=1)
+
+
+class BatchOcrItemResult(BaseModel):
+    """バッチ OCR ストリームの 1 件分の結果を表すモデル。"""
+
+    image_name: str = Field(min_length=1)
+    rect_id: str = Field(min_length=1)
+    status: Literal["done", "error"]
+    text: str | None = None
+    error: str | None = None

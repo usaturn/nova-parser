@@ -61,8 +61,10 @@ def resolve_image(image_dir: Path, name: str) -> Path:
 
 
 def open_pil(path: Path) -> Image.Image:
-    """画像ファイルを開き、RGBA モードの場合は RGB に変換して返す。"""
-    image = Image.open(path)
-    if image.mode == "RGBA":
-        return image.convert("RGB")
-    return image
+    """画像ファイルを開き、RGBA モードの場合は RGB に変換して返す。
+    ファイルハンドルは関数内で確実にクローズされる。
+    """
+    with Image.open(path) as raw:
+        if raw.mode == "RGBA":
+            return raw.convert("RGB")
+        return raw.copy()

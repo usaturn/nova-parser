@@ -7,13 +7,8 @@ import subprocess
 import textwrap
 from pathlib import Path
 
-
-SKILL_COMMON = Path(
-    "/workspaces/nova-parser/.agents/skills/skill-creator-plus/scripts/common.py"
-)
-SKILL_VALIDATOR = Path(
-    "/workspaces/nova-parser/.agents/skills/skill-creator-plus/scripts/quick_validate.py"
-)
+SKILL_COMMON = Path("/workspaces/nova-parser/.agents/skills/skill-creator-plus/scripts/common.py")
+SKILL_VALIDATOR = Path("/workspaces/nova-parser/.agents/skills/skill-creator-plus/scripts/quick_validate.py")
 
 
 def _write_skill(tmp_path: Path, description_block: str) -> Path:
@@ -88,10 +83,11 @@ def test_read_frontmatter_supports_folded_multiline_description_via_python3(tmp_
     payload = json.loads(result.stdout)
     assert payload["name"] == "sample-skill"
     assert payload["metadata"]["short-description"] == "Sample skill for validator coverage"
-    assert (
-        payload["description"]
-        == "Retrieves up-to-date documentation, API references, and code examples for any developer technology.\nAlways use this skill for library-specific questions."
+    expected_description = (
+        "Retrieves up-to-date documentation, API references, and code examples for any developer technology."
+        "\nAlways use this skill for library-specific questions."
     )
+    assert payload["description"] == expected_description
 
 
 def test_quick_validate_accepts_literal_multiline_description_via_python3(tmp_path):

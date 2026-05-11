@@ -116,4 +116,11 @@ function tmuxstart(){
         set-environment -g TZ "${TZ}"
 }
 
+function update(){
+    claude update
+    yarn global add @openai/codex@latest
+    yarn global add @github/copilot@latest
+    yarn global add @google/gemini-cli@latest
+}
+
 tmuxstart

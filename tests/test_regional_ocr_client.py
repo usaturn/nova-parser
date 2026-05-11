@@ -2,40 +2,11 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-from typing import Any
-
 import pytest
 from PIL import Image
 
-# ---------------------------------------------------------------------------
-# FakeVisionClient - テスト用 Vision API スタブ（トップレベルに定義）
-# ---------------------------------------------------------------------------
-
-
-class _FakeResponse:
-    """Vision API の text_detection レスポンスを模倣するスタブ。"""
-
-    def __init__(self, *, text: str = "", error_message: str = "") -> None:
-        self.full_text_annotation = SimpleNamespace(text=text)
-        self.error = SimpleNamespace(message=error_message)
-
-
-class FakeVisionClient:
-    """google.cloud.vision.ImageAnnotatorClient を模倣するフェイク。
-
-    テスト中の呼び出し引数を self.calls に記録する。
-    """
-
-    def __init__(self, response: _FakeResponse) -> None:
-        self._response = response
-        self.calls: list[dict[str, Any]] = []
-
-    def text_detection(self, *, image: Any, image_context: Any) -> _FakeResponse:
-        """text_detection 呼び出しを記録して、コンストラクタで渡されたレスポンスを返す。"""
-        self.calls.append({"image": image, "image_context": image_context})
-        return self._response
-
+# FakeVisionClient / _FakeResponse は tests/conftest.py から共有（AC-C-26）
+from tests.conftest import FakeVisionClient, _FakeResponse
 
 # ---------------------------------------------------------------------------
 # ヘルパー

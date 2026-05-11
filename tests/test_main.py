@@ -291,11 +291,7 @@ def test_run_extract_parallel_matches_sequential(monkeypatch, tmp_path):
     par_texts = _read_output_texts(par_output, "*.tsv")
 
     assert seq_texts == par_texts
-    assert seq_texts["Card.tsv"] == (
-        "name\tpower\tsource\n"
-        "first\t5\tfirst.png\n"
-        "second\t6\tsecond.png\n"
-    )
+    assert seq_texts["Card.tsv"] == ("name\tpower\tsource\nfirst\t5\tfirst.png\nsecond\t6\tsecond.png\n")
     assert seq_calls == [("first.png", True), ("second.png", True)]
     assert sorted(par_calls) == [("first.png", False), ("second.png", False)]
 
@@ -628,9 +624,7 @@ def test_run_extract_resumes_after_failure(monkeypatch, tmp_path):
         if image_path.name == "second.png":
             raise RuntimeError("boom")
         return {
-            "matched_types": [
-                {"type_name": "Card", "items": [{"name": image_path.stem, "power": "1"}]}
-            ],
+            "matched_types": [{"type_name": "Card", "items": [{"name": image_path.stem, "power": "1"}]}],
             "unmatched_types": [],
         }
 
@@ -652,9 +646,7 @@ def test_run_extract_resumes_after_failure(monkeypatch, tmp_path):
     ) -> dict:
         calls.append(image_path.name)
         return {
-            "matched_types": [
-                {"type_name": "Card", "items": [{"name": image_path.stem, "power": "2"}]}
-            ],
+            "matched_types": [{"type_name": "Card", "items": [{"name": image_path.stem, "power": "2"}]}],
             "unmatched_types": [],
         }
 
@@ -703,9 +695,7 @@ def test_run_extract_ignores_corrupted_cache(monkeypatch, tmp_path):
     main_mod.run_extract(images, schema_path, parallel_files=1)
 
     assert calls == ["first.png"]
-    assert (output_dir / "Card.tsv").read_text(encoding="utf-8") == (
-        "name\tpower\tsource\nfirst\t5\tfirst.png\n"
-    )
+    assert (output_dir / "Card.tsv").read_text(encoding="utf-8") == ("name\tpower\tsource\nfirst\t5\tfirst.png\n")
 
 
 def test_run_extract_stable_row_order_parallel(monkeypatch, tmp_path):
@@ -728,9 +718,7 @@ def test_run_extract_stable_row_order_parallel(monkeypatch, tmp_path):
         elif image_path.name == "beta.png":
             time.sleep(0.05)
         return {
-            "matched_types": [
-                {"type_name": "Card", "items": [{"name": image_path.stem, "power": "1"}]}
-            ],
+            "matched_types": [{"type_name": "Card", "items": [{"name": image_path.stem, "power": "1"}]}],
             "unmatched_types": [],
         }
 
@@ -1228,7 +1216,11 @@ def test_run_extract_cancels_pending_jobs_when_cache_save_fails(monkeypatch, tmp
     monkeypatch.setattr(main_mod, "OUTPUT_DIR", output_dir)
     monkeypatch.setattr(main_mod, "ThreadPoolExecutor", lambda max_workers: FakeExecutor(submitted_futures))
     monkeypatch.setattr(main_mod, "as_completed", lambda futures: iter([first_future]))
-    monkeypatch.setattr(main_mod, "_save_extract_cache", lambda *args, **kwargs: (_ for _ in ()).throw(OSError("disk full")))
+
+    def _raise_disk_full(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(main_mod, "_save_extract_cache", _raise_disk_full)
 
     with pytest.raises(OSError, match="disk full"):
         main_mod.run_extract(images, schema_path, parallel_files=2)
@@ -1276,7 +1268,8 @@ def test_run_extract_staging_failure_preserves_previous_outputs(monkeypatch, tmp
     original_atomic_write_text = main_mod._atomic_write_text
 
     def fail_stage_write(path: Path, text: str) -> None:
-        if any(part.startswith(main_mod._EXTRACT_TSV_STAGE_PREFIX) for part in path.parts) and path.name == "none_New.tsv":
+        stage_prefix = main_mod._EXTRACT_TSV_STAGE_PREFIX
+        if any(part.startswith(stage_prefix) for part in path.parts) and path.name == "none_New.tsv":
             raise OSError("stage failed")
         original_atomic_write_text(path, text)
 
@@ -1315,7 +1308,8 @@ def test_run_extract_manifest_stage_failure_preserves_previous_outputs(monkeypat
     original_atomic_write_text = main_mod._atomic_write_text
 
     def fail_manifest_stage_write(path: Path, text: str) -> None:
-        if any(part.startswith(main_mod._EXTRACT_TSV_STAGE_PREFIX) for part in path.parts) and path.name == "tsv_manifest.json":
+        stage_prefix = main_mod._EXTRACT_TSV_STAGE_PREFIX
+        if any(part.startswith(stage_prefix) for part in path.parts) and path.name == "tsv_manifest.json":
             raise OSError("manifest stage failed")
         original_atomic_write_text(path, text)
 
@@ -1371,7 +1365,8 @@ def test_run_extract_stale_cleanup_failure_preserves_previous_outputs(monkeypatc
 
     def fail_stale_backup(self: Path, target: Path) -> Path:
         target_path = Path(target)
-        if self == old_none and any(part.startswith(main_mod._EXTRACT_TSV_BACKUP_PREFIX) for part in target_path.parts):
+        backup_prefix = main_mod._EXTRACT_TSV_BACKUP_PREFIX
+        if self == old_none and any(part.startswith(backup_prefix) for part in target_path.parts):
             raise OSError("stale cleanup failed")
         return original_replace(self, target)
 
@@ -1448,9 +1443,7 @@ def test_run_extract_rollback_secondary_failure_preserves_backup(monkeypatch, tm
         main_mod.run_extract(images, schema_path, parallel_files=1)
 
     backup_dirs = [
-        d
-        for d in output_dir.iterdir()
-        if d.is_dir() and d.name.startswith(main_mod._EXTRACT_TSV_BACKUP_PREFIX)
+        d for d in output_dir.iterdir() if d.is_dir() and d.name.startswith(main_mod._EXTRACT_TSV_BACKUP_PREFIX)
     ]
     assert len(backup_dirs) == 1
     backup_manifest = backup_dirs[0] / "cache" / "extract" / "_meta" / "tsv_manifest.json"
@@ -1499,7 +1492,8 @@ def test_run_extract_retries_stale_cleanup_after_failed_commit(monkeypatch, tmp_
 
     def fail_stale_backup(self: Path, target: Path) -> Path:
         target_path = Path(target)
-        if self == old_none and any(part.startswith(main_mod._EXTRACT_TSV_BACKUP_PREFIX) for part in target_path.parts):
+        backup_prefix = main_mod._EXTRACT_TSV_BACKUP_PREFIX
+        if self == old_none and any(part.startswith(backup_prefix) for part in target_path.parts):
             raise OSError("stale cleanup failed")
         return original_replace(self, target)
 
