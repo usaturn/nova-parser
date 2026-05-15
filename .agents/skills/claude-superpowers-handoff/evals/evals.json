@@ -1,0 +1,28 @@
+{
+  "skill_name": "claude-superpowers-handoff",
+  "evals": [
+    {
+      "id": 1,
+      "name": "resume-latest-superpowers-work",
+      "prompt": "Claude Code 側で進めた superpowers の結果を引き継いで、次に何をすべきか確認して。",
+      "expected_output": "A concise handoff summary based on docs_draft/claude_handoffs or a generated latest handoff.",
+      "files": [],
+      "expectations": [
+        "The result checks or generates a Claude handoff before claiming the current phase.",
+        "The result reports completed and pending tasks from the handoff.",
+        "The result does not rely only on conversation memory."
+      ]
+    },
+    {
+      "id": 2,
+      "name": "specific-session-handoff",
+      "prompt": "Claude session 28d31377 の python-tdd-team 結果を Codex で読めるようにして。",
+      "expected_output": "A handoff generated or read for the named Claude session.",
+      "files": [],
+      "expectations": [
+        "The result uses nova-parser-claude-handoff with --session-id or explains why that session is unavailable.",
+        "The output includes source handoff paths when generation succeeds."
+      ]
+    }
+  ]
+}

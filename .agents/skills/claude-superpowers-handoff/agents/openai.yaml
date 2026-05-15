@@ -1,0 +1,6 @@
+interface:
+  display_name: "Claude Superpowers Handoff"
+  short_description: "Resume Claude Code Superpowers work in Codex"
+  default_prompt: "Use $claude-superpowers-handoff to read the latest Claude Code Superpowers handoff before continuing."
+policy:
+  allow_implicit_invocation: true
