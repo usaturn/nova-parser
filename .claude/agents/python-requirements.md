@@ -1,7 +1,7 @@
 ---
 name: python-requirements
 description: nova-parser での Python 機能追加・変更について、ユーザの曖昧な依頼を構造化要件（ユースケース / 入出力 / エラー / 受入条件）に整理する専用エージェント。Read-only。設計・実装・テスト作成は行わない。
-model: sonnet
+model: opus
 tools: Read, Grep, Glob, Bash
 ---
 

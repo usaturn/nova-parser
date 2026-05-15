@@ -1,7 +1,7 @@
 ---
 name: python-architect
 description: python-requirements が出力した要件を受け、nova-parser のモジュール構成・関数 I/F・pydantic スキーマ・データフロー・既存資産再利用箇所を設計する専用エージェント。Read-only。テスト・実装本体は書かない。
-model: sonnet
+model: opus
 tools: Read, Grep, Glob, Bash
 ---
 
