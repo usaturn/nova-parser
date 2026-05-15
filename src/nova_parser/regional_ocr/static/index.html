@@ -41,6 +41,14 @@
         </aside>
 
         <main class="image-pane">
+          <div class="zoom-toolbar" x-show="currentImage">
+            <button type="button" @click="zoomOut()" :disabled="!!dragMode" title="縮小">−</button>
+            <span class="zoom-level" x-text="zoomPercent() + '%'"></span>
+            <button type="button" @click="zoomIn()" :disabled="!!dragMode" title="拡大">＋</button>
+            <button type="button" @click="zoomReset()" :disabled="!!dragMode" title="100%">1:1</button>
+            <button type="button" @click="zoomFitToggle()" :disabled="!!dragMode" title="ウィンドウに合わせる">fit</button>
+          </div>
+
           <template x-if="!currentImage">
             <p class="placeholder">画像を選択してください</p>
           </template>
@@ -55,6 +63,7 @@
             <img
               x-show="currentImage"
               :src="currentImage ? `/api/image/${encodeURIComponent(currentImage.name)}/raw` : ''"
+              :style="imgStyle()"
               @load="onImageLoad($event)"
               alt=""
               draggable="false"

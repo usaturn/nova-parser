@@ -40,6 +40,9 @@ const api = {
 
 const SAVE_DEBOUNCE_MS = 500;
 const MIN_DRAG_PX = 5;
+const ZOOM_MIN = 0.25;
+const ZOOM_MAX = 8.0;
+const ZOOM_STEP = 1.25;
 
 function clampInt(v, min, max) {
   return Math.max(min, Math.min(max, Math.round(v)));
@@ -83,6 +86,8 @@ function regionalOcrApp() {
     sseController: null,
     batchRunning: false,
     ocrLog: [],
+    zoom: 1.0,
+    zoomFit: true,
 
     async init() {
       try {
@@ -193,6 +198,64 @@ function regionalOcrApp() {
         width: `${rect.width * this.scaleX}px`,
         height: `${rect.height * this.scaleY}px`,
       };
+    },
+
+    imgStyle() {
+      if (this.zoomFit || !this.currentImage) return {};
+      return {
+        width: `${this.currentImage.width * this.zoom}px`,
+        maxWidth: "none",
+      };
+    },
+
+    _applyZoomTick() {
+      const tick = this.$nextTick ? this.$nextTick.bind(this) : (fn) => Promise.resolve().then(fn);
+      tick(() => this.recomputeScale());
+    },
+
+    _currentEffectiveScale() {
+      const s = this.zoomFit ? this.scaleX : this.zoom;
+      if (!Number.isFinite(s) || s <= 0) return 1.0;
+      return s;
+    },
+
+    zoomIn() {
+      if (this.dragMode) return;
+      const base = this._currentEffectiveScale();
+      const next = Math.min(base * ZOOM_STEP, ZOOM_MAX);
+      if (next <= base) return;
+      this.zoomFit = false;
+      this.zoom = next;
+      this._applyZoomTick();
+    },
+
+    zoomOut() {
+      if (this.dragMode) return;
+      const base = this._currentEffectiveScale();
+      const next = Math.max(base / ZOOM_STEP, ZOOM_MIN);
+      if (next >= base) return;
+      this.zoomFit = false;
+      this.zoom = next;
+      this._applyZoomTick();
+    },
+
+    zoomFitToggle() {
+      if (this.dragMode) return;
+      this.zoomFit = true;
+      this.zoom = 1.0;
+      this._applyZoomTick();
+    },
+
+    zoomReset() {
+      if (this.dragMode) return;
+      this.zoomFit = false;
+      this.zoom = 1.0;
+      this._applyZoomTick();
+    },
+
+    zoomPercent() {
+      const v = this.zoomFit ? this.scaleX : this.zoom;
+      return Math.round(v * 100);
     },
 
     draftStyle() {

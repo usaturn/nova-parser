@@ -120,8 +120,34 @@ body {
   overflow: auto;
   background: #14141f;
   display: flex;
+  flex-direction: column;
   align-items: flex-start;
-  justify-content: center;
+  justify-content: flex-start;
+}
+
+.zoom-toolbar {
+  position: sticky;
+  top: 0;
+  align-self: stretch;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.5rem;
+  background: rgba(40, 40, 61, 0.92);
+  border-bottom: 1px solid var(--border);
+}
+
+.zoom-toolbar button {
+  padding: 0.2rem 0.5rem;
+  font-size: 0.85rem;
+}
+
+.zoom-level {
+  min-width: 3.5rem;
+  text-align: center;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .placeholder {
