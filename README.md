@@ -71,6 +71,9 @@ uv run nova-parser --mode extract --parallel-files 4 --schema Output/schema.json
 
 # Gemini Vision でカード領域を切り出し
 uv run nova-parser --mode crop --min-card-area 0.03 --max-card-area 0.60 --padding 20 Images/sample.png
+
+# 対話的領域 OCR ツール（Cloud Vision、ブラウザで矩形を描いて OCR）
+uv run nova-parser-regional Images/ --output-dir Output --port 8000
 ```
 
 - 対応入力形式は `.png`、`.jpg`、`.jpeg`、`.gif`、`.bmp`、`.webp`、`.tiff`、`.tif`、`.pdf`
@@ -99,6 +102,8 @@ uv run nova-parser --mode crop --min-card-area 0.03 --max-card-area 0.60 --paddi
 Gemini が不正な JSON や想定外形状を返した場合は、調査用の `*.gemini_json_error.json` を `Output/` に保存します。`extract` は画像内容とスキーマハッシュが一致する場合に `Output/cache/extract/*.json` を再利用します。一部モードでは既存の出力ファイルをスキップし、`plain` / `docai_plain` / `docai` / `extract` では標準出力に性能サマリーも表示されます。
 
 詳細な CLI オプション、ログ、出力仕様は [docs/usage.md](docs/usage.md) を参照してください。
+
+対話的に画像へ矩形を描いて Cloud Vision で OCR する Web ツール（`nova-parser-regional`）の起動方法・UI 操作・API・ローカル E2E テストは [docs/regional-ocr.md](docs/regional-ocr.md) を参照してください。
 
 ## 開発
 

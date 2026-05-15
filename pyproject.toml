@@ -24,6 +24,7 @@ dependencies = [
 [project.scripts]
 nova-parser = "nova_parser.main:main"
 nova-parser-regional = "nova_parser.regional_ocr.main:main"
+nova-parser-claude-handoff = "nova_parser.claude_handoff:main"
 
 [dependency-groups]
 dev = [
@@ -61,4 +62,3 @@ line-ending = "auto"
 
 [tool.taskipy.tasks]
 ruff = "uvx ruff check --fix --unsafe-fixes src/ tests/ && uvx ruff format src/ tests/"
-

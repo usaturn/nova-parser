@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>nova-parser Regional OCR</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+    <script defer src="/static/app.js"></script>
+  </head>
+  <body>
+    <div id="app" x-data="regionalOcrApp()" x-init="init()">
+      <header class="topbar">
+        <h1>Regional OCR</h1>
+        <div class="status" :data-saving="savingState">
+          <span x-show="savingState === 'saving'">保存中…</span>
+          <span x-show="savingState === 'error'" class="error">保存失敗</span>
+          <span x-show="savingState === 'idle' && session" class="muted">保存済み</span>
+        </div>
+      </header>
+
+      <div class="layout">
+        <aside class="sidebar">
+          <h2>画像一覧</h2>
+          <template x-if="warnings.length">
+            <ul class="warnings">
+              <template x-for="w in warnings" :key="w">
+                <li x-text="w"></li>
+              </template>
+            </ul>
+          </template>
+          <ul class="image-list">
+            <template x-for="name in images" :key="name">
+              <li
+                :class="{ active: currentImage && currentImage.name === name }"
+                @click="selectImage(name)"
+                x-text="name"
+              ></li>
+            </template>
+          </ul>
+        </aside>
+
+        <main class="image-pane">
+          <template x-if="!currentImage">
+            <p class="placeholder">画像を選択してください</p>
+          </template>
+
+          <div
+            class="canvas-wrap"
+            x-show="currentImage"
+            @mousedown="onMouseDown($event)"
+            @mousemove.window="onMouseMove($event)"
+            @mouseup.window="onMouseUp($event)"
+          >
+            <img
+              x-show="currentImage"
+              :src="currentImage ? `/api/image/${encodeURIComponent(currentImage.name)}/raw` : ''"
+              @load="onImageLoad($event)"
+              alt=""
+              draggable="false"
+            />
+            <div class="region-overlay" x-show="imgLoaded">
+              <template x-for="region in (session ? session.regions : [])" :key="region.rectangle.rect_id">
+                <div
+                  class="region"
+                  :class="{
+                    selected: selectedRectId === region.rectangle.rect_id,
+                    done: region.ocr_status === 'done',
+                    'has-error': region.ocr_status === 'error',
+                  }"
+                  :style="regionStyle(region.rectangle)"
+                  @click.stop="selectRect(region.rectangle.rect_id)"
+                >
+                  <span class="region-label" x-text="region.rectangle.draw_order"></span>
+                  <button
+                    type="button"
+                    class="region-delete"
+                    @click.stop="deleteRect(region.rectangle.rect_id)"
+                    aria-label="削除"
+                  >×</button>
+                  <template x-for="edge in ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw']" :key="edge">
+                    <div
+                      class="handle"
+                      :class="`handle-${edge}`"
+                      @mousedown.stop="startResize($event, region.rectangle.rect_id, edge)"
+                    ></div>
+                  </template>
+                </div>
+              </template>
+              <div
+                class="region draft"
+                x-show="draftRect"
+                :style="draftRect ? draftStyle() : ''"
+              ></div>
+            </div>
+          </div>
+        </main>
+
+        <aside class="results">
+          <h2>OCR 結果</h2>
+          <div class="actions" x-show="currentImage">
+            <button type="button" @click="runBatchOcr()" :disabled="batchRunning">
+              <span x-show="!batchRunning">バッチ OCR 実行</span>
+              <span x-show="batchRunning">実行中…</span>
+            </button>
+            <button type="button" @click="cancelBatch()" x-show="batchRunning">中止</button>
+          </div>
+          <ul class="region-results">
+            <template x-for="region in (session ? session.regions : [])" :key="region.rectangle.rect_id">
+              <li
+                :class="{ active: selectedRectId === region.rectangle.rect_id }"
+                @click="selectRect(region.rectangle.rect_id)"
+              >
+                <header>
+                  <span class="badge" :class="region.ocr_status" x-text="region.ocr_status"></span>
+                  <span class="order">#<span x-text="region.rectangle.draw_order"></span></span>
+                  <button type="button" @click.stop="runSingleOcr(region.rectangle.rect_id)">OCR</button>
+                </header>
+                <pre x-show="region.text" x-text="region.text"></pre>
+                <p class="error" x-show="region.ocr_error" x-text="region.ocr_error"></p>
+              </li>
+            </template>
+          </ul>
+        </aside>
+      </div>
+    </div>
+  </body>
+</html>

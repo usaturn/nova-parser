@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request, Response
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from PIL import Image
 
 from nova_parser.regional_ocr.errors import (
@@ -44,6 +44,11 @@ AppStateDep = Annotated[AppState, Depends(get_app_state)]
 
 def build_router() -> APIRouter:
     router = APIRouter()
+    static_dir = Path(__file__).parent / "static"
+
+    @router.get("/", include_in_schema=False)
+    def serve_index() -> FileResponse:
+        return FileResponse(static_dir / "index.html", media_type="text/html; charset=utf-8")
 
     @router.get("/api/images", response_model=ImageListResponse)
     def api_list_images(state: AppStateDep) -> ImageListResponse:

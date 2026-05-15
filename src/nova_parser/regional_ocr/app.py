@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from nova_parser.regional_ocr.errors import (
     AdcNotConfiguredError,
@@ -50,5 +53,7 @@ def create_app(state: AppState) -> FastAPI:
     async def _value_error(_request: Request, exc: ValueError) -> JSONResponse:
         return JSONResponse(status_code=400, content={"detail": str(exc)})
 
+    static_dir = Path(__file__).parent / "static"
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
     app.include_router(build_router())
     return app
