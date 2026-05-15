@@ -1,0 +1,6 @@
+interface:
+  display_name: "Review Staged To Docs"
+  short_description: "Write Japanese staged-change reviews to docs"
+  default_prompt: "Use $review-staged-to-docs to review staged changes and write a Japanese review document under docs_draft/."
+policy:
+  allow_implicit_invocation: true
