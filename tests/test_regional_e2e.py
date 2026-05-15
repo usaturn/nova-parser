@@ -42,6 +42,22 @@ def _simple_factory(client: FakeVisionClient):
 # ---------------------------------------------------------------------------
 
 
+def test_index_html_loads_app_js_before_alpine_cdn(tmp_path):
+    """app.js が Alpine CDN より先に <script> として出現すること（auto-init race 回避）。"""
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    output_dir = tmp_path / "output"
+
+    client = _make_client(image_dir, output_dir, _simple_factory(FakeVisionClient()))
+    body = client.get("/").text
+    idx_app = body.find("/static/app.js")
+    idx_alpine = body.lower().find("alpinejs")
+
+    assert idx_app >= 0, "app.js の <script> が見つからない"
+    assert idx_alpine >= 0, "Alpine CDN の <script> が見つからない"
+    assert idx_app < idx_alpine, "app.js は Alpine CDN より先に評価される必要がある"
+
+
 def test_get_root_returns_html_with_alpine_script_tag(tmp_path):
     """GET / が 200、text/html、本文に alpinejs を含む。"""
     image_dir = tmp_path / "images"

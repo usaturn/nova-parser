@@ -231,3 +231,69 @@ def test_pyproject_exposes_claude_handoff_script() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
 
     assert pyproject["project"]["scripts"]["nova-parser-claude-handoff"] == "nova_parser.claude_handoff:main"
+
+
+def test_redact_handles_unquoted_double_quoted_and_single_quoted_assignments(tmp_path: Path) -> None:
+    """unquoted / double-quoted / single-quoted / 値内空白 の secret がすべて redaction される。"""
+    project = tmp_path / "repo"
+    project.mkdir()
+    session = tmp_path / "session.jsonl"
+    text = (
+        "## Gate 完了\n\n"
+        "結果:\n"
+        "API_KEY=raw-unquoted\n"
+        'API_KEY="raw-double-quoted"\n'
+        "TOKEN='raw-single-quoted'\n"
+        'MY_SECRET="with space value"\n'
+    )
+    records = [
+        {"type": "agent-name", "agentName": "redact-test", "sessionId": "s1"},
+        {
+            "timestamp": "2026-05-15T00:00:00Z",
+            "attributionSkill": "secret-tester",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": text}],
+            },
+        },
+    ]
+    _write_jsonl(session, records)
+
+    handoff = generate_handoff(session_path=session, project_dir=project, out_dir=project / "out")
+
+    markdown = handoff.markdown_path.read_text(encoding="utf-8")
+    payload = handoff.json_path.read_text(encoding="utf-8")
+
+    for leak in ("raw-unquoted", "raw-double-quoted", "raw-single-quoted", "with space value"):
+        assert leak not in markdown, f"Markdown に raw secret 残存: {leak}"
+        assert leak not in payload, f"JSON に raw secret 残存: {leak}"
+
+    assert "[REDACTED]" in markdown
+    assert "[REDACTED]" in payload
+
+
+def test_last_prompt_in_json_is_redacted(tmp_path: Path) -> None:
+    """lastPrompt に含まれる secret が .handoff.json でも redaction されること。"""
+    project = tmp_path / "repo"
+    project.mkdir()
+    session = tmp_path / "session.jsonl"
+    records = [
+        {"type": "agent-name", "agentName": "lp-redact", "sessionId": "s2"},
+        {
+            "type": "last-prompt",
+            "lastPrompt": 'デバッグ中 API_KEY="should-not-leak-in-json" 確認',
+            "sessionId": "s2",
+        },
+    ]
+    _write_jsonl(session, records)
+
+    handoff = generate_handoff(session_path=session, project_dir=project, out_dir=project / "out")
+
+    data = json.loads(handoff.json_path.read_text(encoding="utf-8"))
+    last_prompt = data["session"]["last_prompt"]
+
+    assert "should-not-leak-in-json" not in last_prompt
+    assert "[REDACTED]" in last_prompt
+
+    markdown = handoff.markdown_path.read_text(encoding="utf-8")
+    assert "should-not-leak-in-json" not in markdown

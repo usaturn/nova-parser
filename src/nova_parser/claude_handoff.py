@@ -28,7 +28,10 @@ class HandoffResult:
     json_path: Path
 
 
-_SECRET_RE = re.compile(r"(?i)\b([A-Z0-9_]*(?:SECRET|TOKEN|CREDENTIAL|PASSWORD|API_KEY)[A-Z0-9_]*\s*=\s*)([^\s`\"']+)")
+_SECRET_RE = re.compile(
+    r"(?i)\b([A-Z0-9_]*(?:SECRET|TOKEN|CREDENTIAL|PASSWORD|API_KEY)[A-Z0-9_]*\s*=)"
+    r"\s*(\"[^\"]*\"|'[^']*'|[^\s`\"']+)"
+)
 _MAX_REPORT_CHARS = 12000
 
 
@@ -215,7 +218,7 @@ def _build_summary(
             "ai_title": ai_title,
             "agent_name": agent_name,
             "permission_mode": permission_mode,
-            "last_prompt": last_prompt,
+            "last_prompt": _redact(last_prompt),
         },
         "skills": skills,
         "tasks": latest_tasks,

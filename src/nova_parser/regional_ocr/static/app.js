@@ -77,6 +77,7 @@ function regionalOcrApp() {
     dragMode: null,
     dragStart: null,
     saveTimer: null,
+    inFlightSave: null,
     savingState: "idle",
     sseController: null,
     batchRunning: false,
@@ -96,7 +97,30 @@ function regionalOcrApp() {
     },
 
     async selectImage(name) {
+      // バッチ OCR は save の await を待たず即時停止（SSE 接続を切断）
       this.cancelBatch();
+
+      // 直前画像に pending edit があれば即時 flush（保存漏れ防止）
+      if (this.saveTimer && this.session && this.currentImage) {
+        clearTimeout(this.saveTimer);
+        this.saveTimer = null;
+        const pendingName = this.currentImage.name;
+        const pendingSnapshot = JSON.parse(JSON.stringify(this.session));
+        const result = await this._performSave(pendingName, pendingSnapshot);
+        if (!result.ok) {
+          this._reportSaveFailure(pendingName, result.error);
+        }
+      }
+      // scheduleSave 経由で in-flight な PUT があれば完了を待ち、失敗を確実に拾う。
+      // ここで結果を取り出さないと、続く savingState='idle' が _performSave の error 表示を消してしまう。
+      if (this.inFlightSave) {
+        const inFlightResult = await this.inFlightSave;
+        if (inFlightResult && !inFlightResult.ok) {
+          this._reportSaveFailure(inFlightResult.imageName, inFlightResult.error);
+        }
+      }
+      this.savingState = "idle";
+
       this.selectedRectId = null;
       this.imgLoaded = false;
       this.draftRect = null;
@@ -300,17 +324,53 @@ function regionalOcrApp() {
       this.savingState = "saving";
       if (this.saveTimer) clearTimeout(this.saveTimer);
       const snapshot = JSON.parse(JSON.stringify(this.session));
-      this.saveTimer = setTimeout(async () => {
-        try {
-          const saved = await api.putSession(this.currentImage.name, snapshot);
-          // サーバ側で done レコードがマージされる可能性があるため反映
+      const imageName = this.currentImage.name;
+      this.saveTimer = setTimeout(() => {
+        this.saveTimer = null;
+        this._launchSave(imageName, snapshot);
+      }, SAVE_DEBOUNCE_MS);
+    },
+
+    _launchSave(imageName, snapshot) {
+      // scheduleSave 経由の非同期 PUT。Promise は inFlightSave に保持し、結果に imageName を添える。
+      // 失敗時の warnings 通知は selectImage 側で一元的に行う（savingState=error 上書きを避けるため）。
+      const promise = this._performSave(imageName, snapshot).then((result) => ({
+        ...result,
+        imageName,
+      }));
+      this.inFlightSave = promise;
+      promise.finally(() => {
+        if (this.inFlightSave === promise) {
+          this.inFlightSave = null;
+        }
+      });
+      return promise;
+    },
+
+    async _performSave(imageName, snapshot) {
+      try {
+        const saved = await api.putSession(imageName, snapshot);
+        // 保存対象が現在表示中の画像と一致する時だけ session を反映
+        if (this.currentImage && this.currentImage.name === imageName) {
           this.session = saved;
           this.savingState = "idle";
-        } catch (err) {
-          console.error(err);
+        }
+        return { ok: true };
+      } catch (err) {
+        console.error(err);
+        if (this.currentImage && this.currentImage.name === imageName) {
           this.savingState = "error";
         }
-      }, SAVE_DEBOUNCE_MS);
+        return { ok: false, error: err };
+      }
+    },
+
+    _reportSaveFailure(imageName, error) {
+      const message = error?.message ?? String(error);
+      this.warnings = [
+        ...this.warnings,
+        `「${imageName}」の保存に失敗しました: ${message}`,
+      ];
     },
 
     async runSingleOcr(rectId) {
