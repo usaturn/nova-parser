@@ -30,7 +30,7 @@ class HandoffResult:
 
 _SECRET_RE = re.compile(
     r"(?i)\b([A-Z0-9_]*(?:SECRET|TOKEN|CREDENTIAL|PASSWORD|API_KEY)[A-Z0-9_]*\s*=)"
-    r"\s*(\"[^\"]*\"|'[^']*'|[^\s`\"']+)"
+    r"\s*(\"(?:[^\"\\]|\\.)*\"|'(?:[^'\\]|\\.)*'|[^\s`\"']+)"
 )
 _MAX_REPORT_CHARS = 12000
 

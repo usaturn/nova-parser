@@ -197,3 +197,69 @@ def test_full_workflow_list_put_batch_stream_get(tmp_path):
     texts = {r["rectangle"]["rect_id"]: r["text"] for r in final["regions"]}
     assert texts["p1-r0"] == "OCR結果-1-0"
     assert texts["p1-r1"] == "OCR結果-1-1"
+
+
+def test_session_put_order_preserves_latest_state_across_image_switch(tmp_path):
+    """画像切替を跨いだ PUT 順序契約の回帰テスト。
+
+    JS 側の autosave race（in-flight save と pending flush の順序）は client-only で
+    Python から直接検証できないが、修正後の JS が出すであろう PUT 順序
+    （image A の v1 → v2 → image B の v1）を Python から再現し、backend が
+    last-write-wins で動くこと、および画像間の cross-contamination が発生しないことを
+    invariant として固定する。
+    """
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "img_a.png", (100, 100))
+    _write_png(image_dir / "img_b.png", (100, 100))
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    client = _make_client(image_dir, output_dir, _simple_factory(FakeVisionClient()))
+
+    def _session_payload(image_name: str, rect_ids: list[str]) -> dict:
+        return {
+            "image_name": image_name,
+            "image_width": 100,
+            "image_height": 100,
+            "regions": [
+                {
+                    "rectangle": {
+                        "rect_id": rect_id,
+                        "draw_order": idx,
+                        "x": idx * 10,
+                        "y": idx * 10,
+                        "width": 30,
+                        "height": 30,
+                    },
+                    "text": None,
+                    "ocr_status": "pending",
+                    "ocr_error": None,
+                    "ocr_completed_at": None,
+                }
+                for idx, rect_id in enumerate(rect_ids)
+            ],
+            "schema_version": 1,
+        }
+
+    # 1) img_a の v1 (1 矩形): 修正後 JS の inFlightSave 相当
+    r1 = client.put("/api/session/img_a.png", json=_session_payload("img_a.png", ["a-r0"]))
+    assert r1.status_code == 200
+
+    # 2) img_a の v2 (2 矩形に更新): 修正後 JS の pending flush 相当
+    r2 = client.put("/api/session/img_a.png", json=_session_payload("img_a.png", ["a-r0", "a-r1"]))
+    assert r2.status_code == 200
+
+    # 3) img_b の v1 (画像切替後の新画像初期化)
+    r3 = client.put("/api/session/img_b.png", json=_session_payload("img_b.png", ["b-r0"]))
+    assert r3.status_code == 200
+
+    final_a = client.get("/api/session/img_a.png").json()
+    final_b = client.get("/api/session/img_b.png").json()
+
+    assert [r["rectangle"]["rect_id"] for r in final_a["regions"]] == ["a-r0", "a-r1"], (
+        "img_a が v2 (最新編集) を保持していない"
+    )
+    assert [r["rectangle"]["rect_id"] for r in final_b["regions"]] == ["b-r0"], (
+        "img_b への書き込みが img_a に漏れ出している"
+    )

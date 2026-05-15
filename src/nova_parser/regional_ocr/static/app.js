@@ -78,6 +78,7 @@ function regionalOcrApp() {
     dragStart: null,
     saveTimer: null,
     inFlightSave: null,
+    saveVersion: 0,
     savingState: "idle",
     sseController: null,
     batchRunning: false,
@@ -100,23 +101,52 @@ function regionalOcrApp() {
       // バッチ OCR は save の await を待たず即時停止（SSE 接続を切断）
       this.cancelBatch();
 
-      // 直前画像に pending edit があれば即時 flush（保存漏れ防止）
-      if (this.saveTimer && this.session && this.currentImage) {
-        clearTimeout(this.saveTimer);
-        this.saveTimer = null;
-        const pendingName = this.currentImage.name;
-        const pendingSnapshot = JSON.parse(JSON.stringify(this.session));
-        const result = await this._performSave(pendingName, pendingSnapshot);
-        if (!result.ok) {
-          this._reportSaveFailure(pendingName, result.error);
+      // 旧画像の保存を完全に drain してから image switch に進む。
+      //
+      // ループにする理由:
+      //   - await 中はマイクロタスク境界が挟まり、user の edit や既存 saveTimer の
+      //     fire が走り得る。これらは新たな saveTimer / inFlightSave を発生させる。
+      //   - 1 回だけ flush + await で済ませると、await 直後に発生した新 save が drain
+      //     されず、selectImage がそのまま image switch を始めてしまう（"old-image
+      //     debounce dropped" 状態）。
+      //   - while で saveTimer と inFlightSave が両方 null になるまで drain することで、
+      //     image switch 直前の時点で旧画像の autosave が完全に backend に反映される。
+      //
+      // pending snapshot capture を await 前に行う点も維持:
+      //   - 後続の await 中に古い PUT response が _performSave 内で
+      //     this.session = saved を実行しても、capture 済み snapshot は影響を受けない。
+      //   - saveVersion を進めることで、自分が "最新世代の save" として扱われる。
+      while (this.saveTimer || this.inFlightSave) {
+        let pendingFlush = null;
+        if (this.saveTimer && this.session && this.currentImage) {
+          clearTimeout(this.saveTimer);
+          this.saveTimer = null;
+          this.saveVersion += 1;
+          pendingFlush = {
+            imageName: this.currentImage.name,
+            snapshot: JSON.parse(JSON.stringify(this.session)),
+            version: this.saveVersion,
+          };
+        } else if (this.saveTimer) {
+          // session / currentImage が null なのに timer が残っている異常状態。
+          // データを送れないので timer だけ破棄してループ継続。
+          clearTimeout(this.saveTimer);
+          this.saveTimer = null;
         }
-      }
-      // scheduleSave 経由で in-flight な PUT があれば完了を待ち、失敗を確実に拾う。
-      // ここで結果を取り出さないと、続く savingState='idle' が _performSave の error 表示を消してしまう。
-      if (this.inFlightSave) {
-        const inFlightResult = await this.inFlightSave;
-        if (inFlightResult && !inFlightResult.ok) {
-          this._reportSaveFailure(inFlightResult.imageName, inFlightResult.error);
+
+        // pending flush は _launchSave 経由で発行する。これで:
+        //   1. 既存 in-flight chain の完了後に flush PUT が送られる（古い PUT が
+        //      後着で flush を上書きする race を防ぐ）。
+        //   2. flush 自身も this.inFlightSave に登録されるので、この PUT 中に
+        //      新たな scheduleSave が走っても、その save は flush を await して
+        //      同じ chain に組み込まれる（serialization の連鎖が切れない）。
+        //   3. 失敗は _launchSave 内の IIFE で _reportSaveFailure に転送される。
+        const waitFor = pendingFlush
+          ? this._launchSave(pendingFlush.imageName, pendingFlush.snapshot, pendingFlush.version)
+          : this.inFlightSave;
+
+        if (waitFor) {
+          await waitFor;
         }
       }
       this.savingState = "idle";
@@ -323,21 +353,34 @@ function regionalOcrApp() {
       if (!this.session || !this.currentImage) return;
       this.savingState = "saving";
       if (this.saveTimer) clearTimeout(this.saveTimer);
+      this.saveVersion += 1;
+      const version = this.saveVersion;
       const snapshot = JSON.parse(JSON.stringify(this.session));
       const imageName = this.currentImage.name;
       this.saveTimer = setTimeout(() => {
         this.saveTimer = null;
-        this._launchSave(imageName, snapshot);
+        this._launchSave(imageName, snapshot, version);
       }, SAVE_DEBOUNCE_MS);
     },
 
-    _launchSave(imageName, snapshot) {
-      // scheduleSave 経由の非同期 PUT。Promise は inFlightSave に保持し、結果に imageName を添える。
-      // 失敗時の warnings 通知は selectImage 側で一元的に行う（savingState=error 上書きを避けるため）。
-      const promise = this._performSave(imageName, snapshot).then((result) => ({
-        ...result,
-        imageName,
-      }));
+    _launchSave(imageName, snapshot, version) {
+      // autosave 群を厳密に直列化するため、直前 in-flight save が完了してから
+      // 自分の PUT を実行する。これで「saveTimer fire 時点で前の PUT がまだ
+      // network 上にあり、古い PUT が新しい PUT の後で server へ届いて上書き
+      // する」race を防ぐ。さらに自分自身を this.inFlightSave に登録するので、
+      // この PUT 中に新たに scheduled された save も同じ chain に連結される。
+      // 失敗報告は自分の IIFE 内で行う（chain の中間 save の失敗を
+      // selectImage が拾えないと warnings に残らない問題を解消）。
+      // _performSave は throw せず {ok, error} を返すので、await previous は安全。
+      const previous = this.inFlightSave;
+      const promise = (async () => {
+        if (previous) await previous;
+        const result = await this._performSave(imageName, snapshot, version);
+        if (!result.ok) {
+          this._reportSaveFailure(imageName, result.error);
+        }
+        return { ...result, imageName };
+      })();
       this.inFlightSave = promise;
       promise.finally(() => {
         if (this.inFlightSave === promise) {
@@ -347,18 +390,31 @@ function regionalOcrApp() {
       return promise;
     },
 
-    async _performSave(imageName, snapshot) {
+    async _performSave(imageName, snapshot, version) {
       try {
         const saved = await api.putSession(imageName, snapshot);
-        // 保存対象が現在表示中の画像と一致する時だけ session を反映
-        if (this.currentImage && this.currentImage.name === imageName) {
+        // session を反映するのは「同じ画像 + 自分が最新世代の save」の場合のみ。
+        // version が新しい save に追い越されている時は、queued autosave の古い response
+        // で this.session を上書きすると、その間にユーザーが行った編集が live state から
+        // 消えてしまう（roll back）。version が一致する時だけ反映することで roll back を防ぐ。
+        if (
+          this.currentImage &&
+          this.currentImage.name === imageName &&
+          this.saveVersion === version
+        ) {
           this.session = saved;
           this.savingState = "idle";
         }
         return { ok: true };
       } catch (err) {
         console.error(err);
-        if (this.currentImage && this.currentImage.name === imageName) {
+        // savingState='error' も最新世代の失敗時だけ表示する。
+        // 古い queued save の失敗で error をフラッシュすると、後続成功で隠れて UX が悪い。
+        if (
+          this.currentImage &&
+          this.currentImage.name === imageName &&
+          this.saveVersion === version
+        ) {
           this.savingState = "error";
         }
         return { ok: false, error: err };

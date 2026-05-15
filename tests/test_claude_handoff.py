@@ -272,6 +272,36 @@ def test_redact_handles_unquoted_double_quoted_and_single_quoted_assignments(tmp
     assert "[REDACTED]" in payload
 
 
+def test_redact_handles_escaped_quotes_in_quoted_assignments(tmp_path: Path) -> None:
+    """quoted secret value 内の backslash-escaped quote を終端と誤認せず、全体が redaction されること。"""
+    project = tmp_path / "repo"
+    project.mkdir()
+    session = tmp_path / "session.jsonl"
+    text = "## Gate 完了\n\nAPI_KEY=\"abc\\\"def-secret-tail\"\nTOKEN='abc\\'def-secret-tail'\n"
+    records = [
+        {"type": "agent-name", "agentName": "escaped-quote-test", "sessionId": "s1"},
+        {
+            "timestamp": "2026-05-15T00:00:00Z",
+            "attributionSkill": "secret-tester",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": text}],
+            },
+        },
+    ]
+    _write_jsonl(session, records)
+
+    handoff = generate_handoff(session_path=session, project_dir=project, out_dir=project / "out")
+
+    markdown = handoff.markdown_path.read_text(encoding="utf-8")
+    payload = handoff.json_path.read_text(encoding="utf-8")
+
+    assert "def-secret-tail" not in markdown, "Markdown に escaped quote 以降の secret 断片が残存"
+    assert "def-secret-tail" not in payload, "JSON に escaped quote 以降の secret 断片が残存"
+    assert "[REDACTED]" in markdown
+    assert "[REDACTED]" in payload
+
+
 def test_last_prompt_in_json_is_redacted(tmp_path: Path) -> None:
     """lastPrompt に含まれる secret が .handoff.json でも redaction されること。"""
     project = tmp_path / "repo"
