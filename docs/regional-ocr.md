@@ -34,7 +34,7 @@ uv run nova-parser-regional Images/ --output-dir Output --host 127.0.0.1 --port 
 | オプション | 既定値 | 説明 |
 |---|---|---|
 | `image_dir`（必須） | — | 画像ディレクトリ |
-| `--output-dir` | `Output` | セッション JSON / Markdown の保存先 |
+| `--output-dir` | `Output/<画像ディレクトリ名>` | セッション JSON / Markdown の保存先。未指定時は CWD 配下の `Output/<image_dir.name>/` を自動採用 |
 | `--host` | `127.0.0.1` | バインドホスト |
 | `--port` | `8000` | バインドポート |
 

@@ -130,6 +130,64 @@ def test_main_passes_image_dir_to_app_state(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# AC-C-26: --output-dir 未指定時、output_dir が Output/<image_dir.name> に解決される
+# ---------------------------------------------------------------------------
+
+
+def test_main_default_output_dir_uses_image_dir_basename(tmp_path, monkeypatch):
+    """AC-C-26: --output-dir を省略した場合、AppState.output_dir は
+    (CWD / 'Output' / image_dir.name).resolve() になる。
+    """
+    image_dir = tmp_path / "scene_alpha"
+    image_dir.mkdir()
+    cwd = tmp_path / "work"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+
+    captured: dict = {}
+
+    def _fake_uvicorn_run(app, *, host, port):
+        captured["app"] = app
+
+    monkeypatch.setattr("nova_parser.regional_ocr.main.uvicorn.run", _fake_uvicorn_run)
+
+    from nova_parser.regional_ocr.main import main
+
+    main(argv=[str(image_dir)])
+
+    expected = (cwd / "Output" / "scene_alpha").resolve()
+    assert captured["app"].state.app_state.output_dir == expected
+
+
+# ---------------------------------------------------------------------------
+# AC-C-27: --output-dir 明示指定時は image_dir basename を付与しない
+# ---------------------------------------------------------------------------
+
+
+def test_main_explicit_output_dir_does_not_append_basename(tmp_path, monkeypatch):
+    """AC-C-27: --output-dir を明示指定した場合は image_dir.name を末尾に付与せず、
+    指定パスをそのまま resolve した値が AppState.output_dir になる。
+    """
+    image_dir = tmp_path / "scene_alpha"
+    image_dir.mkdir()
+    explicit_output = tmp_path / "custom_output"
+
+    captured: dict = {}
+
+    def _fake_uvicorn_run(app, *, host, port):
+        captured["app"] = app
+
+    monkeypatch.setattr("nova_parser.regional_ocr.main.uvicorn.run", _fake_uvicorn_run)
+
+    from nova_parser.regional_ocr.main import main
+
+    main(argv=[str(image_dir), "--output-dir", str(explicit_output)])
+
+    assert captured["app"].state.app_state.output_dir == explicit_output.resolve()
+    assert captured["app"].state.app_state.output_dir.name == "custom_output"
+
+
+# ---------------------------------------------------------------------------
 # AC-C-25: pyproject.toml に nova-parser-regional スクリプト・fastapi/uvicorn 依存・httpx dev 依存
 # ---------------------------------------------------------------------------
 

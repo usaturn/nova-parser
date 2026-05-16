@@ -73,7 +73,8 @@ uv run nova-parser --mode extract --parallel-files 4 --schema Output/schema.json
 uv run nova-parser --mode crop --min-card-area 0.03 --max-card-area 0.60 --padding 20 Images/sample.png
 
 # 対話的領域 OCR ツール（Cloud Vision、ブラウザで矩形を描いて OCR）
-uv run nova-parser-regional Images/ --output-dir Output --port 8000
+# --output-dir 未指定時は Output/<画像ディレクトリ名>/ が自動採用される
+uv run nova-parser-regional Images/ --port 8000
 ```
 
 - 対応入力形式は `.png`、`.jpg`、`.jpeg`、`.gif`、`.bmp`、`.webp`、`.tiff`、`.tif`、`.pdf`
