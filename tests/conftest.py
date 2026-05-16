@@ -4,6 +4,8 @@ FakeVisionClient と _FakeResponse は test_regional_ocr_client.py と
 test_regional_routes.py の両方から共有される（AC-C-26）。
 FakeGeminiClient / FakeDocAIClient は test_ocr.py / test_documentai.py で
 ocr.py と documentai.py の外部 API 呼び出しを差し替えるために使う。
+FakePydanticAgent と replace_generate_json は test_structured.py /
+test_gamedata.py で外部 SDK 呼び出しを差し替えるために使う。
 """
 
 from __future__ import annotations
@@ -121,6 +123,71 @@ class FakeDocAIClient:
         if isinstance(next_item, BaseException):
             raise next_item
         return _FakeDocAIResult(next_item)
+
+
+class FakePydanticAgentResult:
+    """pydantic_ai Agent.run_sync の戻り値スタブ。`.output` 属性のみ持つ。"""
+
+    def __init__(self, output: Any) -> None:
+        self.output = output
+
+
+class FakePydanticAgent:
+    """pydantic_ai Agent のフェイク。run_sync 応答 / 例外をキュー順に返す。"""
+
+    def __init__(self, responses: list[Any] | None = None) -> None:
+        self._responses: list[Any] = list(responses) if responses else []
+        self.calls: list[dict[str, Any]] = []
+
+    def run_sync(self, contents: Any) -> FakePydanticAgentResult:
+        self.calls.append({"contents": contents})
+        if not self._responses:
+            raise RuntimeError("FakePydanticAgent: 応答キューが空です")
+        next_item = self._responses.pop(0)
+        if isinstance(next_item, BaseException):
+            raise next_item
+        return FakePydanticAgentResult(output=next_item)
+
+
+def replace_generate_json(
+    monkeypatch: pytest.MonkeyPatch,
+    results: list[Any],
+) -> list[dict[str, Any]]:
+    """nova_parser.gamedata.generate_json を結果キューに差し替えるヘルパー。
+
+    戻り値: 呼び出し履歴を蓄積する list。各要素は generate_json に渡された
+    引数の dict（contents / response_json_schema / result_validator / failure_artifact）。
+    キュー要素が BaseException の場合は raise する。
+    """
+    queue: list[Any] = list(results)
+    calls: list[dict[str, Any]] = []
+
+    def fake_generate_json(
+        contents: Any,
+        *,
+        response_json_schema: Any = None,
+        result_validator: Any = None,
+        failure_artifact: Any = None,
+        **kwargs: Any,
+    ) -> Any:
+        calls.append(
+            {
+                "contents": contents,
+                "response_json_schema": response_json_schema,
+                "result_validator": result_validator,
+                "failure_artifact": failure_artifact,
+                "extra": kwargs,
+            }
+        )
+        if not queue:
+            raise RuntimeError("replace_generate_json: 応答キューが空です")
+        next_item = queue.pop(0)
+        if isinstance(next_item, BaseException):
+            raise next_item
+        return next_item
+
+    monkeypatch.setattr("nova_parser.gamedata.generate_json", fake_generate_json)
+    return calls
 
 
 @pytest.fixture
