@@ -32,8 +32,15 @@ OCR_PROMPT = """\
 - 読み取れない文字は [?] と表記してください
 """
 
-MODEL = "gemini-3.1-pro-preview"
-FLASH_MODEL = "gemini-3-flash-preview"
+# publishers/google/models/gemini-3.5-flash
+# publishers/google/models/gemini-3.1-pro-preview
+# publishers/google/models/gemini-3-flash-preview
+# publishers/google/models/gemini-3.1-flash-lite
+
+MODEL = "gemini-3.5-flash"
+FLASH_MODEL = "gemini-3.1-flash-lite"
+# MODEL = "gemini-3.1-pro-preview"
+# FLASH_MODEL = "gemini-3-flash-preview"
 JSON_DECODE_RETRY_ATTEMPTS = 2
 JSON_DECODE_RETRY_WAIT_SECONDS = 1.0
 
@@ -165,6 +172,9 @@ def generate_json(
         response_mime_type="application/json",
         response_json_schema=response_json_schema,
         temperature=temperature,
+        thinking_config=types.ThinkingConfig(
+            thinking_level=types.ThinkingLevel.LOW,
+        ),
     )
 
     for attempt in range(JSON_DECODE_RETRY_ATTEMPTS):
@@ -239,6 +249,11 @@ def ocr_image(image_path: Path) -> str:
                     OCR_PROMPT,
                     types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
                 ],
+                config=types.GenerateContentConfig(
+                    thinking_config=types.ThinkingConfig(
+                        thinking_level=types.ThinkingLevel.LOW,
+                    ),
+                ),
             )
         )
     return response.text
