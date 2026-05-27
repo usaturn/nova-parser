@@ -27,6 +27,8 @@ IMAGES_DIR = Path("Images")
 DEFAULT_OUTPUT_DIR = Path("Output")
 OUTPUT_DIR = DEFAULT_OUTPUT_DIR
 
+DOCAI_TSV_GLOB = "*.docai*.tsv"
+
 MAX_RETRIES = 5
 INITIAL_WAIT = 30
 
@@ -69,6 +71,31 @@ def resolve_images(file_args: list[str]) -> list[Path]:
     if not IMAGES_DIR.exists():
         return []
     return sorted(p for p in IMAGES_DIR.iterdir() if p.suffix.lower() in MIME_TYPES)
+
+
+def resolve_docai_tsvs(file_args: list[str]) -> list[Path]:
+    """CLI 引数から docai TSV ファイルリストを解決する。
+
+    ディレクトリを指定した場合は DOCAI_TSV_GLOB パターンで非再帰展開し、
+    明示ファイルを指定した場合は拡張子フィルタなしでそのまま追加する。
+    resolve_images と異なり、存在しないパスや対象 TSV が 0 件のディレクトリは
+    警告継続ではなくエラーメッセージを stderr に出力して sys.exit(1) で即終了する。
+    """
+    result: list[Path] = []
+    for f in file_args:
+        p = Path(f)
+        if not p.exists():
+            print(f"エラー: パスが見つかりません: {p}", file=sys.stderr)
+            sys.exit(1)
+        if p.is_dir():
+            matched = sorted(p.glob(DOCAI_TSV_GLOB))
+            if not matched:
+                print(f"エラー: ディレクトリに docai TSV が見つかりません: {p}", file=sys.stderr)
+                sys.exit(1)
+            result.extend(matched)
+        else:
+            result.append(p)
+    return result
 
 
 def _is_rate_limit_error(exc: Exception) -> bool:
@@ -271,7 +298,7 @@ def _parse_docai_tsvs(files: list[Path] | None = None) -> dict:
 
     files を指定した場合はそのファイルのみ、省略時は Output/*.docai*.tsv を走査する。
     """
-    tsv_files = sorted(files) if files else sorted(OUTPUT_DIR.glob("*.docai*.tsv"))
+    tsv_files = sorted(files) if files is not None else sorted(OUTPUT_DIR.glob(DOCAI_TSV_GLOB))
     type_fields: dict[str, list[str]] = {}
     type_source: dict[str, str] = {}
 
@@ -1210,7 +1237,7 @@ def main():
     try:
         # schema_propose は画像ではなく TSV ファイルを受け取る
         if args.mode == "schema_propose":
-            tsv_files = [Path(f) for f in args.files] if args.files else None
+            tsv_files = resolve_docai_tsvs(args.files) if args.files else None
             run_schema_propose(tsv_files)
             print(f"\n全ての結果を {OUTPUT_DIR}/ に保存しました。")
             return

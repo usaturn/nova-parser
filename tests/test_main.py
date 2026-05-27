@@ -1695,3 +1695,188 @@ def test_main_rejects_output_dir_file(monkeypatch, tmp_path, capsys):
     assert excinfo.value.code == 2
     assert "出力先がディレクトリではありません" in captured.err
     assert str(output_file) in captured.err
+
+
+# ---------------------------------------------------------------------------
+# schema_propose ディレクトリ引数対応テスト (AC-1 〜 AC-7)
+# ---------------------------------------------------------------------------
+
+
+def _make_docai_tsv(path: Path, type_name: str, fields: list[str], rows: list[list[str]] | None = None) -> None:
+    """テスト用の docai TSV ファイルを作成する。"""
+    lines = [f"## {type_name}", "\t".join(fields)]
+    if rows:
+        for row in rows:
+            lines.append("\t".join(row))
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_schema_propose_directory_aggregates_multiple_docai_tsvs(monkeypatch, tmp_path):
+    """AC-1: ディレクトリに a.docai.tsv と b.docai.tsv → 両方集約され types に両型が出る。"""
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    _make_docai_tsv(input_dir / "a.docai.tsv", "TypeA", ["field1", "field2"])
+    _make_docai_tsv(input_dir / "b.docai.tsv", "TypeB", ["field3", "field4"])
+
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", Path("Output"))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["nova-parser", "--mode", "schema_propose", "--output-dir", str(output_dir), str(input_dir)],
+    )
+
+    main_mod.main()
+
+    result = json.loads((output_dir / "schema_proposal.json").read_text(encoding="utf-8"))
+    type_names = {t["type_name"] for t in result["types"]}
+    assert "TypeA" in type_names
+    assert "TypeB" in type_names
+    assert len(result["types"]) == 2
+
+
+def test_schema_propose_directory_filters_non_docai_tsv(monkeypatch, tmp_path):
+    """AC-2: ディレクトリに a.docai.tsv と notes.tsv → a.docai.tsv のみ対象。"""
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    _make_docai_tsv(input_dir / "a.docai.tsv", "TypeA", ["field1"])
+    _make_docai_tsv(input_dir / "notes.tsv", "TypeNotes", ["fieldX"])
+
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", Path("Output"))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["nova-parser", "--mode", "schema_propose", "--output-dir", str(output_dir), str(input_dir)],
+    )
+
+    main_mod.main()
+
+    result = json.loads((output_dir / "schema_proposal.json").read_text(encoding="utf-8"))
+    type_names = {t["type_name"] for t in result["types"]}
+    assert "TypeA" in type_names
+    assert "TypeNotes" not in type_names
+
+
+def test_schema_propose_directory_with_no_docai_tsvs_exits_with_error(monkeypatch, tmp_path, capsys):
+    """AC-3: 対象 *.docai*.tsv が 0 件のディレクトリ → SystemExit(1)、stderr に「docai TSV が見つかりません」。"""
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    (input_dir / "notes.tsv").write_text("unrelated\n", encoding="utf-8")
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", Path("Output"))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["nova-parser", "--mode", "schema_propose", "--output-dir", str(output_dir), str(input_dir)],
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        main_mod.main()
+
+    captured = capsys.readouterr()
+    assert excinfo.value.code == 1
+    assert "docai TSV が見つかりません" in captured.err
+
+
+def test_schema_propose_nonexistent_path_exits_with_error(monkeypatch, tmp_path, capsys):
+    """AC-4: 存在しないパス → SystemExit(1)、stderr に「パスが見つかりません」。"""
+    nonexistent = tmp_path / "does_not_exist"
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", Path("Output"))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["nova-parser", "--mode", "schema_propose", "--output-dir", str(output_dir), str(nonexistent)],
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        main_mod.main()
+
+    captured = capsys.readouterr()
+    assert excinfo.value.code == 1
+    assert "パスが見つかりません" in captured.err
+
+
+def test_schema_propose_explicit_file_processed_without_filter(monkeypatch, tmp_path):
+    """AC-5: *.docai*.tsv に非マッチな明示ファイル data.tsv を直接指定 → 後方互換でフィルタされず処理される。
+
+    resolve_docai_tsvs はファイル引数に glob フィルタを掛けないことを証明する。
+    data.tsv は DOCAI_TSV_GLOB="*.docai*.tsv" に非マッチのため、
+    誤って明示ファイルにもフィルタを掛ける実装では結果が空になり、このテストは失敗する。
+    """
+    tsv_file = tmp_path / "data.tsv"
+    _make_docai_tsv(tsv_file, "DataType", ["col1", "col2"])
+
+    # *.docai*.tsv に非マッチな data.tsv でも resolve_docai_tsvs は [tsv_file] を返す
+    result = main_mod.resolve_docai_tsvs([str(tsv_file)])
+    assert result == [tsv_file]
+
+
+def test_schema_propose_file_and_directory_combined(monkeypatch, tmp_path):
+    """AC-6: 明示ファイル + ディレクトリ混在 → 両者の和集合を処理し全型が集約される。"""
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    explicit_file = tmp_path / "explicit.docai.tsv"
+    _make_docai_tsv(explicit_file, "ExplicitType", ["f1"])
+    _make_docai_tsv(input_dir / "dir_file.docai.tsv", "DirType", ["f2"])
+
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", Path("Output"))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "nova-parser",
+            "--mode",
+            "schema_propose",
+            "--output-dir",
+            str(output_dir),
+            str(explicit_file),
+            str(input_dir),
+        ],
+    )
+
+    main_mod.main()
+
+    result = json.loads((output_dir / "schema_proposal.json").read_text(encoding="utf-8"))
+    type_names = {t["type_name"] for t in result["types"]}
+    assert "ExplicitType" in type_names
+    assert "DirType" in type_names
+
+
+def test_schema_propose_directory_does_not_recurse_into_subdirectory(monkeypatch, tmp_path):
+    """AC-7: ディレクトリ指定時、サブディレクトリ dir/sub/c.docai.tsv は非再帰のため対象外。"""
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    sub_dir = input_dir / "sub"
+    sub_dir.mkdir()
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    _make_docai_tsv(input_dir / "top.docai.tsv", "TopType", ["f1"])
+    _make_docai_tsv(sub_dir / "c.docai.tsv", "SubType", ["f2"])
+
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", Path("Output"))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["nova-parser", "--mode", "schema_propose", "--output-dir", str(output_dir), str(input_dir)],
+    )
+
+    main_mod.main()
+
+    result = json.loads((output_dir / "schema_proposal.json").read_text(encoding="utf-8"))
+    type_names = {t["type_name"] for t in result["types"]}
+    assert "TopType" in type_names
+    assert "SubType" not in type_names
