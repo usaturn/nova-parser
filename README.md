@@ -97,7 +97,7 @@ uv run nova-parser-regional Images/ --port 8000
 - `docai_plain`: `Output/*.docai_plain.md`
 - `docai`: `Output/*.docai.tsv`
 - `schema_propose`: `Output/schema_proposal.json`
-- `extract`: `Output/*.tsv`、`Output/none_*.tsv`、`Output/cache/extract/*.json`
+- `extract`: `Output/*.tsv`、`Output/none_*.tsv`、`Output/cache/extract/*.json`（`--output-dir` 省略かつ単一ディレクトリ入力時は `Output/[ディレクトリ名]/` 配下に出力）
 - `crop`: `Output/*.crop.json`、`Output/*.crop_001.png` など
 
 Gemini が不正な JSON や想定外形状を返した場合は、調査用の `*.gemini_json_error.json` を `Output/` に保存します。`extract` は画像内容とスキーマハッシュが一致する場合に `Output/cache/extract/*.json` を再利用します。一部モードでは既存の出力ファイルをスキップし、`plain` / `docai_plain` / `docai` / `extract` では標準出力に性能サマリーも表示されます。

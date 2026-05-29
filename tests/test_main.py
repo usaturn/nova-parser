@@ -1698,6 +1698,171 @@ def test_main_rejects_output_dir_file(monkeypatch, tmp_path, capsys):
 
 
 # ---------------------------------------------------------------------------
+# extract モード: --output-dir 未指定時の Output/[base name] 派生テスト
+# ---------------------------------------------------------------------------
+
+
+def _setup_extract_output_dir_test(monkeypatch, tmp_path):
+    """extract 出力先派生テスト共通の前準備。schema パスと default Output を用意する。"""
+    schema_path = tmp_path / "schema.json"
+    _write_schema(schema_path)
+    default_output = tmp_path / "Output"
+
+    observed: dict[str, Path] = {}
+
+    def fake_run_extract(images, schema_path, *, parallel_files: int = 1) -> None:
+        observed["output_dir"] = main_mod.OUTPUT_DIR
+
+    monkeypatch.setattr(main_mod, "DEFAULT_OUTPUT_DIR", default_output)
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", Path("Output"))
+    monkeypatch.setattr(main_mod, "run_extract", fake_run_extract)
+    return schema_path, default_output, observed
+
+
+def test_main_extract_derives_output_subdir_for_single_directory(monkeypatch, tmp_path):
+    """単一ディレクトリ入力 → Output/[ディレクトリ名] に派生する。"""
+    schema_path, default_output, observed = _setup_extract_output_dir_test(monkeypatch, tmp_path)
+    input_dir = tmp_path / "DX3_EA"
+    _make_images(input_dir, "alpha.png")
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["nova-parser", "--mode", "extract", "--schema", str(schema_path), str(input_dir)],
+    )
+
+    main_mod.main()
+
+    assert observed["output_dir"] == default_output / "DX3_EA"
+    assert (default_output / "DX3_EA").is_dir()
+
+
+def test_main_extract_does_not_derive_for_single_file(monkeypatch, tmp_path):
+    """単一ファイル入力 → 派生せず DEFAULT_OUTPUT_DIR 直下のまま。"""
+    schema_path, default_output, observed = _setup_extract_output_dir_test(monkeypatch, tmp_path)
+    image_path = _make_images(tmp_path / "DX3_EA", "alpha.png")[0]
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["nova-parser", "--mode", "extract", "--schema", str(schema_path), str(image_path)],
+    )
+
+    main_mod.main()
+
+    assert observed["output_dir"] == default_output
+
+
+def test_main_extract_does_not_derive_for_multiple_args(monkeypatch, tmp_path):
+    """複数引数（ディレクトリ + ファイル）→ 派生せず DEFAULT_OUTPUT_DIR 直下のまま。"""
+    schema_path, default_output, observed = _setup_extract_output_dir_test(monkeypatch, tmp_path)
+    input_dir = tmp_path / "DX3_EA"
+    _make_images(input_dir, "alpha.png")
+    extra_file = _make_images(tmp_path / "other", "beta.png")[0]
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["nova-parser", "--mode", "extract", "--schema", str(schema_path), str(input_dir), str(extra_file)],
+    )
+
+    main_mod.main()
+
+    assert observed["output_dir"] == default_output
+
+
+def test_main_extract_does_not_derive_when_files_omitted(monkeypatch, tmp_path):
+    """引数省略（Images/ 全体）→ 派生せず DEFAULT_OUTPUT_DIR 直下のまま。"""
+    schema_path, default_output, observed = _setup_extract_output_dir_test(monkeypatch, tmp_path)
+    # files 省略時は resolve_images が Images/ を走査するため、空にならないようモック。
+    monkeypatch.setattr(main_mod, "resolve_images", lambda files: _make_images(tmp_path / "imgs", "alpha.png"))
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["nova-parser", "--mode", "extract", "--schema", str(schema_path)],
+    )
+
+    main_mod.main()
+
+    assert observed["output_dir"] == default_output
+
+
+def test_main_extract_explicit_output_dir_takes_precedence(monkeypatch, tmp_path):
+    """--output-dir 明示指定は単一ディレクトリ入力でも派生されず優先される。"""
+    schema_path, _default_output, observed = _setup_extract_output_dir_test(monkeypatch, tmp_path)
+    input_dir = tmp_path / "DX3_EA"
+    _make_images(input_dir, "alpha.png")
+    custom_output = tmp_path / "custom"
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "nova-parser",
+            "--mode",
+            "extract",
+            "--schema",
+            str(schema_path),
+            "--output-dir",
+            str(custom_output),
+            str(input_dir),
+        ],
+    )
+
+    main_mod.main()
+
+    assert observed["output_dir"] == custom_output
+
+
+def test_main_extract_does_not_derive_for_parent_dir_argument(monkeypatch, tmp_path):
+    """末尾が `..` の単一ディレクトリ入力 → 派生せず Output/ 直下にフォールバックする。"""
+    schema_path, default_output, observed = _setup_extract_output_dir_test(monkeypatch, tmp_path)
+    input_dir = tmp_path / "DX3_EA"
+    input_dir.mkdir()
+    # DX3_EA/.. は tmp_path を指すため、画像は tmp_path 直下に置く。
+    _make_images(tmp_path, "alpha.png")
+    parent_arg = input_dir / ".."  # 実在し is_dir() は True だが name は ".."
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["nova-parser", "--mode", "extract", "--schema", str(schema_path), str(parent_arg)],
+    )
+
+    main_mod.main()
+
+    # Output/.. ではなく Output/ 直下にフォールバックする。
+    assert observed["output_dir"] == default_output
+    assert default_output.is_dir()
+
+
+def test_main_non_extract_mode_does_not_derive_for_single_directory(monkeypatch, tmp_path):
+    """extract 以外（docai）は単一ディレクトリ入力でも派生しない。"""
+    default_output = tmp_path / "Output"
+    input_dir = tmp_path / "DX3_EA"
+    _make_images(input_dir, "alpha.png")
+
+    observed: dict[str, Path] = {}
+
+    def fake_run_docai(images, *, parallel_files: int = 1) -> None:
+        observed["output_dir"] = main_mod.OUTPUT_DIR
+
+    monkeypatch.setattr(main_mod, "DEFAULT_OUTPUT_DIR", default_output)
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", Path("Output"))
+    monkeypatch.setattr(main_mod, "run_docai", fake_run_docai)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["nova-parser", "--mode", "docai", str(input_dir)],
+    )
+
+    main_mod.main()
+
+    assert observed["output_dir"] == default_output
+
+
+# ---------------------------------------------------------------------------
 # schema_propose ディレクトリ引数対応テスト (AC-1 〜 AC-7)
 # ---------------------------------------------------------------------------
 

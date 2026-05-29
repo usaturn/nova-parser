@@ -39,6 +39,19 @@ CACHE_VERSION = "1"
 T = TypeVar("T")
 
 
+def _resolve_extract_output_subdir(file_args: list[str]) -> Path | None:
+    """extract モードで単一ディレクトリ指定時、その base name を返す。それ以外は None。"""
+    if len(file_args) != 1:
+        return None
+    p = Path(file_args[0])
+    if not p.is_dir():
+        return None
+    name = p.name  # Path は末尾スラッシュを正規化する（"Images/dx3/DX3_EA/" -> "DX3_EA"）
+    if not name or name == "..":  # "." や "/"（空）、".."（親ディレクトリ）は派生しない
+        return None
+    return Path(name)
+
+
 def resolve_images(file_args: list[str]) -> list[Path]:
     """CLI 引数から画像ファイルリストを解決する。"""
     if file_args:
@@ -1190,8 +1203,9 @@ def main():
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=DEFAULT_OUTPUT_DIR,
-        help="結果を保存するディレクトリ（デフォルト: Output）",
+        default=None,
+        help="結果を保存するディレクトリ（デフォルト: Output。"
+        "extract モードかつ単一ディレクトリ入力時は Output/[ディレクトリ名]）",
     )
     parser.add_argument(
         "--min-card-area",
@@ -1226,7 +1240,15 @@ def main():
     if args.parallel_files < 1:
         parser.error("--parallel-files は 1 以上で指定してください。")
 
-    output_dir: Path = args.output_dir
+    if args.output_dir is not None:
+        output_dir: Path = args.output_dir
+    else:
+        output_dir = DEFAULT_OUTPUT_DIR
+        if args.mode == "extract":
+            subdir = _resolve_extract_output_subdir(args.files)
+            if subdir is not None:
+                output_dir = DEFAULT_OUTPUT_DIR / subdir
+
     if output_dir.exists() and not output_dir.is_dir():
         parser.error(f"出力先がディレクトリではありません: {output_dir}")
     output_dir.mkdir(parents=True, exist_ok=True)

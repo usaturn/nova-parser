@@ -31,6 +31,7 @@ nova-parser [--mode {plain,structured,structured_tsv,gamedata,schema,docai,docai
 - ディレクトリを指定した場合は、その直下にあるサポート対象ファイルだけを処理します
 - `schema_propose` モードだけは画像ではなく TSV ファイルを受け取ります
 - `--output-dir` を指定した場合、出力ファイル、`extract` キャッシュ、Gemini JSON エラー調査用ファイルは指定先に保存されます。`schema_propose` で TSV 入力を省略した場合も、指定先の `*.docai*.tsv` を走査します
+- `extract` モードで `--output-dir` を省略し、かつ入力が単一ディレクトリ（例: `Images/dx3/DX3_EA`）の場合は、そのディレクトリ名を使い `Output/[ディレクトリ名]/`（例: `Output/DX3_EA/`）に出力します。ファイル指定・glob 展開・複数引数・引数省略時は従来どおり `Output/` 直下に出力します
 - 複数ファイルを指定できます
 
 ```bash
@@ -552,7 +553,7 @@ uv run nova-parser --mode schema_propose Output/TNX_OFC_020.docai.tsv Output/TNX
 |------|------|
 | OCR | Google Cloud Document AI（OCR プロセッサ） |
 | 構造化抽出 | `gemini-3-flash-preview` |
-| 出力先 | `Output/` ディレクトリ（自動作成） |
+| 出力先 | `Output/` ディレクトリ（自動作成）。`--output-dir` 省略かつ単一ディレクトリ入力時は `Output/[ディレクトリ名]/` |
 | ファイル名 | `{type_name}.tsv`（スキーマ合致）/ `none_{type_name}.tsv`（スキーマ外） |
 | エンコーディング | UTF-8 |
 | フォーマット | TSV（タブ区切り、ヘッダ付き） |
@@ -565,7 +566,7 @@ uv run nova-parser --mode schema_propose Output/TNX_OFC_020.docai.tsv Output/TNX
 uv run nova-parser --mode extract --schema Output/schema.json Images/TNX_OFC_020.tif
 # → Output/武器.tsv, Output/防具.tsv 等
 
-# 複数ファイルを4並列で抽出
+# 単一ディレクトリを4並列で抽出（--output-dir 省略時は Output/DX3_EA/ に出力）
 uv run nova-parser --mode extract --parallel-files 4 --schema Output/schema.json Images/dx3/DX3_EA
 ```
 
