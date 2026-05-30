@@ -41,6 +41,12 @@ MODEL = "gemini-3.5-flash"
 FLASH_MODEL = "gemini-3.1-flash-lite"
 # MODEL = "gemini-3.1-pro-preview"
 # FLASH_MODEL = "gemini-3-flash-preview"
+
+# extract モードで Gemini 構造化抽出に使用するモデル（C1 fingerprint 用）。
+# documentai.extract_with_schema 内の generate_json 呼び出しでデフォルトとして使われる。
+# 変更時はここを更新（FLASH_MODEL との同期を維持）。
+EXTRACT_MODEL = FLASH_MODEL
+
 JSON_DECODE_RETRY_ATTEMPTS = 2
 JSON_DECODE_RETRY_WAIT_SECONDS = 1.0
 

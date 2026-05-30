@@ -1,4 +1,5 @@
 import argparse
+import functools
 import hashlib
 import json
 import re
@@ -7,13 +8,17 @@ import sys
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, TypeVar
 
 from dotenv import load_dotenv
 
 from nova_parser import gemini_backend
+from nova_parser.extract import (
+    _build_extract_fingerprints,
+    _CacheMiss,
+    _ExtractFingerprints,
+)
 from nova_parser.ocr import MIME_TYPES
 from nova_parser.perf import RETRY_WAIT_STEP, tracker
 
@@ -34,7 +39,10 @@ INITIAL_WAIT = 30
 
 # extract モードのキャッシュ形式／抽出挙動の版。プロンプト・モデル・正規化ロジック等の
 # 更新で既存キャッシュを全無効化したい場合は値を bump する。
-CACHE_VERSION = "1"
+#
+# C1 改修により、prompt/model/extractor/result_schema/validator の fingerprint が
+# 追加されたため、payload 形式変更時は "2" へ bump（旧 v1 キャッシュは自動無効化）。
+CACHE_VERSION = "2"
 
 T = TypeVar("T")
 
@@ -514,13 +522,6 @@ _NON_EXTRACT_TSV_SUFFIXES = (".docai.tsv", ".structured.tsv", ".schema.tsv")
 _UNSAFE_FILENAME_RE = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 
 
-@dataclass(frozen=True, slots=True)
-class _CacheMiss:
-    """extract キャッシュをヒットと見なせなかった理由。"""
-
-    reason: str
-
-
 def _schema_fingerprint(schema: dict) -> str:
     """スキーマ内容の SHA-256 を算出する。"""
     canonical = json.dumps(schema, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
@@ -528,8 +529,10 @@ def _schema_fingerprint(schema: dict) -> str:
     return f"sha256:{digest}"
 
 
+@functools.lru_cache(maxsize=None)
+@functools.lru_cache(maxsize=None)
 def _image_content_hash(image: Path) -> str:
-    """画像バイト列の SHA-256 を逐次読みで算出する。"""
+    """画像バイト列の SHA-256 を逐次読みで算出する（C1/Q1: プロセス内二重計算を lru で回避）。"""
     hasher = hashlib.sha256()
     with image.open("rb") as f:
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
@@ -663,11 +666,15 @@ def _sanitize_type_filename(name: str) -> str:
 
 def _load_extract_cache(
     image: Path,
-    schema_fingerprint: str,
+    fps: _ExtractFingerprints,
     schema: dict,
     output_dir: Path,
 ) -> dict | _CacheMiss:
-    """キャッシュが存在し全ての整合条件を満たす場合のみ結果 dict を返す。"""
+    """C1: キャッシュが存在し全 fingerprint 条件を満たす場合のみ結果 dict を返す。
+
+    fps 内の全値（schema/prompt/model/extractor/result_schema/validator）を比較。
+    いずれか不一致で具体的な _CacheMiss 理由を返す（stale 防止）。
+    """
     from nova_parser.json_contracts import validate_extract_result
 
     cache_path = _extract_cache_path(image, output_dir)
@@ -681,8 +688,20 @@ def _load_extract_cache(
         return _CacheMiss("corrupted")
     if payload.get("cache_version") != CACHE_VERSION:
         return _CacheMiss("cache_version_mismatch")
-    if payload.get("schema_hash") != schema_fingerprint:
+    if payload.get("schema_hash") != fps.schema:
         return _CacheMiss("schema_mismatch")
+    # C1 新規チェック群
+    if payload.get("prompt_fingerprint") != fps.prompt:
+        return _CacheMiss("prompt_mismatch")
+    if payload.get("model") != fps.model:
+        return _CacheMiss("model_mismatch")
+    if payload.get("extractor_id") != fps.extractor_id:
+        return _CacheMiss("extractor_mismatch")
+    if payload.get("result_schema_fingerprint") != fps.result_schema:
+        return _CacheMiss("result_schema_mismatch")
+    if payload.get("validator_fingerprint") != fps.validator:
+        return _CacheMiss("validator_mismatch")
+
     try:
         current_hash = _image_content_hash(image)
     except OSError:
@@ -703,11 +722,11 @@ def _load_extract_cache(
 
 def _save_extract_cache(
     image: Path,
-    schema_fingerprint: str,
+    fps: _ExtractFingerprints,
     result: dict,
     output_dir: Path,
 ) -> None:
-    """抽出結果と整合情報をキャッシュ JSON として永続化する。"""
+    """C1: 抽出結果 + 多層 fingerprint をキャッシュ JSON として永続化する。"""
     cache_path = _extract_cache_path(image, output_dir)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -716,7 +735,12 @@ def _save_extract_cache(
         relpath = str(image)
     payload = {
         "cache_version": CACHE_VERSION,
-        "schema_hash": schema_fingerprint,
+        "schema_hash": fps.schema,
+        "prompt_fingerprint": fps.prompt,
+        "model": fps.model,
+        "extractor_id": fps.extractor_id,
+        "result_schema_fingerprint": fps.result_schema,
+        "validator_fingerprint": fps.validator,
         "source_file": image.name,
         "source_relpath": relpath,
         "source_sha256": _image_content_hash(image),
@@ -977,6 +1001,12 @@ _CACHE_REASON_LABELS = [
     ("schema_mismatch", "スキーマ不一致"),
     ("source_mismatch", "画像不一致"),
     ("invalid_shape", "shape不正"),
+    # C1: 新 fingerprint 由来のミス理由（機械的再現性保証）
+    ("prompt_mismatch", "プロンプト不一致"),
+    ("model_mismatch", "モデル不一致"),
+    ("extractor_mismatch", "抽出器不一致"),
+    ("result_schema_mismatch", "結果スキーマ不一致"),
+    ("validator_mismatch", "バリデータ不一致"),
 ]
 
 
@@ -999,6 +1029,9 @@ def run_extract(
 
     output_dir を明示的に渡すことで OUTPUT_DIR グローバルへの依存を低減。
     省略時は従来通り OUTPUT_DIR を使用（後方互換）。
+
+    C1: 内部で _build_extract_fingerprints を 1 回計算し、キャッシュ load/save に伝播。
+    prompt/model/extractor/result_schema/validator のいずれかが変化すれば自動で再抽出。
     """
     from nova_parser.documentai import extract_with_schema
 
@@ -1007,7 +1040,13 @@ def run_extract(
     parallel_files = _validate_parallel_files(parallel_files)
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     _validate_extract_schema(schema)
-    schema_fp = _schema_fingerprint(schema)
+
+    # Q1/C1: ファイル内容がテスト等で run 間で変化するケースに備え、lru をクリア。
+    # 同一 run 内での二重計算は lru が防ぐ（source_mismatch 稀ケース含む）。
+    _image_content_hash.cache_clear()
+
+    # C1: run 単位で fingerprint を 1 回だけ構築（全画像で共有）
+    fps = _build_extract_fingerprints(schema)
 
     _ensure_unique_extract_caches(images)
     (resolved_output_dir / _EXTRACT_CACHE_SUBDIR).mkdir(parents=True, exist_ok=True)
@@ -1018,7 +1057,7 @@ def run_extract(
     miss_items: list[tuple[int, Path]] = []
 
     for index, img in enumerate(images):
-        cache_result = _load_extract_cache(img, schema_fp, schema, resolved_output_dir)
+        cache_result = _load_extract_cache(img, fps, schema, resolved_output_dir)
         if isinstance(cache_result, _CacheMiss):
             misses[cache_result.reason] = misses.get(cache_result.reason, 0) + 1
             miss_items.append((index, img))
@@ -1039,7 +1078,7 @@ def run_extract(
                 file_key=str(img),
                 item_label=img.name,
             )
-            _save_extract_cache(img, schema_fp, result, resolved_output_dir)
+            _save_extract_cache(img, fps, result, resolved_output_dir)
             results[index] = result
             print(f"完了{_format_perf_suffix(str(img))}")
     else:
@@ -1064,7 +1103,7 @@ def run_extract(
                 index, img = future_to_job[future]
                 try:
                     result = future.result()
-                    _save_extract_cache(img, schema_fp, result, resolved_output_dir)
+                    _save_extract_cache(img, fps, result, resolved_output_dir)
                     results[index] = result
                     print(f"完了: {img.name}{_format_perf_suffix(str(img))}")
                 except Exception as exc:

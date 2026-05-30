@@ -602,6 +602,62 @@ def test_run_extract_invalidates_on_image_content_change(monkeypatch, tmp_path):
     assert calls == ["first.png"]
 
 
+def test_run_extract_invalidates_on_prompt_fingerprint_change(monkeypatch, tmp_path):
+    """C1: prompt 契約版変更で自動無効化されること（CACHE_VERSION 以外で stale 防止）。"""
+    images = _make_images(tmp_path, "first.png")
+    schema_path = tmp_path / "schema.json"
+    _write_schema(schema_path)
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    calls: list[str] = []
+    monkeypatch.setattr(documentai_mod, "extract_with_schema", _extract_fake(calls=calls))
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", output_dir)
+
+    main_mod.run_extract(images, schema_path, parallel_files=1)
+    calls.clear()
+
+    # C1: extract モジュール内の compute を直接差替えて prompt fp を強制変更（2 回目ミス）
+    import nova_parser.extract as extract_mod
+
+    monkeypatch.setattr(extract_mod, "_compute_extract_prompt_fingerprint", lambda: "sha256:forced-different")
+    main_mod.run_extract(images, schema_path, parallel_files=1)
+
+    assert calls == ["first.png"]
+
+
+def test_run_extract_invalidates_on_extractor_id_change(monkeypatch, tmp_path):
+    """C1: extractor_id 変更で自動無効化（Custom Extractor 切替時の安全策）。"""
+    images = _make_images(tmp_path, "first.png")
+    schema_path = tmp_path / "schema.json"
+    _write_schema(schema_path)
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    calls: list[str] = []
+    monkeypatch.setattr(documentai_mod, "extract_with_schema", _extract_fake(calls=calls))
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", output_dir)
+
+    main_mod.run_extract(images, schema_path, parallel_files=1)
+    calls.clear()
+
+    # C1: extract モジュール内の _build を差替（extractor_id 変更で 2 回目ミス）
+    from dataclasses import replace
+
+    import nova_parser.extract as extract_mod
+
+    original_build = extract_mod._build_extract_fingerprints
+
+    def fake_build(schema):
+        fps = original_build(schema)
+        return replace(fps, extractor_id="custom-extractor/v99")
+
+    monkeypatch.setattr(extract_mod, "_build_extract_fingerprints", fake_build)
+    main_mod.run_extract(images, schema_path, parallel_files=1)
+
+    assert calls == ["first.png"]
+
+
 def test_run_extract_resumes_after_failure(monkeypatch, tmp_path):
     images = _make_images(tmp_path, "first.png", "second.png")
     schema_path = tmp_path / "schema.json"

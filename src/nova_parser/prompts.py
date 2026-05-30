@@ -59,6 +59,12 @@ SCHEMA_EXTRACT_PROMPT = """\
 --- OCR テキスト ---
 {ocr_text}"""
 
+# extract モードのプロンプト契約版情報（C1: キャッシュ fingerprint 多層化対応）。
+# SCHEMA_EXTRACT_PROMPT の本文、または documentai.py での schema_section 組み立て規則
+# （f"- {type_name}: {', '.join(fields)}" 形式など）を変更した場合はこの値を bump する。
+# これにより CACHE_VERSION を触らずに、prompt 由来の stale cache を機械的に無効化できる。
+EXTRACT_PROMPT_CONTRACT_VERSION = "1"
+
 GAMEDATA_PROMPT = """\
 この画像はTRPGルールブックのページです。
 画像に含まれるゲームデータを抽出してください。

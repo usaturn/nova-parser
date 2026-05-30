@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+# C1: extract モード用契約版情報（キャッシュ fingerprint 多層化）。
+# build_extract_result_schema または validate_extract_result のロジック・前提条件を
+# 変更した場合は該当バージョンを bump。CACHE_VERSION とは独立して狭い範囲で無効化可能。
+EXTRACT_RESULT_SCHEMA_VERSION = "1"
+EXTRACT_VALIDATOR_VERSION = "1"
+
 
 def _string_object_schema(*, additional_properties: bool | dict = False) -> dict:
     return {

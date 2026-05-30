@@ -613,9 +613,18 @@ uv run nova-parser --mode extract --parallel-files 4 --schema Output/schema.json
 
 extract モードは画像ごとに Gemini 抽出結果を `Output/cache/extract/{stem}.json` にキャッシュします。途中でエラー停止しても、同じ引数で再実行すれば成功済み画像のキャッシュを自動で再利用し、未処理画像だけを新規抽出します。
 
-- **キャッシュ有効判定**: `cache_version` 定数 + スキーマ内容の SHA-256 + 画像 bytes の SHA-256 + JSON shape、いずれかが不一致/破損ならキャッシュミスとして再抽出
-- **プロンプトやモデルを変更した場合**: `src/nova_parser/main.py` の `CACHE_VERSION` 定数を bump すると全キャッシュが無効化される
-- **手動キャッシュクリア**: `Output/cache/extract/` ディレクトリを削除
+- **キャッシュ有効判定（C1 強化）**: 以下の全条件を満たす場合のみヒット。
+  - `cache_version`（payload 形式版）
+  - スキーマ内容の SHA-256（`schema_hash`）
+  - 画像 bytes の SHA-256（`source_sha256`）
+  - prompt_fingerprint（`SCHEMA_EXTRACT_PROMPT` + 契約版）
+  - model（使用 Gemini モデル）
+  - extractor_id（"gemini-extract/v1" 等）
+  - result_schema_fingerprint / validator_fingerprint（json_contracts 契約版）
+  - JSON shape 検証（`validate_extract_result`）
+  いずれかが不一致/破損ならキャッシュミスとして再抽出。**プロンプト・モデル・抽出器変更時の stale リスクを機械的に排除**。
+- **プロンプト/モデル/抽出器変更時の運用**: `CACHE_VERSION` の手動 bump は不要（上記 fingerprint が自動で無効化）。`CACHE_VERSION` は payload 形式変更時のみ bump。
+- **手動キャッシュクリア**: `Output/cache/extract/` ディレクトリを削除（または該当 `{stem}.json` 削除）
 - **画像 stem の重複禁止**: 同じ stem を持つ入力（例: `a.png` と `a.jpg`）はキャッシュキーが衝突するため事前エラーになる
 - **実行終了時ログ**: `キャッシュ: ヒット N / 新規 M / ...` の形で内訳を表示
 
