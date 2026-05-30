@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 import argparse
-import functools
-import hashlib
 import json
-import re
 import shutil
 import sys
 import tempfile
@@ -17,6 +14,15 @@ from dotenv import load_dotenv
 
 import nova_parser.extract as extract_mod
 from nova_parser import gemini_backend
+from nova_parser.extract import (
+    _EXTRACT_CACHE_SUBDIR,
+    _NON_EXTRACT_TSV_SUFFIXES,
+    CACHE_VERSION,
+    _load_extract_cache,
+    _sanitize_type_filename,
+    _save_extract_cache,
+    _validate_extract_schema,
+)
 from nova_parser.ocr import MIME_TYPES
 from nova_parser.perf import RETRY_WAIT_STEP, tracker
 
@@ -35,12 +41,8 @@ DOCAI_TSV_GLOB = "*.docai*.tsv"
 MAX_RETRIES = 5
 INITIAL_WAIT = 30
 
-# extract モードのキャッシュ形式／抽出挙動の版。プロンプト・モデル・正規化ロジック等の
-# 更新で既存キャッシュを全無効化したい場合は値を bump する。
-#
-# C1 改修により、prompt/model/extractor/result_schema/validator の fingerprint が
-# 追加されたため、payload 形式変更時は "2" へ bump（旧 v1 キャッシュは自動無効化）。
-CACHE_VERSION = "2"
+# CACHE_VERSION は extract.py へ移動（M1 Phase B）。
+# ここでは extract_mod.CACHE_VERSION を参照する。
 
 T = TypeVar("T")
 
@@ -510,246 +512,26 @@ def run_docai_plain(images: list[Path]) -> None:
         print(f"完了{_format_perf_suffix(str(img))} -> {output_file}")
 
 
-_EXTRACT_CACHE_SUBDIR = Path("cache") / "extract"
+# 旧 _EXTRACT_CACHE_SUBDIR は extract.py へ移動。派生定数は imported 値で再定義。
 _EXTRACT_TSV_META_SUBDIR = _EXTRACT_CACHE_SUBDIR / "_meta"
 _EXTRACT_TSV_MANIFEST_NAME = "tsv_manifest.json"
 _EXTRACT_TSV_MANIFEST_VERSION = 1
 _EXTRACT_TSV_STAGE_PREFIX = ".extract_tsv_stage."
 _EXTRACT_TSV_BACKUP_PREFIX = ".extract_tsv_backup."
-_NON_EXTRACT_TSV_SUFFIXES = (".docai.tsv", ".structured.tsv", ".schema.tsv")
-_UNSAFE_FILENAME_RE = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
+
+# M1 移行期のテスト互換性 shim（monkeypatch されるシンボル）。
+# extract.py へ移動したシンボルを main 名前空間にも露出させ、既存テストを壊さない。
+# 将来的に test_main.py の extract 内部 monkeypatch を整理した時点で削除。
+CACHE_VERSION = CACHE_VERSION  # noqa: F811
+_load_extract_cache = _load_extract_cache  # noqa: F811
+_save_extract_cache = _save_extract_cache  # noqa: F811
+
+# さらに、extract_mod 経由でも到達可能にする（新しい呼び出しスタイル）。
+# テストが main_mod._save... を直接置換するケースをサポート。
 
 
-def _schema_fingerprint(schema: dict) -> str:
-    """スキーマ内容の SHA-256 を算出する。"""
-    canonical = json.dumps(schema, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
-    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-    return f"sha256:{digest}"
-
-
-@functools.lru_cache(maxsize=None)
-def _image_content_hash(image: Path) -> str:
-    """画像バイト列の SHA-256 を逐次読みで算出する（C1/Q1: プロセス内二重計算を lru で回避）。
-
-    Staged Review 20260530-224330 指摘1対応: 二重適用を解除。
-    注意: この cache_clear() 設計は「同一プロセス内で同一Pathのファイルが書き換わる」ケースに依存する。
-    よりロバストにする方法（mtime/size をキーにする等）は将来の改善課題。
-    """
-    hasher = hashlib.sha256()
-    with image.open("rb") as f:
-        for chunk in iter(lambda: f.read(1024 * 1024), b""):
-            hasher.update(chunk)
-    return f"sha256:{hasher.hexdigest()}"
-
-
-def _extract_cache_path(image: Path, output_dir: Path) -> Path:
-    """extract キャッシュの保存パスを返す。"""
-    return output_dir / _EXTRACT_CACHE_SUBDIR / f"{image.stem}.json"
-
-
-def _ensure_unique_extract_caches(images: list[Path]) -> None:
-    """extract キャッシュファイル名（image.stem）の衝突を事前検出する。"""
-    stem_to_images: dict[str, list[Path]] = {}
-    for img in images:
-        stem_to_images.setdefault(img.stem, []).append(img)
-
-    collisions = {stem: paths for stem, paths in stem_to_images.items() if len(paths) > 1}
-    if not collisions:
-        return
-
-    details = "; ".join(
-        f"{stem}.json <- {', '.join(str(p) for p in paths)}" for stem, paths in sorted(collisions.items())
-    )
-    msg = f"extract モードで stem が衝突しキャッシュを一意に決められません: {details}"
-    raise ValueError(msg)
-
-
-def _validate_schema_type_names(schema: dict) -> None:
-    """extract schema の matched 側 type_name をファイル名として検証する。"""
-
-    def invalid_type_name(name: object, reason: str) -> None:
-        if isinstance(name, str):
-            display_name = name.encode("unicode_escape").decode("ascii")
-        else:
-            display_name = repr(name)
-        msg = f'extract schema の type_name "{display_name}" はファイル名として使えません: {reason}'
-        raise ValueError(msg)
-
-    types = schema.get("types")
-    if not isinstance(types, list):
-        raise ValueError("extract schema の types は list である必要があります")
-
-    seen_type_names: set[str] = set()
-    seen_sanitized_names: dict[str, str] = {}
-    for index, type_data in enumerate(types):
-        if not isinstance(type_data, dict):
-            raise ValueError(f"extract schema の types[{index}] は object である必要があります")
-
-        type_name = type_data.get("type_name")
-        if not isinstance(type_name, str):
-            invalid_type_name(type_name, "文字列である必要があります")
-        if not type_name.strip():
-            invalid_type_name(type_name, "空文字や空白だけの名前は使えません")
-        if ".." in type_name:
-            invalid_type_name(type_name, '".." を含められません')
-        if "\\" in type_name:
-            invalid_type_name(type_name, "バックスラッシュを含められません")
-        if re.search(r"[\x00-\x1f]", type_name):
-            invalid_type_name(type_name, "制御文字を含められません")
-        if type_name.startswith("/"):
-            invalid_type_name(type_name, "先頭を / にできません")
-        if type_name.startswith("."):
-            invalid_type_name(type_name, "先頭を . にできません")
-        if type_name.endswith((".", " ")):
-            invalid_type_name(type_name, "末尾を . や空白にできません")
-        if len(type_name.encode("utf-8")) > 200:
-            invalid_type_name(type_name, "UTF-8 で 200 バイトを超えています")
-        if any(f"{type_name}.tsv".endswith(suffix) for suffix in _NON_EXTRACT_TSV_SUFFIXES):
-            invalid_type_name(type_name, "予約された suffix と衝突します")
-        if type_name.startswith("none_"):
-            invalid_type_name(type_name, "none_ は unmatched TSV 用の予約 prefix です")
-        if type_name in seen_type_names:
-            invalid_type_name(type_name, "schema 内で重複しています")
-        seen_type_names.add(type_name)
-        sanitized_name = _sanitize_type_filename(type_name)
-        if sanitized_name.startswith("none_"):
-            invalid_type_name(type_name, 'sanitize 後に "none_" で始まり unmatched TSV と衝突します')
-        if sanitized_name in seen_sanitized_names:
-            other_name = seen_sanitized_names[sanitized_name].encode("unicode_escape").decode("ascii")
-            invalid_type_name(type_name, f'sanitize 後のファイル名が "{other_name}" と衝突します')
-        seen_sanitized_names[sanitized_name] = type_name
-
-
-def _validate_extract_schema(schema: dict) -> None:
-    """extract schema の完全検証（type_name + fields）。
-
-    入口で厳密に保証することで、後段の KeyError / 不親切エラーを防止。
-    type_name 検証は既存 _validate_schema_type_names のロジックを維持（エラーメッセージ互換）。
-    """
-    # まず type_name 系検証（既存ロジックを委譲してメッセージ互換を確保）
-    _validate_schema_type_names(schema)
-
-    types = schema.get("types")
-    if not isinstance(types, list) or len(types) == 0:
-        raise ValueError("extract schema の types は 1 件以上の list である必要があります")
-
-    for t_index, type_data in enumerate(types):
-        if not isinstance(type_data, dict):
-            # ここは type_name 検証で既に弾かれているが防御
-            raise ValueError(f"extract schema の types[{t_index}] は object である必要があります")
-
-        fields = type_data.get("fields")
-        tn = type_data.get("type_name") or f"types[{t_index}]"
-        if not isinstance(fields, list) or len(fields) == 0:
-            raise ValueError(f'extract schema の "{tn}" の fields は 1 件以上の list[str] である必要があります')
-
-        seen_fields: set[str] = set()
-        prefix = f'extract schema の "{tn}"'
-        for f_index, field in enumerate(fields):
-            if not isinstance(field, str):
-                raise ValueError(f"{prefix} fields[{f_index}] は文字列である必要があります")
-            if not field.strip():
-                raise ValueError(f"{prefix} fields[{f_index}] は空文字や空白だけではいけません")
-            if re.search(r"[\x00-\x1f]", field):
-                raise ValueError(f"{prefix} fields[{f_index}] に制御文字を含められません")
-            if field == "source":
-                raise ValueError(f'{prefix} のフィールド名 "source" は予約語（TSV 出力列）と衝突します')
-            if field in seen_fields:
-                raise ValueError(f'{prefix} でフィールド名 "{field}" が重複しています')
-            seen_fields.add(field)
-
-
-def _sanitize_type_filename(name: str) -> str:
-    """モデル由来の type_name を OS 安全なファイル名断片に整える。"""
-    sanitized = _UNSAFE_FILENAME_RE.sub("_", name).strip(" .")
-    sanitized = sanitized.encode("utf-8")[:200].decode("utf-8", errors="ignore")
-    return sanitized or "_"
-
-
-def _load_extract_cache(
-    image: Path,
-    fps: extract_mod._ExtractFingerprints,
-    schema: dict,
-    output_dir: Path,
-) -> dict | extract_mod._CacheMiss:
-    """C1: キャッシュが存在し全 fingerprint 条件を満たす場合のみ結果 dict を返す。
-
-    fps 内の全値（schema/prompt/model/extractor/result_schema/validator）を比較。
-    いずれか不一致で具体的な extract_mod._CacheMiss 理由を返す（stale 防止）。
-    """
-    from nova_parser.json_contracts import validate_extract_result
-
-    cache_path = _extract_cache_path(image, output_dir)
-    if not cache_path.exists():
-        return extract_mod._CacheMiss("missing")
-    try:
-        payload = json.loads(cache_path.read_text(encoding="utf-8"))
-    except OSError, json.JSONDecodeError:
-        return extract_mod._CacheMiss("corrupted")
-    if not isinstance(payload, dict):
-        return extract_mod._CacheMiss("corrupted")
-    if payload.get("cache_version") != CACHE_VERSION:
-        return extract_mod._CacheMiss("cache_version_mismatch")
-    if payload.get("schema_hash") != fps.schema:
-        return extract_mod._CacheMiss("schema_mismatch")
-    # C1 新規チェック群
-    if payload.get("prompt_fingerprint") != fps.prompt:
-        return extract_mod._CacheMiss("prompt_mismatch")
-    if payload.get("model") != fps.model:
-        return extract_mod._CacheMiss("model_mismatch")
-    if payload.get("extractor_id") != fps.extractor_id:
-        return extract_mod._CacheMiss("extractor_mismatch")
-    if payload.get("result_schema_fingerprint") != fps.result_schema:
-        return extract_mod._CacheMiss("result_schema_mismatch")
-    if payload.get("validator_fingerprint") != fps.validator:
-        return extract_mod._CacheMiss("validator_mismatch")
-
-    try:
-        current_hash = _image_content_hash(image)
-    except OSError:
-        return extract_mod._CacheMiss("source_mismatch")
-    if payload.get("source_sha256") != current_hash:
-        return extract_mod._CacheMiss("source_mismatch")
-
-    result = {
-        "matched_types": payload.get("matched_types"),
-        "unmatched_types": payload.get("unmatched_types"),
-    }
-    try:
-        validate_extract_result(result, schema)
-    except TypeError, ValueError:
-        return extract_mod._CacheMiss("invalid_shape")
-    return result
-
-
-def _save_extract_cache(
-    image: Path,
-    fps: extract_mod._ExtractFingerprints,
-    result: dict,
-    output_dir: Path,
-) -> None:
-    """C1: 抽出結果 + 多層 fingerprint をキャッシュ JSON として永続化する。"""
-    cache_path = _extract_cache_path(image, output_dir)
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        relpath = str(image.resolve().relative_to(Path.cwd().resolve()))
-    except ValueError:
-        relpath = str(image)
-    payload = {
-        "cache_version": CACHE_VERSION,
-        "schema_hash": fps.schema,
-        "prompt_fingerprint": fps.prompt,
-        "model": fps.model,
-        "extractor_id": fps.extractor_id,
-        "result_schema_fingerprint": fps.result_schema,
-        "validator_fingerprint": fps.validator,
-        "source_file": image.name,
-        "source_relpath": relpath,
-        "source_sha256": _image_content_hash(image),
-        "matched_types": result.get("matched_types", []),
-        "unmatched_types": result.get("unmatched_types", []),
-    }
-    _atomic_write_text(cache_path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+# M1 Phase C 完了: コアロジックは extract.py 側にある。
+# 呼び出し元は extract_mod._xxx または上記の shim 名を介して参照可能。
 
 
 def _extract_tsv_manifest_path(output_dir: Path) -> Path:
@@ -1046,13 +828,13 @@ def run_extract(
     # Q1/C1: ファイル内容がテスト等で run 間で変化するケースに備え、lru をクリア。
     # 同一 run 内での二重計算は lru が防ぐ（source_mismatch 稀ケース含む）。
     # Staged Review 20260530-224330 指摘1対応済み。cache_clear() の限界については関数 docstring 参照。
-    _image_content_hash.cache_clear()
+    extract_mod._image_content_hash.cache_clear()
 
     # C1: run 単位で fingerprint を 1 回だけ構築（全画像で共有）
     fps = extract_mod._build_extract_fingerprints(schema)
 
-    _ensure_unique_extract_caches(images)
-    (resolved_output_dir / _EXTRACT_CACHE_SUBDIR).mkdir(parents=True, exist_ok=True)
+    extract_mod._ensure_unique_extract_caches(images)
+    (resolved_output_dir / extract_mod._EXTRACT_CACHE_SUBDIR).mkdir(parents=True, exist_ok=True)
 
     hits = 0
     misses: dict[str, int] = {key: 0 for key, _ in _CACHE_REASON_LABELS}
@@ -1060,7 +842,7 @@ def run_extract(
     miss_items: list[tuple[int, Path]] = []
 
     for index, img in enumerate(images):
-        cache_result = _load_extract_cache(img, fps, schema, resolved_output_dir)
+        cache_result = extract_mod._load_extract_cache(img, fps, schema, resolved_output_dir)
         if isinstance(cache_result, extract_mod._CacheMiss):
             misses[cache_result.reason] = misses.get(cache_result.reason, 0) + 1
             miss_items.append((index, img))
@@ -1081,7 +863,7 @@ def run_extract(
                 file_key=str(img),
                 item_label=img.name,
             )
-            _save_extract_cache(img, fps, result, resolved_output_dir)
+            extract_mod._save_extract_cache(img, fps, result, resolved_output_dir)
             results[index] = result
             print(f"完了{_format_perf_suffix(str(img))}")
     else:
@@ -1106,7 +888,7 @@ def run_extract(
                 index, img = future_to_job[future]
                 try:
                     result = future.result()
-                    _save_extract_cache(img, fps, result, resolved_output_dir)
+                    extract_mod._save_extract_cache(img, fps, result, resolved_output_dir)
                     results[index] = result
                     print(f"完了: {img.name}{_format_perf_suffix(str(img))}")
                 except Exception as exc:

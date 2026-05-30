@@ -576,7 +576,10 @@ def test_run_extract_invalidates_on_cache_version_change(monkeypatch, tmp_path):
     main_mod.run_extract(images, schema_path, parallel_files=1)
     calls.clear()
 
-    monkeypatch.setattr(main_mod, "CACHE_VERSION", "99")
+    # M1: CACHE_VERSION は extract モジュールへ移動。テストも追従。
+    import nova_parser.extract as extract_mod
+
+    monkeypatch.setattr(extract_mod, "CACHE_VERSION", "99")
     main_mod.run_extract(images, schema_path, parallel_files=1)
 
     assert calls == ["first.png"]
@@ -1274,7 +1277,10 @@ def test_run_extract_cancels_pending_jobs_when_cache_save_fails(monkeypatch, tmp
     def _raise_disk_full(*args, **kwargs):
         raise OSError("disk full")
 
-    monkeypatch.setattr(main_mod, "_save_extract_cache", _raise_disk_full)
+    # M1: _save_extract_cache は extract モジュールへ移動。テストも追従。
+    import nova_parser.extract as extract_mod
+
+    monkeypatch.setattr(extract_mod, "_save_extract_cache", _raise_disk_full)
 
     with pytest.raises(OSError, match="disk full"):
         main_mod.run_extract(images, schema_path, parallel_files=2)
