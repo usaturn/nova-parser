@@ -291,6 +291,8 @@ def _load_extract_cache(
     fps: _ExtractFingerprints,
     schema: dict,
     output_dir: Path,
+    *,
+    cache_version: str | None = None,
 ) -> dict | _CacheMiss:
     """C1: キャッシュが存在し全 fingerprint 条件を満たす場合のみ結果 dict を返す。
 
@@ -299,6 +301,7 @@ def _load_extract_cache(
     """
     from nova_parser.json_contracts import validate_extract_result
 
+    expected_cache_version = CACHE_VERSION if cache_version is None else cache_version
     cache_path = _extract_cache_path(image, output_dir)
     if not cache_path.exists():
         return _CacheMiss("missing")
@@ -308,7 +311,7 @@ def _load_extract_cache(
         return _CacheMiss("corrupted")
     if not isinstance(payload, dict):
         return _CacheMiss("corrupted")
-    if payload.get("cache_version") != CACHE_VERSION:
+    if payload.get("cache_version") != expected_cache_version:
         return _CacheMiss("cache_version_mismatch")
     if payload.get("schema_hash") != fps.schema:
         return _CacheMiss("schema_mismatch")
@@ -347,6 +350,8 @@ def _save_extract_cache(
     fps: _ExtractFingerprints,
     result: dict,
     output_dir: Path,
+    *,
+    cache_version: str | None = None,
 ) -> None:
     """C1: 抽出結果 + 多層 fingerprint をキャッシュ JSON として永続化する。"""
     cache_path = _extract_cache_path(image, output_dir)
@@ -356,7 +361,7 @@ def _save_extract_cache(
     except ValueError:
         relpath = str(image)
     payload = {
-        "cache_version": CACHE_VERSION,
+        "cache_version": CACHE_VERSION if cache_version is None else cache_version,
         "schema_hash": fps.schema,
         "prompt_fingerprint": fps.prompt,
         "model": fps.model,

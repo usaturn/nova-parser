@@ -585,6 +585,79 @@ def test_run_extract_invalidates_on_cache_version_change(monkeypatch, tmp_path):
     assert calls == ["first.png"]
 
 
+def test_run_extract_invalidates_on_main_cache_version_shim_change(monkeypatch, tmp_path):
+    images = _make_images(tmp_path, "first.png")
+    schema_path = tmp_path / "schema.json"
+    _write_schema(schema_path)
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    calls: list[str] = []
+    monkeypatch.setattr(documentai_mod, "extract_with_schema", _extract_fake(calls=calls))
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", output_dir)
+
+    main_mod.run_extract(images, schema_path, parallel_files=1)
+    calls.clear()
+
+    monkeypatch.setattr(main_mod, "CACHE_VERSION", "99")
+    main_mod.run_extract(images, schema_path, parallel_files=1)
+
+    assert calls == ["first.png"]
+
+
+def test_run_extract_uses_main_cache_load_shim(monkeypatch, tmp_path):
+    images = _make_images(tmp_path, "first.png")
+    schema_path = tmp_path / "schema.json"
+    _write_schema(schema_path)
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    load_calls: list[tuple[str, Path]] = []
+
+    def fake_load(image: Path, fps, schema: dict, output_dir: Path) -> dict:
+        load_calls.append((image.name, output_dir))
+        return {
+            "matched_types": [
+                {"type_name": "Card", "items": [{"name": "cached", "power": "7"}]},
+            ],
+            "unmatched_types": [],
+        }
+
+    def fail_extract_with_schema(*args, **kwargs) -> dict:
+        pytest.fail("extract_with_schema should not be called when main cache load shim returns a result")
+
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", output_dir)
+    monkeypatch.setattr(main_mod, "_load_extract_cache", fake_load)
+    monkeypatch.setattr(documentai_mod, "extract_with_schema", fail_extract_with_schema)
+
+    main_mod.run_extract(images, schema_path, parallel_files=1)
+
+    assert load_calls == [("first.png", output_dir)]
+    assert "cached\t7\tfirst.png" in (output_dir / "Card.tsv").read_text(encoding="utf-8")
+
+
+def test_run_extract_uses_main_cache_save_shim(monkeypatch, tmp_path):
+    images = _make_images(tmp_path, "first.png")
+    schema_path = tmp_path / "schema.json"
+    _write_schema(schema_path)
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    save_calls: list[tuple[str, Path, str]] = []
+
+    def fake_save(image: Path, fps, result: dict, output_dir: Path) -> None:
+        first_item = result["matched_types"][0]["items"][0]
+        save_calls.append((image.name, output_dir, first_item["name"]))
+
+    monkeypatch.setattr(documentai_mod, "extract_with_schema", _extract_fake())
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", output_dir)
+    monkeypatch.setattr(main_mod, "_save_extract_cache", fake_save)
+
+    main_mod.run_extract(images, schema_path, parallel_files=1)
+
+    assert save_calls == [("first.png", output_dir, "first")]
+
+
 def test_run_extract_invalidates_on_image_content_change(monkeypatch, tmp_path):
     images = _make_images(tmp_path, "first.png")
     schema_path = tmp_path / "schema.json"

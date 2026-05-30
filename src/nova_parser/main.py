@@ -17,10 +17,7 @@ from nova_parser import gemini_backend
 from nova_parser.extract import (
     _EXTRACT_CACHE_SUBDIR,
     _NON_EXTRACT_TSV_SUFFIXES,
-    CACHE_VERSION,
-    _load_extract_cache,
     _sanitize_type_filename,
-    _save_extract_cache,
     _validate_extract_schema,
 )
 from nova_parser.ocr import MIME_TYPES
@@ -520,14 +517,41 @@ _EXTRACT_TSV_STAGE_PREFIX = ".extract_tsv_stage."
 _EXTRACT_TSV_BACKUP_PREFIX = ".extract_tsv_backup."
 
 # M1 移行期のテスト互換性 shim（monkeypatch されるシンボル）。
-# extract.py へ移動したシンボルを main 名前空間にも露出させ、既存テストを壊さない。
-# 将来的に test_main.py の extract 内部 monkeypatch を整理した時点で削除。
-CACHE_VERSION = CACHE_VERSION  # noqa: F811
-_load_extract_cache = _load_extract_cache  # noqa: F811
-_save_extract_cache = _save_extract_cache  # noqa: F811
+# main_mod 側と extract_mod 側の両方の monkeypatch を受けられるよう wrapper にする。
+CACHE_VERSION = extract_mod.CACHE_VERSION
+_CACHE_VERSION_SHIM_DEFAULT = CACHE_VERSION
 
-# さらに、extract_mod 経由でも到達可能にする（新しい呼び出しスタイル）。
-# テストが main_mod._save... を直接置換するケースをサポート。
+
+def _effective_extract_cache_version() -> str:
+    """main 側 shim が差し替えられた場合はそれを優先する。"""
+    if CACHE_VERSION != _CACHE_VERSION_SHIM_DEFAULT:
+        return CACHE_VERSION
+    return extract_mod.CACHE_VERSION
+
+
+def _load_extract_cache(
+    image: Path,
+    fps: extract_mod._ExtractFingerprints,
+    schema: dict,
+    output_dir: Path,
+) -> dict | extract_mod._CacheMiss:
+    cache_version = _effective_extract_cache_version()
+    if cache_version == extract_mod.CACHE_VERSION:
+        return extract_mod._load_extract_cache(image, fps, schema, output_dir)
+    return extract_mod._load_extract_cache(image, fps, schema, output_dir, cache_version=cache_version)
+
+
+def _save_extract_cache(
+    image: Path,
+    fps: extract_mod._ExtractFingerprints,
+    result: dict,
+    output_dir: Path,
+) -> None:
+    cache_version = _effective_extract_cache_version()
+    if cache_version == extract_mod.CACHE_VERSION:
+        extract_mod._save_extract_cache(image, fps, result, output_dir)
+        return
+    extract_mod._save_extract_cache(image, fps, result, output_dir, cache_version=cache_version)
 
 
 # M1 Phase C 完了: コアロジックは extract.py 側にある。
@@ -842,7 +866,7 @@ def run_extract(
     miss_items: list[tuple[int, Path]] = []
 
     for index, img in enumerate(images):
-        cache_result = extract_mod._load_extract_cache(img, fps, schema, resolved_output_dir)
+        cache_result = _load_extract_cache(img, fps, schema, resolved_output_dir)
         if isinstance(cache_result, extract_mod._CacheMiss):
             misses[cache_result.reason] = misses.get(cache_result.reason, 0) + 1
             miss_items.append((index, img))
@@ -863,7 +887,7 @@ def run_extract(
                 file_key=str(img),
                 item_label=img.name,
             )
-            extract_mod._save_extract_cache(img, fps, result, resolved_output_dir)
+            _save_extract_cache(img, fps, result, resolved_output_dir)
             results[index] = result
             print(f"完了{_format_perf_suffix(str(img))}")
     else:
@@ -888,7 +912,7 @@ def run_extract(
                 index, img = future_to_job[future]
                 try:
                     result = future.result()
-                    extract_mod._save_extract_cache(img, fps, result, resolved_output_dir)
+                    _save_extract_cache(img, fps, result, resolved_output_dir)
                     results[index] = result
                     print(f"完了: {img.name}{_format_perf_suffix(str(img))}")
                 except Exception as exc:
