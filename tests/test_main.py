@@ -249,9 +249,8 @@ def test_run_extract_parallel_matches_sequential(monkeypatch, tmp_path):
 
     monkeypatch.setattr(documentai_mod, "extract_with_schema", fake_extract_with_schema_sequential)
     seq_output = tmp_path / "seq_extract"
-    monkeypatch.setattr(main_mod, "OUTPUT_DIR", seq_output)
     seq_output.mkdir()
-    main_mod.run_extract(images, schema_path, parallel_files=1)
+    main_mod.run_extract(images, schema_path, output_dir=seq_output, parallel_files=1)
 
     seq_texts = _read_output_texts(seq_output, "*.tsv")
 
@@ -284,9 +283,8 @@ def test_run_extract_parallel_matches_sequential(monkeypatch, tmp_path):
 
     monkeypatch.setattr(documentai_mod, "extract_with_schema", fake_extract_with_schema_parallel)
     par_output = tmp_path / "par_extract"
-    monkeypatch.setattr(main_mod, "OUTPUT_DIR", par_output)
     par_output.mkdir()
-    main_mod.run_extract(images, schema_path, parallel_files=2)
+    main_mod.run_extract(images, schema_path, output_dir=par_output, parallel_files=2)
 
     par_texts = _read_output_texts(par_output, "*.tsv")
 
@@ -1710,8 +1708,15 @@ def _setup_extract_output_dir_test(monkeypatch, tmp_path):
 
     observed: dict[str, Path] = {}
 
-    def fake_run_extract(images, schema_path, *, parallel_files: int = 1) -> None:
-        observed["output_dir"] = main_mod.OUTPUT_DIR
+    def fake_run_extract(
+        images: list[Path],
+        schema_path: Path,
+        *,
+        output_dir: Path | None = None,
+        parallel_files: int = 1,
+    ) -> None:
+        # 呼び出し時に渡された output_dir（またはグローバル）を記録して検証
+        observed["output_dir"] = output_dir if output_dir is not None else main_mod.OUTPUT_DIR
 
     monkeypatch.setattr(main_mod, "DEFAULT_OUTPUT_DIR", default_output)
     monkeypatch.setattr(main_mod, "OUTPUT_DIR", Path("Output"))

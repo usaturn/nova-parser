@@ -615,6 +615,45 @@ def _validate_schema_type_names(schema: dict) -> None:
         seen_sanitized_names[sanitized_name] = type_name
 
 
+def _validate_extract_schema(schema: dict) -> None:
+    """extract schema の完全検証（type_name + fields）。
+
+    入口で厳密に保証することで、後段の KeyError / 不親切エラーを防止。
+    type_name 検証は既存 _validate_schema_type_names のロジックを維持（エラーメッセージ互換）。
+    """
+    # まず type_name 系検証（既存ロジックを委譲してメッセージ互換を確保）
+    _validate_schema_type_names(schema)
+
+    types = schema.get("types")
+    if not isinstance(types, list) or len(types) == 0:
+        raise ValueError("extract schema の types は 1 件以上の list である必要があります")
+
+    for t_index, type_data in enumerate(types):
+        if not isinstance(type_data, dict):
+            # ここは type_name 検証で既に弾かれているが防御
+            raise ValueError(f"extract schema の types[{t_index}] は object である必要があります")
+
+        fields = type_data.get("fields")
+        tn = type_data.get("type_name") or f"types[{t_index}]"
+        if not isinstance(fields, list) or len(fields) == 0:
+            raise ValueError(f'extract schema の "{tn}" の fields は 1 件以上の list[str] である必要があります')
+
+        seen_fields: set[str] = set()
+        prefix = f'extract schema の "{tn}"'
+        for f_index, field in enumerate(fields):
+            if not isinstance(field, str):
+                raise ValueError(f"{prefix} fields[{f_index}] は文字列である必要があります")
+            if not field.strip():
+                raise ValueError(f"{prefix} fields[{f_index}] は空文字や空白だけではいけません")
+            if re.search(r"[\x00-\x1f]", field):
+                raise ValueError(f"{prefix} fields[{f_index}] に制御文字を含められません")
+            if field == "source":
+                raise ValueError(f'{prefix} のフィールド名 "source" は予約語（TSV 出力列）と衝突します')
+            if field in seen_fields:
+                raise ValueError(f'{prefix} でフィールド名 "{field}" が重複しています')
+            seen_fields.add(field)
+
+
 def _sanitize_type_filename(name: str) -> str:
     """モデル由来の type_name を OS 安全なファイル名断片に整える。"""
     sanitized = _UNSAFE_FILENAME_RE.sub("_", name).strip(" .")
@@ -949,17 +988,29 @@ def _format_cache_summary(hits: int, misses: dict[str, int]) -> str:
     return f"キャッシュ: ヒット {hits} / ミス {total_miss}"
 
 
-def run_extract(images: list[Path], schema_path: Path, *, parallel_files: int = 1) -> None:
-    """extract モード: スキーマに従って Document AI OCR → Gemini 構造化抽出 → 型別 TSV。"""
+def run_extract(
+    images: list[Path],
+    schema_path: Path,
+    *,
+    output_dir: Path | None = None,
+    parallel_files: int = 1,
+) -> None:
+    """extract モード: スキーマに従って Document AI OCR → Gemini 構造化抽出 → 型別 TSV。
+
+    output_dir を明示的に渡すことで OUTPUT_DIR グローバルへの依存を低減。
+    省略時は従来通り OUTPUT_DIR を使用（後方互換）。
+    """
     from nova_parser.documentai import extract_with_schema
+
+    resolved_output_dir = output_dir if output_dir is not None else OUTPUT_DIR
 
     parallel_files = _validate_parallel_files(parallel_files)
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
-    _validate_schema_type_names(schema)
+    _validate_extract_schema(schema)
     schema_fp = _schema_fingerprint(schema)
 
     _ensure_unique_extract_caches(images)
-    (OUTPUT_DIR / _EXTRACT_CACHE_SUBDIR).mkdir(parents=True, exist_ok=True)
+    (resolved_output_dir / _EXTRACT_CACHE_SUBDIR).mkdir(parents=True, exist_ok=True)
 
     hits = 0
     misses: dict[str, int] = {key: 0 for key, _ in _CACHE_REASON_LABELS}
@@ -967,7 +1018,7 @@ def run_extract(images: list[Path], schema_path: Path, *, parallel_files: int = 
     miss_items: list[tuple[int, Path]] = []
 
     for index, img in enumerate(images):
-        cache_result = _load_extract_cache(img, schema_fp, schema, OUTPUT_DIR)
+        cache_result = _load_extract_cache(img, schema_fp, schema, resolved_output_dir)
         if isinstance(cache_result, _CacheMiss):
             misses[cache_result.reason] = misses.get(cache_result.reason, 0) + 1
             miss_items.append((index, img))
@@ -976,16 +1027,19 @@ def run_extract(images: list[Path], schema_path: Path, *, parallel_files: int = 
             results[index] = cache_result
             print(f"キャッシュ再利用: {img.name}")
 
+    # 並列化条件: parallel_files > 1 かつ ミス画像が 2 件以上。
+    # 1 件以下なら ThreadPoolExecutor のオーバーヘッドを避け、逐次実行で十分。
+    # また 0 件（全キャッシュヒット）の場合はループ自体がスキップされる。
     use_parallel = parallel_files > 1 and len(miss_items) > 1
     if not use_parallel:
         for index, img in miss_items:
             print(f"処理中: {img.name} ... ", end="", flush=True)
             result = _run_with_retries(
-                lambda img=img: extract_with_schema(img, schema, output_dir=OUTPUT_DIR),
+                lambda img=img: extract_with_schema(img, schema, output_dir=resolved_output_dir),
                 file_key=str(img),
                 item_label=img.name,
             )
-            _save_extract_cache(img, schema_fp, result, OUTPUT_DIR)
+            _save_extract_cache(img, schema_fp, result, resolved_output_dir)
             results[index] = result
             print(f"完了{_format_perf_suffix(str(img))}")
     else:
@@ -996,7 +1050,9 @@ def run_extract(images: list[Path], schema_path: Path, *, parallel_files: int = 
             future_to_job = {
                 executor.submit(
                     _run_with_retries,
-                    lambda img=img: extract_with_schema(img, schema, show_progress=False, output_dir=OUTPUT_DIR),
+                    lambda img=img: extract_with_schema(
+                        img, schema, show_progress=False, output_dir=resolved_output_dir
+                    ),
                     file_key=str(img),
                     item_label=img.name,
                 ): (index, img)
@@ -1008,7 +1064,7 @@ def run_extract(images: list[Path], schema_path: Path, *, parallel_files: int = 
                 index, img = future_to_job[future]
                 try:
                     result = future.result()
-                    _save_extract_cache(img, schema_fp, result, OUTPUT_DIR)
+                    _save_extract_cache(img, schema_fp, result, resolved_output_dir)
                     results[index] = result
                     print(f"完了: {img.name}{_format_perf_suffix(str(img))}")
                 except Exception as exc:
@@ -1024,7 +1080,7 @@ def run_extract(images: list[Path], schema_path: Path, *, parallel_files: int = 
                 raise first_error
 
     ordered_results = [(img, results[idx]) for idx, img in enumerate(images)]
-    _write_extract_tsv_from_cache(ordered_results, schema, OUTPUT_DIR)
+    _write_extract_tsv_from_cache(ordered_results, schema, resolved_output_dir)
 
     print(_format_cache_summary(hits, misses))
 
@@ -1286,7 +1342,7 @@ def main():
         elif args.mode == "docai_plain":
             run_docai_plain(images)
         elif args.mode == "extract":
-            run_extract(images, Path(args.schema), parallel_files=args.parallel_files)
+            run_extract(images, Path(args.schema), output_dir=output_dir, parallel_files=args.parallel_files)
         elif args.mode == "crop":
             run_crop(images, min_card_area=args.min_card_area, max_card_area=args.max_card_area, padding=args.padding)
         else:

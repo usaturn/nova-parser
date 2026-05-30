@@ -44,9 +44,18 @@ def build_gamedata_result_schema() -> dict:
 
 
 def build_extract_result_schema(schema: dict) -> dict:
-    """extract モード用の JSON Schema を構築する。"""
+    """extract モード用の JSON Schema を構築する。
+
+    呼び出し元で _validate_extract_schema を通している前提。
+    空 types の場合は明確にエラー化して不自然なフォールバックを避ける。
+    """
+    types = schema.get("types") or []
+    if not types:
+        msg = "extract schema の types は 1 件以上の list である必要があります"
+        raise ValueError(msg)
+
     matched_type_schemas = []
-    for type_data in schema["types"]:
+    for type_data in types:
         fields = list(type_data["fields"])
         matched_type_schemas.append(
             {
