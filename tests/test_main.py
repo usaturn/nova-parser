@@ -217,6 +217,59 @@ def test_run_docai_allows_duplicate_stems_when_existing_output_skips_all(monkeyp
     assert existing_output.read_text(encoding="utf-8") == "existing\n"
 
 
+def test_run_docai_uses_output_dir_arg_over_global(monkeypatch, tmp_path):
+    """run_docai に output_dir 引数を渡すと、グローバル OUTPUT_DIR ではなく引数のディレクトリへ出力される。"""
+    images = _make_images(tmp_path, "alpha.png")
+    global_dir = tmp_path / "global_A"
+    global_dir.mkdir()
+    arg_dir = tmp_path / "arg_B"
+    arg_dir.mkdir()
+
+    def fake_extract_docai(
+        image_path: Path,
+        *,
+        show_progress: bool = True,
+        output_dir: Path = Path("Output"),
+    ) -> dict:
+        return {
+            "types": [
+                {
+                    "type_name": "Card",
+                    "items": [{"name": image_path.stem, "power": "1"}],
+                }
+            ],
+            "source_file": image_path.name,
+        }
+
+    monkeypatch.setattr(documentai_mod, "extract_docai", fake_extract_docai)
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", global_dir)
+
+    main_mod.run_docai(images, output_dir=arg_dir)
+
+    assert (arg_dir / "alpha.docai.tsv").exists(), "output_dir 引数のディレクトリに tsv が生成されるべき"
+    assert not list(global_dir.glob("*.docai.tsv")), "グローバル OUTPUT_DIR には出力されないべき"
+
+
+def test_run_docai_plain_uses_output_dir_arg_over_global(monkeypatch, tmp_path):
+    """run_docai_plain に output_dir 引数を渡すと、グローバル OUTPUT_DIR ではなく引数のディレクトリへ出力される。"""
+    images = _make_images(tmp_path, "alpha.png")
+    global_dir = tmp_path / "global_A"
+    global_dir.mkdir()
+    arg_dir = tmp_path / "arg_B"
+    arg_dir.mkdir()
+
+    def fake_ocr_with_documentai(image_path: Path) -> str:
+        return f"ocr result for {image_path.stem}"
+
+    monkeypatch.setattr(documentai_mod, "ocr_with_documentai", fake_ocr_with_documentai)
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", global_dir)
+
+    main_mod.run_docai_plain(images, output_dir=arg_dir)
+
+    assert (arg_dir / "alpha.docai_plain.md").exists(), "output_dir 引数のディレクトリに md が生成されるべき"
+    assert not list(global_dir.glob("*.docai_plain.md")), "グローバル OUTPUT_DIR には出力されないべき"
+
+
 def test_run_extract_parallel_matches_sequential(monkeypatch, tmp_path):
     images = _make_images(tmp_path, "first.png", "second.png")
     schema_path = tmp_path / "schema.json"
@@ -1674,7 +1727,7 @@ def test_main_passes_parallel_files_to_docai(monkeypatch, tmp_path):
 
     called: dict[str, object] = {}
 
-    def fake_run_docai(images: list[Path], *, parallel_files: int = 1) -> None:
+    def fake_run_docai(images: list[Path], *, output_dir: Path | None = None, parallel_files: int = 1) -> None:
         called["images"] = images
         called["parallel_files"] = parallel_files
 
@@ -1702,15 +1755,17 @@ def test_main_passes_parallel_files_to_docai(monkeypatch, tmp_path):
 
 
 def test_main_uses_output_dir_for_docai(monkeypatch, tmp_path):
+    """main() が (a) OUTPUT_DIR グローバルを設定し (b) run_docai に output_dir を引数で渡す、の両方を検証する。"""
     image_path = _make_images(tmp_path, "alpha.png")[0]
     output_dir = tmp_path / "custom" / "nested"
 
     called: dict[str, object] = {}
 
-    def fake_run_docai(images: list[Path], *, parallel_files: int = 1) -> None:
+    def fake_run_docai(images: list[Path], *, output_dir: Path | None = None, parallel_files: int = 1) -> None:
         called["images"] = images
         called["parallel_files"] = parallel_files
-        called["output_dir"] = main_mod.OUTPUT_DIR
+        called["output_dir_arg"] = output_dir  # (b) 引数経路
+        called["output_dir_global"] = main_mod.OUTPUT_DIR  # (a) グローバル副作用
         called["output_dir_exists"] = main_mod.OUTPUT_DIR.is_dir()
 
     monkeypatch.setattr(main_mod, "OUTPUT_DIR", Path("Output"))
@@ -1727,7 +1782,8 @@ def test_main_uses_output_dir_for_docai(monkeypatch, tmp_path):
     assert called == {
         "images": [image_path],
         "parallel_files": 1,
-        "output_dir": output_dir,
+        "output_dir_arg": output_dir,
+        "output_dir_global": output_dir,
         "output_dir_exists": True,
     }
     assert output_dir.is_dir()
@@ -1740,7 +1796,7 @@ def test_main_output_dir_does_not_persist_between_invocations(monkeypatch, tmp_p
     default_output = tmp_path / "default_output"
     observed_output_dirs: list[Path] = []
 
-    def fake_run_docai(images: list[Path], *, parallel_files: int = 1) -> None:
+    def fake_run_docai(images: list[Path], *, output_dir: Path | None = None, parallel_files: int = 1) -> None:
         observed_output_dirs.append(main_mod.OUTPUT_DIR)
 
     monkeypatch.setattr(main_mod, "DEFAULT_OUTPUT_DIR", default_output)
@@ -1769,7 +1825,7 @@ def test_main_restores_output_dir_when_run_fails(monkeypatch, tmp_path):
     initial_output = tmp_path / "initial_output"
     custom_output = tmp_path / "custom_output"
 
-    def fail_run_docai(images: list[Path], *, parallel_files: int = 1) -> None:
+    def fail_run_docai(images: list[Path], *, output_dir: Path | None = None, parallel_files: int = 1) -> None:
         raise RuntimeError("boom")
 
     monkeypatch.setattr(main_mod, "OUTPUT_DIR", initial_output)
@@ -1786,6 +1842,54 @@ def test_main_restores_output_dir_when_run_fails(monkeypatch, tmp_path):
 
     assert main_mod.OUTPUT_DIR == initial_output
     assert custom_output.is_dir()
+
+
+def test_main_docai_passes_output_dir_argument_to_run_docai(monkeypatch, tmp_path):
+    """main() が run_docai に output_dir を引数として渡すことを検証する。(AC-1 dispatch 配線)"""
+    image_path = _make_images(tmp_path, "alpha.png")[0]
+    custom_output = tmp_path / "custom_output"
+
+    received: dict[str, object] = {}
+
+    def fake_run_docai(images: list[Path], *, output_dir: Path | None = None, parallel_files: int = 1) -> None:
+        received["output_dir"] = output_dir  # フォールバックなし・引数値そのものを記録
+
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", Path("Output"))
+    monkeypatch.setattr(main_mod, "resolve_images", lambda files: [image_path])
+    monkeypatch.setattr(main_mod, "run_docai", fake_run_docai)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["nova-parser", "--mode", "docai", "--output-dir", str(custom_output), str(image_path)],
+    )
+
+    main_mod.main()
+
+    assert received["output_dir"] == custom_output
+
+
+def test_main_docai_plain_passes_output_dir_argument_to_run_docai_plain(monkeypatch, tmp_path):
+    """main() が run_docai_plain に output_dir を引数として渡すことを検証する。(AC-2 dispatch 配線)"""
+    image_path = _make_images(tmp_path, "alpha.png")[0]
+    custom_output = tmp_path / "custom_output"
+
+    received: dict[str, object] = {}
+
+    def fake_run_docai_plain(images: list[Path], *, output_dir: Path | None = None) -> None:
+        received["output_dir"] = output_dir  # フォールバックなし・引数値そのものを記録
+
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", Path("Output"))
+    monkeypatch.setattr(main_mod, "resolve_images", lambda files: [image_path])
+    monkeypatch.setattr(main_mod, "run_docai_plain", fake_run_docai_plain)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["nova-parser", "--mode", "docai_plain", "--output-dir", str(custom_output), str(image_path)],
+    )
+
+    main_mod.main()
+
+    assert received["output_dir"] == custom_output
 
 
 def test_main_output_dir_applies_to_schema_propose_default_input(monkeypatch, tmp_path):
@@ -1978,19 +2082,69 @@ def test_main_extract_does_not_derive_for_parent_dir_argument(monkeypatch, tmp_p
 
 
 def test_main_non_extract_mode_does_not_derive_for_single_directory(monkeypatch, tmp_path):
-    """extract 以外（docai）は単一ディレクトリ入力でも派生しない。"""
+    """docai/docai_plain/extract 以外（plain 等）は単一ディレクトリ入力でも OUTPUT_DIR を派生しない。(AC-10)"""
     default_output = tmp_path / "Output"
     input_dir = tmp_path / "DX3_EA"
     _make_images(input_dir, "alpha.png")
 
     observed: dict[str, Path] = {}
 
-    def fake_run_docai(images, *, parallel_files: int = 1) -> None:
+    def fake_run_plain(images: list[Path]) -> None:
         observed["output_dir"] = main_mod.OUTPUT_DIR
 
     monkeypatch.setattr(main_mod, "DEFAULT_OUTPUT_DIR", default_output)
     monkeypatch.setattr(main_mod, "OUTPUT_DIR", Path("Output"))
+    monkeypatch.setattr(main_mod, "run_plain", fake_run_plain)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["nova-parser", "--mode", "plain", str(input_dir)],
+    )
+
+    main_mod.main()
+
+    assert observed["output_dir"] == default_output
+
+
+# ---------------------------------------------------------------------------
+# docai / docai_plain モード: --output-dir 未指定時の Output/[base name] 派生テスト
+# AC-1 〜 AC-8
+# ---------------------------------------------------------------------------
+
+
+def _setup_docai_output_dir_test(monkeypatch, tmp_path):
+    """docai 出力先派生テスト共通の前準備。default Output とモック済み observed dict を返す。"""
+    default_output = tmp_path / "Output"
+    observed: dict[str, Path] = {}
+
+    def fake_run_docai(
+        images: list[Path],
+        *,
+        output_dir: Path | None = None,
+        parallel_files: int = 1,
+    ) -> None:
+        observed["output_dir"] = output_dir if output_dir is not None else main_mod.OUTPUT_DIR
+
+    def fake_run_docai_plain(
+        images: list[Path],
+        *,
+        output_dir: Path | None = None,
+    ) -> None:
+        observed["output_dir"] = output_dir if output_dir is not None else main_mod.OUTPUT_DIR
+
+    monkeypatch.setattr(main_mod, "DEFAULT_OUTPUT_DIR", default_output)
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", Path("Output"))
     monkeypatch.setattr(main_mod, "run_docai", fake_run_docai)
+    monkeypatch.setattr(main_mod, "run_docai_plain", fake_run_docai_plain)
+    return default_output, observed
+
+
+def test_main_docai_derives_output_subdir_for_single_directory(monkeypatch, tmp_path):
+    """AC-1: --mode docai 単一ディレクトリ + --output-dir 未指定 → OUTPUT_DIR が DEFAULT_OUTPUT_DIR/[名] になる。"""
+    default_output, observed = _setup_docai_output_dir_test(monkeypatch, tmp_path)
+    input_dir = tmp_path / "DX3_EA"
+    _make_images(input_dir, "alpha.png")
+
     monkeypatch.setattr(
         sys,
         "argv",
@@ -1999,7 +2153,216 @@ def test_main_non_extract_mode_does_not_derive_for_single_directory(monkeypatch,
 
     main_mod.main()
 
+    assert observed["output_dir"] == default_output / "DX3_EA"
+    assert (default_output / "DX3_EA").is_dir()
+
+
+def test_main_docai_plain_derives_output_subdir_for_single_directory(monkeypatch, tmp_path):
+    """AC-2: --mode docai_plain 単一ディレクトリ + --output-dir 未指定 → OUTPUT_DIR が DEFAULT_OUTPUT_DIR/[名] になる。"""  # noqa: E501
+    default_output, observed = _setup_docai_output_dir_test(monkeypatch, tmp_path)
+    input_dir = tmp_path / "DX3_EA"
+    _make_images(input_dir, "alpha.png")
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["nova-parser", "--mode", "docai_plain", str(input_dir)],
+    )
+
+    main_mod.main()
+
+    assert observed["output_dir"] == default_output / "DX3_EA"
+    assert (default_output / "DX3_EA").is_dir()
+
+
+def test_main_docai_does_not_derive_for_single_file(monkeypatch, tmp_path):
+    """AC-3: --mode docai 単一ファイル → 派生せず DEFAULT_OUTPUT_DIR になる。"""
+    default_output, observed = _setup_docai_output_dir_test(monkeypatch, tmp_path)
+    image_path = _make_images(tmp_path / "DX3_EA", "alpha.png")[0]
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["nova-parser", "--mode", "docai", str(image_path)],
+    )
+
+    main_mod.main()
+
     assert observed["output_dir"] == default_output
+
+
+def test_main_docai_plain_does_not_derive_for_single_file(monkeypatch, tmp_path):
+    """AC-4: --mode docai_plain 単一ファイル → 派生せず DEFAULT_OUTPUT_DIR になる。"""
+    default_output, observed = _setup_docai_output_dir_test(monkeypatch, tmp_path)
+    image_path = _make_images(tmp_path / "DX3_EA", "alpha.png")[0]
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["nova-parser", "--mode", "docai_plain", str(image_path)],
+    )
+
+    main_mod.main()
+
+    assert observed["output_dir"] == default_output
+
+
+def test_main_docai_does_not_derive_for_multiple_args(monkeypatch, tmp_path):
+    """AC-5: --mode docai 複数引数 → 派生せず DEFAULT_OUTPUT_DIR になる。"""
+    default_output, observed = _setup_docai_output_dir_test(monkeypatch, tmp_path)
+    input_dir = tmp_path / "DX3_EA"
+    _make_images(input_dir, "alpha.png")
+    extra_file = _make_images(tmp_path / "other", "beta.png")[0]
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["nova-parser", "--mode", "docai", str(input_dir), str(extra_file)],
+    )
+
+    main_mod.main()
+
+    assert observed["output_dir"] == default_output
+
+
+def test_main_docai_does_not_derive_when_files_omitted(monkeypatch, tmp_path):
+    """AC-6: --mode docai 引数省略（Images/ 走査）→ 派生せず DEFAULT_OUTPUT_DIR になる。"""
+    default_output, observed = _setup_docai_output_dir_test(monkeypatch, tmp_path)
+    monkeypatch.setattr(main_mod, "resolve_images", lambda files: _make_images(tmp_path / "imgs", "alpha.png"))
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["nova-parser", "--mode", "docai"],
+    )
+
+    main_mod.main()
+
+    assert observed["output_dir"] == default_output
+
+
+def test_main_docai_plain_does_not_derive_for_multiple_args(monkeypatch, tmp_path):
+    """AC-5（docai_plain 対称）: --mode docai_plain 複数引数 → 派生せず DEFAULT_OUTPUT_DIR になる。"""
+    default_output, observed = _setup_docai_output_dir_test(monkeypatch, tmp_path)
+    input_dir = tmp_path / "DX3_EA"
+    _make_images(input_dir, "alpha.png")
+    extra_file = _make_images(tmp_path / "other", "beta.png")[0]
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["nova-parser", "--mode", "docai_plain", str(input_dir), str(extra_file)],
+    )
+
+    main_mod.main()
+
+    assert observed["output_dir"] == default_output
+
+
+def test_main_docai_plain_does_not_derive_when_files_omitted(monkeypatch, tmp_path):
+    """AC-6（docai_plain 対称）: --mode docai_plain 引数省略（Images/ 走査）→ 派生せず DEFAULT_OUTPUT_DIR になる。"""
+    default_output, observed = _setup_docai_output_dir_test(monkeypatch, tmp_path)
+    monkeypatch.setattr(main_mod, "resolve_images", lambda files: _make_images(tmp_path / "imgs", "alpha.png"))
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["nova-parser", "--mode", "docai_plain"],
+    )
+
+    main_mod.main()
+
+    assert observed["output_dir"] == default_output
+
+
+def test_main_docai_explicit_output_dir_takes_precedence(monkeypatch, tmp_path):
+    """AC-7: --mode docai 単一ディレクトリ + --output-dir 明示 → 指定先が優先され派生しない。"""
+    default_output, observed = _setup_docai_output_dir_test(monkeypatch, tmp_path)
+    input_dir = tmp_path / "DX3_EA"
+    _make_images(input_dir, "alpha.png")
+    custom_output = tmp_path / "custom"
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "nova-parser",
+            "--mode",
+            "docai",
+            "--output-dir",
+            str(custom_output),
+            str(input_dir),
+        ],
+    )
+
+    main_mod.main()
+
+    assert observed["output_dir"] == custom_output
+
+
+def test_main_docai_does_not_derive_for_parent_dir_argument(monkeypatch, tmp_path):
+    """AC-8: --mode docai 末尾 '..' ディレクトリ → 派生せず DEFAULT_OUTPUT_DIR にフォールバックする。"""
+    default_output, observed = _setup_docai_output_dir_test(monkeypatch, tmp_path)
+    input_dir = tmp_path / "DX3_EA"
+    input_dir.mkdir()
+    _make_images(tmp_path, "alpha.png")
+    parent_arg = input_dir / ".."  # is_dir() は True だが name は ".."
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["nova-parser", "--mode", "docai", str(parent_arg)],
+    )
+
+    main_mod.main()
+
+    assert observed["output_dir"] == default_output
+    assert default_output.is_dir()
+
+
+def test_main_docai_plain_explicit_output_dir_takes_precedence(monkeypatch, tmp_path):
+    """AC-7（docai_plain 対称）: --mode docai_plain 単一ディレクトリ + --output-dir 明示 → 指定先優先、派生しない。"""
+    default_output, observed = _setup_docai_output_dir_test(monkeypatch, tmp_path)
+    input_dir = tmp_path / "DX3_EA"
+    _make_images(input_dir, "alpha.png")
+    custom_output = tmp_path / "custom"
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "nova-parser",
+            "--mode",
+            "docai_plain",
+            "--output-dir",
+            str(custom_output),
+            str(input_dir),
+        ],
+    )
+
+    main_mod.main()
+
+    assert observed["output_dir"] == custom_output
+
+
+def test_main_docai_plain_does_not_derive_for_parent_dir_argument(monkeypatch, tmp_path):
+    """AC-8（docai_plain 対称）: --mode docai_plain 末尾 '..' → 派生せず DEFAULT_OUTPUT_DIR フォールバック。"""
+    default_output, observed = _setup_docai_output_dir_test(monkeypatch, tmp_path)
+    input_dir = tmp_path / "DX3_EA"
+    input_dir.mkdir()
+    _make_images(tmp_path, "alpha.png")
+    parent_arg = input_dir / ".."  # is_dir() は True だが name は ".."
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["nova-parser", "--mode", "docai_plain", str(parent_arg)],
+    )
+
+    main_mod.main()
+
+    assert observed["output_dir"] == default_output
+    assert default_output.is_dir()
 
 
 # ---------------------------------------------------------------------------

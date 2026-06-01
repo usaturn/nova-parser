@@ -28,6 +28,7 @@ nova-parser-claude-handoff = "nova_parser.claude_handoff:main"
 
 [dependency-groups]
 dev = [
+    "headroom-ai[all]>=0.22.2",
     "httpx>=0.28.1",
     "pytest>=9.0.2",
     "taskipy",

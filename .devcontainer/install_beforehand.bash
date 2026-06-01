@@ -11,12 +11,14 @@ sudo perl -pi -e 's/# ja_JP\.UTF-8/ja_JP.UTF-8/' /etc/locale.gen
 sudo locale-gen
 echo "Locale setup completed."
 
-echo "Installing Claude CLI..."
+echo "Installing Claude Code..."
 curl -fsSL https://claude.ai/install.sh | bash
 echo "Installing Codex CLI..."
 yarn global add @openai/codex@latest
 yarn global add @google/gemini-cli@latest
 yarn global add @github/copilot@latest
+echo "Installing Grok Build..."
+curl -fsSL https://x.ai/cli/install.sh | bash
 
 YARN_GLOBAL_BIN="$(yarn global bin)"
 export PATH="$YARN_GLOBAL_BIN:$HOME/.local/bin:$PATH"

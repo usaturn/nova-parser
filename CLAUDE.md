@@ -22,9 +22,14 @@ uv run nova-parser
 # 依存パッケージの追加
 uv add <package>
 
+# 開発補助ツールの追加（dev group）
+uv add --dev <package>
+
 # lint・フォーマット
 uv run task ruff
 ```
+
+Headroom 等の開発補助 CLI ツールは `uv tool` を使わず、dev dependency group（`uv add --dev`）に追加し `uv run` 経由で実行すること。dev グループに入れることでランタイム依存には含めない。
 
 ## アーキテクチャ
 

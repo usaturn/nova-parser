@@ -35,6 +35,8 @@ OUTPUT_DIR = DEFAULT_OUTPUT_DIR
 
 DOCAI_TSV_GLOB = "*.docai*.tsv"
 
+DERIVE_OUTPUT_SUBDIR_MODES = {"extract", "docai", "docai_plain"}
+
 MAX_RETRIES = 5
 INITIAL_WAIT = 30
 
@@ -44,8 +46,8 @@ INITIAL_WAIT = 30
 T = TypeVar("T")
 
 
-def _resolve_extract_output_subdir(file_args: list[str]) -> Path | None:
-    """extract モードで単一ディレクトリ指定時、その base name を返す。それ以外は None。"""
+def _resolve_output_subdir(file_args: list[str]) -> Path | None:
+    """単一ディレクトリ指定時、その base name を返す。それ以外は None。"""
     if len(file_args) != 1:
         return None
     p = Path(file_args[0])
@@ -490,12 +492,18 @@ def run_structured_tsv(images: list[Path]) -> None:
         print(f"完了{_format_perf_suffix(str(img))} -> {output_file}")
 
 
-def run_docai_plain(images: list[Path]) -> None:
-    """docai_plain モード: Document AI で OCR → Markdown として出力する。"""
+def run_docai_plain(images: list[Path], *, output_dir: Path | None = None) -> None:
+    """docai_plain モード: Document AI で OCR → Markdown として出力する。
+
+    output_dir を明示的に渡すことで OUTPUT_DIR グローバルへの依存を低減。
+    省略時は従来通り OUTPUT_DIR を使用（後方互換）。
+    """
     from nova_parser.documentai import ocr_with_documentai
 
+    resolved_output_dir = output_dir if output_dir is not None else OUTPUT_DIR
+
     for img in images:
-        output_file = OUTPUT_DIR / f"{img.stem}.docai_plain.md"
+        output_file = resolved_output_dir / f"{img.stem}.docai_plain.md"
         if output_file.exists():
             print(f"スキップ: {output_file}（既に存在します）")
             continue
@@ -1007,15 +1015,20 @@ def run_crop(images: list[Path], *, min_card_area: float, max_card_area: float, 
         print(f"完了{_format_perf_suffix(str(img))} -> {len(results)} 件のカード領域を検出 ({meta_file})")
 
 
-def run_docai(images: list[Path], *, parallel_files: int = 1) -> None:
-    """docai モード: Document AI で OCR → Gemini で構造化抽出 → TSV 出力。"""
+def run_docai(images: list[Path], *, output_dir: Path | None = None, parallel_files: int = 1) -> None:
+    """docai モード: Document AI で OCR → Gemini で構造化抽出 → TSV 出力。
+
+    output_dir を明示的に渡すことで OUTPUT_DIR グローバルへの依存を低減。
+    省略時は従来通り OUTPUT_DIR を使用（後方互換）。
+    """
     from nova_parser.documentai import extract_docai
 
+    resolved_output_dir = output_dir if output_dir is not None else OUTPUT_DIR
     parallel_files = _validate_parallel_files(parallel_files)
 
     work_items: list[tuple[int, Path, Path]] = []
     for index, img in enumerate(images):
-        output_file = OUTPUT_DIR / f"{img.stem}.docai.tsv"
+        output_file = resolved_output_dir / f"{img.stem}.docai.tsv"
         if output_file.exists():
             print(f"スキップ: {output_file}（既に存在します）")
             continue
@@ -1027,7 +1040,7 @@ def run_docai(images: list[Path], *, parallel_files: int = 1) -> None:
         for _, img, output_file in work_items:
             print(f"処理中: {img.name} ... ", end="", flush=True)
             result = _run_with_retries(
-                lambda img=img: extract_docai(img, output_dir=OUTPUT_DIR),
+                lambda img=img: extract_docai(img, output_dir=resolved_output_dir),
                 file_key=str(img),
                 item_label=img.name,
             )
@@ -1043,7 +1056,7 @@ def run_docai(images: list[Path], *, parallel_files: int = 1) -> None:
         future_to_job = {
             executor.submit(
                 _run_with_retries,
-                lambda img=img: extract_docai(img, show_progress=False, output_dir=OUTPUT_DIR),
+                lambda img=img: extract_docai(img, show_progress=False, output_dir=resolved_output_dir),
                 file_key=str(img),
                 item_label=img.name,
             ): (index, img, output_file)
@@ -1109,7 +1122,7 @@ def main():
         type=Path,
         default=None,
         help="結果を保存するディレクトリ（デフォルト: Output。"
-        "extract モードかつ単一ディレクトリ入力時は Output/[ディレクトリ名]）",
+        "extract / docai / docai_plain モードかつ単一ディレクトリ入力時は Output/[ディレクトリ名]）",
     )
     parser.add_argument(
         "--min-card-area",
@@ -1148,8 +1161,8 @@ def main():
         output_dir: Path = args.output_dir
     else:
         output_dir = DEFAULT_OUTPUT_DIR
-        if args.mode == "extract":
-            subdir = _resolve_extract_output_subdir(args.files)
+        if args.mode in DERIVE_OUTPUT_SUBDIR_MODES:
+            subdir = _resolve_output_subdir(args.files)
             if subdir is not None:
                 output_dir = DEFAULT_OUTPUT_DIR / subdir
 
@@ -1186,9 +1199,9 @@ def main():
         elif args.mode == "gamedata":
             run_gamedata(images)
         elif args.mode == "docai":
-            run_docai(images, parallel_files=args.parallel_files)
+            run_docai(images, output_dir=output_dir, parallel_files=args.parallel_files)
         elif args.mode == "docai_plain":
-            run_docai_plain(images)
+            run_docai_plain(images, output_dir=output_dir)
         elif args.mode == "extract":
             run_extract(images, Path(args.schema), output_dir=output_dir, parallel_files=args.parallel_files)
         elif args.mode == "crop":

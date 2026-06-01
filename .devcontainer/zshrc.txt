@@ -121,6 +121,7 @@ function update(){
     yarn global add @openai/codex@latest
     yarn global add @github/copilot@latest
     yarn global add @google/gemini-cli@latest
+    grok update
 }
 
 tmuxstart
