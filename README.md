@@ -2,7 +2,7 @@
 
 Gemini と Document AI を使って、書籍やゲーム資料の画像/PDF から OCR・構造化抽出を行う CLI ツールです。
 
-入力は `Images/` 配下のファイル、または CLI で指定した画像/PDF/ディレクトリです。結果はデフォルトで `Output/` 配下に Markdown、JSON、TSV、クロップ画像として保存され、`--output-dir` で変更できます。
+入力は `Images/` 配下のファイル、または CLI で指定した画像/PDF/ディレクトリです。結果はデフォルトで `Output/` 配下に Markdown、JSON、TSV、クロップ画像として保存され、`--output-dir` で変更できます。`schema_propose` のスキーマ提案 JSON はデフォルトで `schema/` 配下に保存され、`--schema-output` で変更できます。
 
 ## セットアップ
 
@@ -64,6 +64,7 @@ uv run nova-parser --output-dir Results --mode docai Images/TNX_OFC_020.tif
 # docai TSV からスキーマ提案を生成
 uv run nova-parser --mode schema_propose
 uv run nova-parser --mode schema_propose Output/TNX_OFC_020.docai.tsv
+uv run nova-parser --mode schema_propose --schema-output schema/custom_schema.json Output/TNX_OFC_020.docai.tsv
 
 # 確定スキーマに従って型別 TSV を抽出
 uv run nova-parser --mode extract --schema Output/schema.json Images/TNX_OFC_020.tif
@@ -79,7 +80,7 @@ uv run nova-parser-regional Images/ --port 8000
 
 - 対応入力形式は `.png`、`.jpg`、`.jpeg`、`.gif`、`.bmp`、`.webp`、`.tiff`、`.tif`、`.pdf`
 - ディレクトリを指定した場合は直下の対応ファイルだけを処理
-- `schema_propose` は画像ではなく `*.docai.tsv` を入力として扱う
+- `schema_propose` は画像ではなく `*.docai.tsv` を入力として扱う。TSV を明示指定した場合は、デフォルトの `Output/` を検証・作成せずに `schema/` または `--schema-output` へ出力する
 - `extract` では `--schema` が必須
 - `crop` は PDF 非対応
 
@@ -87,7 +88,7 @@ uv run nova-parser-regional Images/ --port 8000
 
 主な出力は次の通りです。
 
-`Output/` は未指定時の既定出力先です。`--output-dir Results` を指定した場合は、以下の `Output/` を `Results/` に読み替えてください。
+`Output/` は `schema_propose` 以外の未指定時の既定出力先です。`--output-dir Results` を指定した場合は、以下の `Output/` を `Results/` に読み替えてください。`schema_propose` の出力先は `--schema-output` または `schema/` 配下です。
 
 - `plain`: `Output/*.plain.md`
 - `structured`: `Output/*.structured.json`
@@ -96,7 +97,7 @@ uv run nova-parser-regional Images/ --port 8000
 - `schema`: `Output/*.schema.tsv`
 - `docai_plain`: `Output/*.docai_plain.md`
 - `docai`: `Output/*.docai.tsv`
-- `schema_propose`: `Output/schema_proposal.json`
+- `schema_propose`: `schema/schema_proposal.json`、単一ディレクトリ入力時は `schema/schema_[入力ディレクトリ名].json`（`--schema-output` 指定時はそのパス）
 - `extract`: `Output/*.tsv`、`Output/none_*.tsv`、`Output/cache/extract/*.json`（`--output-dir` 省略かつ単一ディレクトリ入力時は `Output/[ディレクトリ名]/` 配下に出力）
 - `crop`: `Output/*.crop.json`、`Output/*.crop_001.png` など
 

@@ -1893,20 +1893,30 @@ def test_main_docai_plain_passes_output_dir_argument_to_run_docai_plain(monkeypa
 
 
 def test_main_output_dir_applies_to_schema_propose_default_input(monkeypatch, tmp_path):
-    output_dir = tmp_path / "schema_output"
-    output_dir.mkdir()
-    (output_dir / "alpha.docai.tsv").write_text("## Card\nname\tpower\nalpha\t1\n", encoding="utf-8")
+    # 移行: --output-dir はもはや schema_propose の出力先を制御しない。
+    # 代わりに --schema-output で明示的に出力先を指定する（新仕様、AC-3）。
+    tsv_dir = tmp_path / "schema_output"
+    tsv_dir.mkdir()
+    (tsv_dir / "alpha.docai.tsv").write_text("## Card\nname\tpower\nalpha\t1\n", encoding="utf-8")
+    out_file = tmp_path / "out.json"
 
     monkeypatch.setattr(main_mod, "OUTPUT_DIR", Path("Output"))
     monkeypatch.setattr(
         sys,
         "argv",
-        ["nova-parser", "--mode", "schema_propose", "--output-dir", str(output_dir)],
+        [
+            "nova-parser",
+            "--mode",
+            "schema_propose",
+            "--schema-output",
+            str(out_file),
+            str(tsv_dir),
+        ],
     )
 
     main_mod.main()
 
-    result = json.loads((output_dir / "schema_proposal.json").read_text(encoding="utf-8"))
+    result = json.loads(out_file.read_text(encoding="utf-8"))
     assert result == {
         "types": [
             {
@@ -2380,11 +2390,12 @@ def _make_docai_tsv(path: Path, type_name: str, fields: list[str], rows: list[li
 
 
 def test_schema_propose_directory_aggregates_multiple_docai_tsvs(monkeypatch, tmp_path):
-    """AC-1: ディレクトリに a.docai.tsv と b.docai.tsv → 両方集約され types に両型が出る。"""
+    """AC-5: ディレクトリに a.docai.tsv と b.docai.tsv → 両方集約され types に両型が出る。
+    移行: --schema-output で出力先を明示指定（集約ロジック不変の検証が主目的）。
+    """
     input_dir = tmp_path / "input"
     input_dir.mkdir()
-    output_dir = tmp_path / "output"
-    output_dir.mkdir()
+    out_file = tmp_path / "out.json"
 
     _make_docai_tsv(input_dir / "a.docai.tsv", "TypeA", ["field1", "field2"])
     _make_docai_tsv(input_dir / "b.docai.tsv", "TypeB", ["field3", "field4"])
@@ -2393,12 +2404,12 @@ def test_schema_propose_directory_aggregates_multiple_docai_tsvs(monkeypatch, tm
     monkeypatch.setattr(
         sys,
         "argv",
-        ["nova-parser", "--mode", "schema_propose", "--output-dir", str(output_dir), str(input_dir)],
+        ["nova-parser", "--mode", "schema_propose", "--schema-output", str(out_file), str(input_dir)],
     )
 
     main_mod.main()
 
-    result = json.loads((output_dir / "schema_proposal.json").read_text(encoding="utf-8"))
+    result = json.loads(out_file.read_text(encoding="utf-8"))
     type_names = {t["type_name"] for t in result["types"]}
     assert "TypeA" in type_names
     assert "TypeB" in type_names
@@ -2406,11 +2417,12 @@ def test_schema_propose_directory_aggregates_multiple_docai_tsvs(monkeypatch, tm
 
 
 def test_schema_propose_directory_filters_non_docai_tsv(monkeypatch, tmp_path):
-    """AC-2: ディレクトリに a.docai.tsv と notes.tsv → a.docai.tsv のみ対象。"""
+    """AC-5: ディレクトリに a.docai.tsv と notes.tsv → a.docai.tsv のみ対象（glob フィルタ不変）。
+    移行: --schema-output で出力先を明示指定（フィルタロジック不変の検証が主目的）。
+    """
     input_dir = tmp_path / "input"
     input_dir.mkdir()
-    output_dir = tmp_path / "output"
-    output_dir.mkdir()
+    out_file = tmp_path / "out.json"
 
     _make_docai_tsv(input_dir / "a.docai.tsv", "TypeA", ["field1"])
     _make_docai_tsv(input_dir / "notes.tsv", "TypeNotes", ["fieldX"])
@@ -2419,12 +2431,12 @@ def test_schema_propose_directory_filters_non_docai_tsv(monkeypatch, tmp_path):
     monkeypatch.setattr(
         sys,
         "argv",
-        ["nova-parser", "--mode", "schema_propose", "--output-dir", str(output_dir), str(input_dir)],
+        ["nova-parser", "--mode", "schema_propose", "--schema-output", str(out_file), str(input_dir)],
     )
 
     main_mod.main()
 
-    result = json.loads((output_dir / "schema_proposal.json").read_text(encoding="utf-8"))
+    result = json.loads(out_file.read_text(encoding="utf-8"))
     type_names = {t["type_name"] for t in result["types"]}
     assert "TypeA" in type_names
     assert "TypeNotes" not in type_names
@@ -2490,11 +2502,12 @@ def test_schema_propose_explicit_file_processed_without_filter(monkeypatch, tmp_
 
 
 def test_schema_propose_file_and_directory_combined(monkeypatch, tmp_path):
-    """AC-6: 明示ファイル + ディレクトリ混在 → 両者の和集合を処理し全型が集約される。"""
+    """AC-5: 明示ファイル + ディレクトリ混在 → 両者の和集合を処理し全型が集約される（集約ロジック不変）。
+    移行: --schema-output で出力先を明示指定（複合入力の集約ロジック不変の検証が主目的）。
+    """
     input_dir = tmp_path / "input"
     input_dir.mkdir()
-    output_dir = tmp_path / "output"
-    output_dir.mkdir()
+    out_file = tmp_path / "out.json"
 
     explicit_file = tmp_path / "explicit.docai.tsv"
     _make_docai_tsv(explicit_file, "ExplicitType", ["f1"])
@@ -2508,8 +2521,8 @@ def test_schema_propose_file_and_directory_combined(monkeypatch, tmp_path):
             "nova-parser",
             "--mode",
             "schema_propose",
-            "--output-dir",
-            str(output_dir),
+            "--schema-output",
+            str(out_file),
             str(explicit_file),
             str(input_dir),
         ],
@@ -2517,20 +2530,21 @@ def test_schema_propose_file_and_directory_combined(monkeypatch, tmp_path):
 
     main_mod.main()
 
-    result = json.loads((output_dir / "schema_proposal.json").read_text(encoding="utf-8"))
+    result = json.loads(out_file.read_text(encoding="utf-8"))
     type_names = {t["type_name"] for t in result["types"]}
     assert "ExplicitType" in type_names
     assert "DirType" in type_names
 
 
 def test_schema_propose_directory_does_not_recurse_into_subdirectory(monkeypatch, tmp_path):
-    """AC-7: ディレクトリ指定時、サブディレクトリ dir/sub/c.docai.tsv は非再帰のため対象外。"""
+    """AC-5: ディレクトリ指定時、サブディレクトリ dir/sub/c.docai.tsv は非再帰のため対象外（非再帰不変）。
+    移行: --schema-output で出力先を明示指定（非再帰ロジック不変の検証が主目的）。
+    """
     input_dir = tmp_path / "input"
     input_dir.mkdir()
     sub_dir = input_dir / "sub"
     sub_dir.mkdir()
-    output_dir = tmp_path / "output"
-    output_dir.mkdir()
+    out_file = tmp_path / "out.json"
 
     _make_docai_tsv(input_dir / "top.docai.tsv", "TopType", ["f1"])
     _make_docai_tsv(sub_dir / "c.docai.tsv", "SubType", ["f2"])
@@ -2539,12 +2553,309 @@ def test_schema_propose_directory_does_not_recurse_into_subdirectory(monkeypatch
     monkeypatch.setattr(
         sys,
         "argv",
-        ["nova-parser", "--mode", "schema_propose", "--output-dir", str(output_dir), str(input_dir)],
+        ["nova-parser", "--mode", "schema_propose", "--schema-output", str(out_file), str(input_dir)],
     )
 
     main_mod.main()
 
-    result = json.loads((output_dir / "schema_proposal.json").read_text(encoding="utf-8"))
+    result = json.loads(out_file.read_text(encoding="utf-8"))
     type_names = {t["type_name"] for t in result["types"]}
     assert "TopType" in type_names
     assert "SubType" not in type_names
+
+
+# ---------------------------------------------------------------------------
+# schema_propose 出力先変更: 新規テスト群（AC-1〜AC-7）
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# A. 純粋関数 _resolve_schema_output_path の単体テスト
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_schema_output_path_returns_custom_when_schema_output_specified(tmp_path):
+    """AC-3: --schema-output 指定時は入力種別に関係なく schema_output がそのまま返る（最優先）。"""
+    input_dir = tmp_path / "DX3_EA"
+    input_dir.mkdir()
+    custom = tmp_path / "custom.json"
+
+    result = main_mod._resolve_schema_output_path([str(input_dir)], custom)
+
+    assert result == custom
+
+
+def test_resolve_schema_output_path_single_dir_returns_schema_dir_name_json(tmp_path):
+    """AC-1: 単一ディレクトリ入力 & schema_output=None → SCHEMA_OUTPUT_DIR / schema_{dir名}.json。"""
+    input_dir = tmp_path / "DX3_EA"
+    input_dir.mkdir()
+
+    result = main_mod._resolve_schema_output_path([str(input_dir)], None)
+
+    assert result == main_mod.SCHEMA_OUTPUT_DIR / "schema_DX3_EA.json"
+
+
+def test_resolve_schema_output_path_single_dir_trailing_slash_normalizes(tmp_path):
+    """AC-1 境界: 末尾スラッシュ付きディレクトリでも schema_DX3_EA.json（正規化）。"""
+    input_dir = tmp_path / "DX3_EA"
+    input_dir.mkdir()
+    # Path は末尾スラッシュを正規化するので str(input_dir) + "/" で渡す
+    path_with_slash = str(input_dir) + "/"
+
+    result = main_mod._resolve_schema_output_path([path_with_slash], None)
+
+    assert result == main_mod.SCHEMA_OUTPUT_DIR / "schema_DX3_EA.json"
+
+
+@pytest.mark.parametrize(
+    "file_args_factory",
+    [
+        # 単一ファイル指定（ファイルを事前作成）
+        lambda tmp_path: ([str(tmp_path / "single.tsv")], {"create_file": tmp_path / "single.tsv"}),
+        # 複数引数
+        lambda tmp_path: (["a", "b"], {}),
+        # 空リスト
+        lambda tmp_path: ([], {}),
+    ],
+    ids=["single_file", "multiple_args", "empty_list"],
+)
+def test_resolve_schema_output_path_non_dir_returns_schema_proposal_json(tmp_path, file_args_factory):
+    """AC-2: 単一ファイル/複数引数/空リスト → SCHEMA_OUTPUT_DIR / schema_proposal.json。"""
+    file_args_with_meta = file_args_factory(tmp_path)
+    file_args, meta = file_args_with_meta
+    if "create_file" in meta:
+        meta["create_file"].write_text("dummy", encoding="utf-8")
+
+    result = main_mod._resolve_schema_output_path(file_args, None)
+
+    assert result == main_mod.SCHEMA_OUTPUT_DIR / "schema_proposal.json"
+
+
+def test_resolve_schema_output_path_custom_wins_even_for_single_dir(tmp_path):
+    """AC-3: 単一ディレクトリ入力でも schema_output が最優先で勝つ（schema_MyDir.json は使われない）。"""
+    input_dir = tmp_path / "MyDir"
+    input_dir.mkdir()
+    custom = tmp_path / "custom_override.json"
+
+    result = main_mod._resolve_schema_output_path([str(input_dir)], custom)
+
+    assert result == custom
+    assert result != main_mod.SCHEMA_OUTPUT_DIR / "schema_MyDir.json"
+
+
+# ---------------------------------------------------------------------------
+# B. run_schema_propose 関数単体テスト
+# ---------------------------------------------------------------------------
+
+
+def test_run_schema_propose_creates_parent_dirs_when_missing(tmp_path):
+    """AC-4: output_file の親ディレクトリが存在しなくても parents=True で自動作成され例外なし。"""
+    tsv_file = tmp_path / "data.docai.tsv"
+    _make_docai_tsv(tsv_file, "MyType", ["col1", "col2"])
+
+    deep_output = tmp_path / "nonexistent_subdir" / "nested" / "out.json"
+    # 親ディレクトリが存在しないことを確認
+    assert not deep_output.parent.exists()
+
+    main_mod.run_schema_propose(files=[tsv_file], output_file=deep_output)
+
+    assert deep_output.exists()
+    result = json.loads(deep_output.read_text(encoding="utf-8"))
+    assert result["types"][0]["type_name"] == "MyType"
+
+
+def test_run_schema_propose_backward_compat_none_output_file(monkeypatch, tmp_path):
+    """AC-4/後方互換: output_file=None のとき OUTPUT_DIR / schema_proposal.json に書き込む。"""
+    tsv_file = tmp_path / "data.docai.tsv"
+    _make_docai_tsv(tsv_file, "BwType", ["col1"])
+    output_dir = tmp_path / "Output"
+    output_dir.mkdir()
+
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", output_dir)
+
+    main_mod.run_schema_propose(files=[tsv_file], output_file=None)
+
+    expected = output_dir / "schema_proposal.json"
+    assert expected.exists()
+    result = json.loads(expected.read_text(encoding="utf-8"))
+    assert result["types"][0]["type_name"] == "BwType"
+
+
+# ---------------------------------------------------------------------------
+# C. main() 経由統合テスト（新規: AC-1, AC-2, AC-3, AC-4, AC-6, AC-7）
+# ---------------------------------------------------------------------------
+
+
+def test_main_schema_propose_single_dir_writes_to_schema_dir_name_json(monkeypatch, tmp_path):
+    """AC-1 統合: 単一ディレクトリ入力 + --schema-output 未指定 → schema/schema_{dir名}.json。
+    monkeypatch.chdir(tmp_path) で作業ディレクトリを汚染しない。
+    """
+    input_dir = tmp_path / "DX3_EA"
+    input_dir.mkdir()
+    _make_docai_tsv(input_dir / "cards.docai.tsv", "Card", ["name", "power"])
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", Path("Output"))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["nova-parser", "--mode", "schema_propose", str(input_dir)],
+    )
+
+    main_mod.main()
+
+    expected_output = tmp_path / "schema" / "schema_DX3_EA.json"
+    assert expected_output.exists(), f"期待した出力ファイルが存在しない: {expected_output}"
+    result = json.loads(expected_output.read_text(encoding="utf-8"))
+    assert result["types"][0]["type_name"] == "Card"
+
+
+def test_main_schema_propose_no_dir_input_writes_to_schema_proposal_json(monkeypatch, tmp_path):
+    """AC-2 統合: 空引数（引数省略）+ --schema-output 未指定 → schema/schema_proposal.json。
+    files=[] の場合 run_schema_propose に tsv_files=None が渡り、_parse_docai_tsvs は
+    OUTPUT_DIR.glob(DOCAI_TSV_GLOB) でモジュールグローバル OUTPUT_DIR を直接参照する。
+    monkeypatch.setattr でその参照先を tmp_path/Output に差し替えることで、
+    ダミー TSV を確実に走査させる（この setattr は有効かつ必須）。
+    """
+    output_dir = tmp_path / "Output"
+    output_dir.mkdir()
+    _make_docai_tsv(output_dir / "cards.docai.tsv", "Card", ["name"])
+
+    monkeypatch.chdir(tmp_path)
+    # OUTPUT_DIR を差し替えることで _parse_docai_tsvs の glob 走査先を tmp_path/Output にする。
+    # main() 内で global OUTPUT_DIR = output_dir の再代入も monkeypatch 管理下に入るため restore される。
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", output_dir)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["nova-parser", "--mode", "schema_propose"],
+    )
+
+    main_mod.main()
+
+    expected_output = tmp_path / "schema" / "schema_proposal.json"
+    assert expected_output.exists(), f"期待した出力ファイルが存在しない: {expected_output}"
+    result = json.loads(expected_output.read_text(encoding="utf-8"))
+    assert result["types"][0]["type_name"] == "Card"
+
+
+def test_main_schema_propose_schema_output_arg_overrides_default(monkeypatch, tmp_path):
+    """AC-3 統合: --schema-output <path>（親未作成）+ 入力ディレクトリ → <path> が作成される。
+    mkdir + 引数優先を同時検証。
+    """
+    input_dir = tmp_path / "MyCards"
+    input_dir.mkdir()
+    _make_docai_tsv(input_dir / "cards.docai.tsv", "Card", ["name"])
+    custom_output = tmp_path / "x" / "y.json"  # 親ディレクトリ未作成
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", Path("Output"))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "nova-parser",
+            "--mode",
+            "schema_propose",
+            "--schema-output",
+            str(custom_output),
+            str(input_dir),
+        ],
+    )
+
+    main_mod.main()
+
+    assert custom_output.exists(), f"--schema-output 先が作成されていない: {custom_output}"
+    result = json.loads(custom_output.read_text(encoding="utf-8"))
+    assert result["types"][0]["type_name"] == "Card"
+    # schema/schema_MyCards.json は作られない
+    default_path = tmp_path / "schema" / "schema_MyCards.json"
+    assert not default_path.exists()
+
+
+def test_main_schema_propose_explicit_input_ignores_default_output_dir_file(monkeypatch, tmp_path):
+    """明示 TSV 入力ではデフォルト Output が通常ファイルでも schema-output に書き込める。"""
+    (tmp_path / "Output").write_text("not a directory\n", encoding="utf-8")
+    input_file = tmp_path / "cards.tsv"
+    _make_docai_tsv(input_file, "Card", ["name"])
+    custom_output = tmp_path / "schema" / "result.json"
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", Path("Output"))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "nova-parser",
+            "--mode",
+            "schema_propose",
+            "--schema-output",
+            str(custom_output),
+            str(input_file),
+        ],
+    )
+
+    main_mod.main()
+
+    assert custom_output.exists()
+    result = json.loads(custom_output.read_text(encoding="utf-8"))
+    assert result["types"][0]["type_name"] == "Card"
+
+
+def test_main_schema_propose_schema_output_parent_dir_autocreated(monkeypatch, tmp_path):
+    """AC-4 統合: --schema-output が深いパス（親未作成）でも自動作成されエラーなし。"""
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    _make_docai_tsv(input_dir / "a.docai.tsv", "TypeA", ["f1"])
+    deep_output = tmp_path / "deep" / "nested" / "result.json"
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", Path("Output"))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["nova-parser", "--mode", "schema_propose", "--schema-output", str(deep_output), str(input_dir)],
+    )
+
+    main_mod.main()
+
+    assert deep_output.exists()
+
+
+def test_main_schema_propose_completion_message_contains_output_path(monkeypatch, tmp_path, capsys):
+    """AC-6: 完了メッセージが実際の出力先パスを含み "Output/" を含まない。"""
+    input_dir = tmp_path / "MyDir"
+    input_dir.mkdir()
+    _make_docai_tsv(input_dir / "cards.docai.tsv", "Card", ["name"])
+    custom_output = tmp_path / "result.json"
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(main_mod, "OUTPUT_DIR", Path("Output"))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["nova-parser", "--mode", "schema_propose", "--schema-output", str(custom_output), str(input_dir)],
+    )
+
+    main_mod.main()
+
+    captured = capsys.readouterr()
+    output_str = custom_output.name  # 出力先ファイル名が含まれているか
+    assert str(custom_output) in captured.out or output_str in captured.out, (
+        f"完了メッセージに出力先パスが含まれない: {captured.out!r}"
+    )
+    assert "Output/" not in captured.out, f"完了メッセージに 'Output/' が含まれている: {captured.out!r}"
+
+
+def test_main_schema_propose_schema_output_argument_exists_in_argparse(monkeypatch, tmp_path, capsys):
+    """AC-7: argparse に --schema-output（type=Path, default=None）が存在する。
+    --help 出力に '--schema-output' が含まれることで確認する。
+    """
+    monkeypatch.setattr(sys, "argv", ["nova-parser", "--help"])
+
+    with pytest.raises(SystemExit) as excinfo:
+        main_mod.main()
+
+    captured = capsys.readouterr()
+    assert excinfo.value.code == 0
+    assert "--schema-output" in captured.out, f"argparse の --help に '--schema-output' が含まれない: {captured.out!r}"

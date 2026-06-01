@@ -32,6 +32,7 @@ load_dotenv()
 IMAGES_DIR = Path("Images")
 DEFAULT_OUTPUT_DIR = Path("Output")
 OUTPUT_DIR = DEFAULT_OUTPUT_DIR
+SCHEMA_OUTPUT_DIR = Path("schema")
 
 DOCAI_TSV_GLOB = "*.docai*.tsv"
 
@@ -346,12 +347,27 @@ def _parse_docai_tsvs(files: list[Path] | None = None) -> dict:
     return {"types": [{"type_name": tn, "fields": type_fields[tn], "source": type_source[tn]} for tn in type_fields]}
 
 
-def run_schema_propose(files: list[Path] | None = None) -> None:
+def _resolve_schema_output_path(file_args: list[str], schema_output: Path | None) -> Path:
+    """schema_propose の出力先ファイルパスを解決する（--schema-output 最優先）。
+
+    schema_output が None のときのみ _resolve_output_subdir を介してディレクトリ存在確認（is_dir）を行う。
+    """
+    if schema_output is not None:
+        return schema_output
+    subdir = _resolve_output_subdir(file_args)
+    if subdir is not None:
+        return SCHEMA_OUTPUT_DIR / f"schema_{subdir.name}.json"
+    return SCHEMA_OUTPUT_DIR / "schema_proposal.json"
+
+
+def run_schema_propose(files: list[Path] | None = None, output_file: Path | None = None) -> None:
     """schema_propose モード: docai TSV からスキーマ提案を生成する。"""
     import json
 
     result = _parse_docai_tsvs(files)
-    output_file = OUTPUT_DIR / "schema_proposal.json"
+    if output_file is None:
+        output_file = OUTPUT_DIR / "schema_proposal.json"
+    output_file.parent.mkdir(parents=True, exist_ok=True)
     output_file.write_text(
         json.dumps(result, indent=2, ensure_ascii=False),
         encoding="utf-8",
@@ -1125,6 +1141,12 @@ def main():
         "extract / docai / docai_plain モードかつ単一ディレクトリ入力時は Output/[ディレクトリ名]）",
     )
     parser.add_argument(
+        "--schema-output",
+        type=Path,
+        default=None,
+        help="schema_propose モードの出力先ファイルパス（デフォルト: schema/schema_[入力ディレクトリ名].json）",
+    )
+    parser.add_argument(
         "--min-card-area",
         type=float,
         default=0.05,
@@ -1157,6 +1179,14 @@ def main():
     if args.parallel_files < 1:
         parser.error("--parallel-files は 1 以上で指定してください。")
 
+    # 明示 TSV 入力の schema_propose は Output/ を走査しないため、出力ディレクトリ初期化を不要にする。
+    if args.mode == "schema_propose" and args.files:
+        tsv_files = resolve_docai_tsvs(args.files)
+        output_path = _resolve_schema_output_path(args.files, args.schema_output)
+        run_schema_propose(tsv_files, output_path)
+        print(f"\nスキーマ提案を {output_path} に保存しました。")
+        return
+
     if args.output_dir is not None:
         output_dir: Path = args.output_dir
     else:
@@ -1177,8 +1207,9 @@ def main():
         # schema_propose は画像ではなく TSV ファイルを受け取る
         if args.mode == "schema_propose":
             tsv_files = resolve_docai_tsvs(args.files) if args.files else None
-            run_schema_propose(tsv_files)
-            print(f"\n全ての結果を {OUTPUT_DIR}/ に保存しました。")
+            output_path = _resolve_schema_output_path(args.files, args.schema_output)
+            run_schema_propose(tsv_files, output_path)
+            print(f"\nスキーマ提案を {output_path} に保存しました。")
             return
 
         images = resolve_images(args.files)
