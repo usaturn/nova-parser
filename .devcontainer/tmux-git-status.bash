@@ -1,8 +1,8 @@
 #!/bin/bash
-# tmux ステータスバー用 git-segment スクリプト
+# tmux ステータスバー用 git-status スクリプト
 # zshrc.txt の git-prompt 関数と同等のロジックをピル型デザインで実装
 #
-# 使い方: tmux-git-segment.bash <pane_current_path> <base_bg_color>
+# 使い方: tmux-git-status.bash <pane_current_path> <base_bg_color>
 
 readonly DETACHED_PREFIX="detached@"
 readonly NAME_REV_UNDEFINED="undefined"

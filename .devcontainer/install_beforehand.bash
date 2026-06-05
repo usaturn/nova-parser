@@ -15,8 +15,6 @@ echo "Installing Claude Code..."
 curl -fsSL https://claude.ai/install.sh | bash
 echo "Installing Codex CLI..."
 yarn global add @openai/codex@latest
-yarn global add @google/gemini-cli@latest
-yarn global add @github/copilot@latest
 echo "Installing Grok Build..."
 curl -fsSL https://x.ai/cli/install.sh | bash
 
@@ -27,8 +25,8 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 curl -fsSL https://bun.com/install | bash
 
 mkdir -p "${HOME}/bin"
-cp .devcontainer/tmux-git-segment.bash "${HOME}/bin/tmux-git-segment.bash"
-chmod +x "${HOME}/bin/tmux-git-segment.bash"
-cp .devcontainer/tmux-copy-url.zsh "${HOME}/bin/tmux-copy-url.zsh"
-chmod +x "${HOME}/bin/tmux-copy-url.zsh"
+cp .devcontainer/tmux-git-status.bash "${HOME}/bin/tmux-git-status.bash"
+chmod +x "${HOME}/bin/tmux-git-status.bash"
+cp .devcontainer/tmux-url-copy.zsh "${HOME}/bin/tmux-url-copy.zsh"
+chmod +x "${HOME}/bin/tmux-url-copy.zsh"
 
