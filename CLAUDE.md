@@ -29,7 +29,10 @@ uv add --dev <package>
 uv run task ruff
 ```
 
-Headroom 等の開発補助 CLI ツールは `uv tool` を使わず、dev dependency group（`uv add --dev`）に追加し `uv run` 経由で実行すること。dev グループに入れることでランタイム依存には含めない。
+Headroom はプロジェクトの uv / Python 3.14 管理から完全に分離している。
+システムの Python 3.12 で作成した独立 venv (`~/.headroom-venv`) で管理し、`~/bin/headroom` wrapper 経由で `headroom` コマンドとして利用する。
+devcontainer の postCreate 時に自動セットアップされる。
+（以前は dev dep + `uv run` で管理していたが、PyO3 ビルド問題と重い依存の観点から分離した。）
 
 ## アーキテクチャ
 
@@ -43,6 +46,11 @@ Headroom 等の開発補助 CLI ツールは `uv tool` を使わず、dev depend
 
 - 配置場所を指定せずにドキュメントを書けと言われた際は、 @docs_draft/ 配下にドキュメントを作成すること。 @docs_draft/ 配下のドキュメントはレビューした上で手動で @docs/ 配下に正式ドキュメントとして配置する
 - @docs_draft/ 配下のドキュメントは下書きレベルであり、誤りがある場合もあるので、あまり参考にしない。
+- スキル superpowers で Spec や Plan を作成した際に絶対 commit しない
+
+## 環境
+
+- Windows11 上の WSL2(Gentoo Linux) で Docker を起動し、Dev Containers(Ubuntu 24.04.2 LTS) のコンテナ内で動かしている
 
 ## 使用ツール
 

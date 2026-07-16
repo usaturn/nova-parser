@@ -30,3 +30,50 @@ chmod +x "${HOME}/bin/tmux-git-status.bash"
 cp .devcontainer/tmux-url-copy.zsh "${HOME}/bin/tmux-url-copy.zsh"
 chmod +x "${HOME}/bin/tmux-url-copy.zsh"
 
+# -------------------------------------------------------------------
+# Headroom 専用独立 venv のセットアップ（システム Python 3.12 使用）
+# 目的:
+# - プロジェクトの Python 3.14 + uv 管理から完全に分離
+# - PyO3 / maturin による 3.14 ビルドエラーを根本回避
+# - headroom-ai[all] の重い依存（torch 等）をプロジェクト .venv に混入させない
+# - uv を使わず古典的な venv + pip で管理（ユーザ指定の方式）
+# -------------------------------------------------------------------
+echo "Setting up isolated Headroom venv with system Python 3.12..."
+
+HEADROOM_VENV="${HOME}/.headroom-venv"
+HEADROOM_BIN="${HEADROOM_VENV}/bin/headroom"
+WRAPPER_BIN="${HOME}/bin/headroom"
+
+if [ ! -x "$HEADROOM_BIN" ]; then
+    echo "Creating fresh headroom venv at ${HEADROOM_VENV} using $(python3 --version) ..."
+    rm -rf "$HEADROOM_VENV"
+    python3 -m venv "$HEADROOM_VENV"
+
+    echo "Upgrading pip in headroom venv..."
+    "$HEADROOM_VENV/bin/pip" install --upgrade pip setuptools wheel
+
+    echo "Installing headroom-ai[all] (this may take several minutes and consume significant disk)..."
+    "$HEADROOM_VENV/bin/pip" install "headroom-ai[all]"
+
+    echo "Headroom venv created successfully."
+else
+    echo "Headroom venv already exists at ${HEADROOM_VENV}. Skipping creation."
+fi
+
+# ~/bin/headroom wrapper を作成（uv run headroom 時代と同じコマンド名で使えるようにする）
+if [ ! -x "$WRAPPER_BIN" ]; then
+    cat > "$WRAPPER_BIN" << 'EOF'
+#!/bin/bash
+# Wrapper for headroom (managed in ~/.headroom-venv with system Python 3.12)
+# This allows `headroom` command to work without uv or activating the venv.
+exec "$HOME/.headroom-venv/bin/headroom" "$@"
+EOF
+    chmod +x "$WRAPPER_BIN"
+    echo "Created wrapper: $WRAPPER_BIN"
+else
+    echo "Wrapper already exists: $WRAPPER_BIN"
+fi
+
+echo "Headroom setup complete. Try: headroom --version"
+# -------------------------------------------------------------------
+
