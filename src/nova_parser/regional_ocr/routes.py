@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from PIL import Image
 
+from nova_parser.regional_ocr.blocks import load_blocks, save_blocks
 from nova_parser.regional_ocr.errors import (
     OcrBackendError,
     RegionNotFoundError,
@@ -25,12 +26,13 @@ from nova_parser.regional_ocr.images import (
 from nova_parser.regional_ocr.markdown import write_markdown
 from nova_parser.regional_ocr.models import (
     BatchOcrItemResult,
+    BlockDetectionResult,
     ImageListResponse,
     ImageMetaResponse,
     ImageSession,
     RegionRecord,
 )
-from nova_parser.regional_ocr.ocr_client import ocr_rectangle
+from nova_parser.regional_ocr.ocr_client import detect_blocks, ocr_rectangle
 from nova_parser.regional_ocr.sessions import load_session, save_session, upsert_region
 from nova_parser.regional_ocr.state import AppState
 
@@ -67,6 +69,25 @@ def build_router() -> APIRouter:
         path = resolve_image(state.image_dir, name)
         mime = IMAGE_MIME_TYPES.get(path.suffix.lower(), "application/octet-stream")
         return Response(content=path.read_bytes(), media_type=mime)
+
+    @router.get("/api/blocks/{name}", response_model=BlockDetectionResult)
+    def api_get_blocks(name: str, state: AppStateDep) -> BlockDetectionResult:
+        path = resolve_image(state.image_dir, name)
+        cached = load_blocks(state.output_dir, name)
+        if cached is not None:
+            return cached
+        image = open_pil(path)
+        client = state.vision_client_factory()
+        blocks = detect_blocks(client, image, language_hints=state.language_hints)
+        result = BlockDetectionResult(
+            image_name=name,
+            image_width=image.width,
+            image_height=image.height,
+            blocks=blocks,
+            detected_at=datetime.datetime.now(datetime.UTC),
+        )
+        save_blocks(result, state.output_dir)
+        return result
 
     @router.get("/api/session/{name}", response_model=ImageSession)
     def api_get_session(name: str, state: AppStateDep) -> ImageSession:

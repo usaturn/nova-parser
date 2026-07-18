@@ -854,3 +854,75 @@ def test_create_app_returns_fastapi_with_required_routes(tmp_path):
     assert "/api/session/{name}" in route_paths
     assert "/api/ocr/{name}/{rect_id}" in route_paths
     assert "/api/ocr/batch/stream" in route_paths
+
+
+# ---------------------------------------------------------------------------
+# GET /api/blocks/{name} — 段組ブロック検出＋キャッシュ
+# ---------------------------------------------------------------------------
+
+
+def test_get_blocks_detects_and_persists_on_first_call(tmp_path):
+    """初回 GET /api/blocks/{name} は document_text_detection を 1 回呼び、結果を {stem}.blocks.json に保存する。"""
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "a.png", (100, 100))
+    output_dir = tmp_path / "output"
+
+    fake = FakeVisionClient(_FakeResponse(blocks=[[(10, 10), (60, 10), (60, 40), (10, 40)]]))
+    client = _make_client(image_dir, output_dir, _simple_factory(fake))
+
+    resp = client.get("/api/blocks/a.png")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["image_name"] == "a.png"
+    assert data["image_width"] == 100
+    assert data["image_height"] == 100
+    assert data["blocks"] == [{"x": 10, "y": 10, "width": 50, "height": 30}]
+    assert data["schema_version"] == 1
+    assert (output_dir / "a.blocks.json").exists()
+    assert len(fake.document_calls) == 1
+
+
+def test_get_blocks_uses_cache_on_second_call(tmp_path):
+    """2 回目の GET /api/blocks/{name} はキャッシュを返し、Vision API を呼ばない。"""
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "a.png", (100, 100))
+    output_dir = tmp_path / "output"
+
+    fake = FakeVisionClient(_FakeResponse(blocks=[[(10, 10), (60, 10), (60, 40), (10, 40)]]))
+    client = _make_client(image_dir, output_dir, _simple_factory(fake))
+
+    first = client.get("/api/blocks/a.png")
+    second = client.get("/api/blocks/a.png")
+
+    assert second.status_code == 200
+    assert second.json() == first.json()
+    assert len(fake.document_calls) == 1, "キャッシュヒット時は Vision を呼ばない"
+
+
+def test_get_blocks_returns_404_for_unknown_image(tmp_path):
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    output_dir = tmp_path / "output"
+
+    client = _make_client(image_dir, output_dir, _simple_factory(FakeVisionClient()))
+    resp = client.get("/api/blocks/missing.png")
+
+    assert resp.status_code == 404
+
+
+def test_get_blocks_returns_502_when_vision_reports_error(tmp_path):
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "a.png")
+    output_dir = tmp_path / "output"
+
+    fake = FakeVisionClient(_FakeResponse(error_message="vision down"))
+    client = _make_client(image_dir, output_dir, _simple_factory(fake))
+    resp = client.get("/api/blocks/a.png")
+
+    assert resp.status_code == 502
+    assert "vision down" in resp.json()["detail"]
+    assert not (output_dir / "a.blocks.json").exists(), "エラー時はキャッシュを残さない"
