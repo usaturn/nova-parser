@@ -926,3 +926,19 @@ def test_get_blocks_returns_502_when_vision_reports_error(tmp_path):
     assert resp.status_code == 502
     assert "vision down" in resp.json()["detail"]
     assert not (output_dir / "a.blocks.json").exists(), "エラー時はキャッシュを残さない"
+
+
+def test_get_blocks_returns_409_on_stem_collision(tmp_path):
+    """同 stem・別拡張子の画像がある場合、GET /api/blocks/{name} は 409 を返す（キャッシュ誤用防止）。"""
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "a.png")
+    Image.new("RGB", (200, 150), color=(10, 20, 30)).save(image_dir / "a.webp")
+    output_dir = tmp_path / "output"
+
+    fake = FakeVisionClient(_FakeResponse(blocks=[[(10, 10), (60, 10), (60, 40), (10, 40)]]))
+    client = _make_client(image_dir, output_dir, _simple_factory(fake))
+    resp = client.get("/api/blocks/a.png")
+
+    assert resp.status_code == 409
+    assert not (output_dir / "a.blocks.json").exists(), "衝突時は検出・キャッシュ生成しない"

@@ -73,6 +73,16 @@ def build_router() -> APIRouter:
     @router.get("/api/blocks/{name}", response_model=BlockDetectionResult)
     def api_get_blocks(name: str, state: AppStateDep) -> BlockDetectionResult:
         path = resolve_image(state.image_dir, name)
+        # {stem}.blocks.json キャッシュは stem 単位のため、foo.png と foo.webp のような
+        # stem 衝突があると別画像間でキャッシュを共有し誤った段組を返す。バッチ OCR と
+        # 同様に、要求画像の stem が衝突する場合は 409 で拒否する。
+        siblings = sorted(
+            p.name
+            for p in state.image_dir.iterdir()
+            if p.is_file() and p.suffix.lower() in IMAGE_MIME_TYPES and p.stem == path.stem
+        )
+        if len(siblings) >= 2:
+            raise StemCollisionError(f"stem collision: {', '.join(siblings)}")
         cached = load_blocks(state.output_dir, name)
         if cached is not None:
             return cached
