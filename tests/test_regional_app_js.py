@@ -1882,3 +1882,120 @@ const app = newApp({
 })().catch((err) => { console.error(err); process.exit(1); });
 """
     )
+
+
+def test_reselecting_same_image_during_blocks_fetch_recovers() -> None:
+    _run_node_inline(
+        _BLOCKS_PAYLOAD
+        + r"""
+let resolveA;
+let aCalls = 0;
+global.fetch = (url) => {
+  if (url === "/api/blocks/a.png") {
+    aCalls += 1;
+    return new Promise((resolve) => {
+      resolveA = () => resolve(fetchResponse(blocksPayload("a.png", [{ x: 1, y: 1, width: 2, height: 2 }])));
+    });
+  }
+  if (url === "/api/image/a.png") {
+    return Promise.resolve(fetchResponse({ image_width: 100, image_height: 100, mime_type: "image/png" }));
+  }
+  if (url === "/api/session/a.png") {
+    return Promise.resolve(fetchResponse(sessionPayload("a.png", [])));
+  }
+  throw new Error(`unexpected fetch: ${url}`);
+};
+const app = newApp({
+  currentImage: { name: "a.png", width: 100, height: 100, mime: "image/png" },
+  session: sessionPayload("a.png", []),
+  imgLoaded: true,
+  blockMode: true,
+});
+(async () => {
+  const ensuring = app._ensureBlocks();      // a.png (A1) を in-flight にする
+  await tick();
+  assert.equal(app.blocksLoading, true, "A1 が in-flight");
+  const firstResolve = resolveA;
+
+  // in-flight のまま同じ画像を再選択する（selectImage が blocks=null, epoch++ する）
+  await app.selectImage("a.png");
+  await tick();
+
+  // A1 応答が届く（epoch 不一致で破棄されるはず）
+  firstResolve();
+  await ensuring;
+  await tick();
+
+  // 再選択で起動した A2 応答を解決する
+  resolveA();
+  await tick();
+  await tick();
+
+  assert.deepEqual(app.blocks, [{ x: 1, y: 1, width: 2, height: 2 }], "同名再選択後も最終的に blocks が反映される");
+  assert.equal(app.blocksLoading, false, "loading が正しく解除される");
+  assert.equal(app.blockMode, true);
+  assert.equal(aCalls, 2, "A1 破棄後に A2 が起動する（飢餓しない）");
+})().catch((err) => { console.error(err); process.exit(1); });
+"""
+    )
+
+
+def test_stale_finally_does_not_release_new_generation_loading() -> None:
+    _run_node_inline(
+        _BLOCKS_PAYLOAD
+        + r"""
+let resolveA1;
+let aCalls = 0;
+global.fetch = (url) => {
+  if (url === "/api/blocks/a.png") {
+    aCalls += 1;
+    if (aCalls === 1) {
+      return new Promise((resolve) => {
+        resolveA1 = () => resolve(fetchResponse(blocksPayload("a.png", [{ x: 1, y: 1, width: 2, height: 2 }])));
+      });
+    }
+    // A2 以降は未解決のまま（in-flight を維持）
+    return new Promise(() => {});
+  }
+  if (url === "/api/image/a.png" || url === "/api/image/b.png") {
+    return Promise.resolve(fetchResponse({ image_width: 100, image_height: 100, mime_type: "image/png" }));
+  }
+  if (url === "/api/session/a.png" || url === "/api/session/b.png") {
+    return Promise.resolve(fetchResponse(sessionPayload(url.endsWith("a.png") ? "a.png" : "b.png", [])));
+  }
+  if (url === "/api/blocks/b.png") {
+    return Promise.resolve(fetchResponse(blocksPayload("b.png", [{ x: 5, y: 5, width: 10, height: 10 }])));
+  }
+  throw new Error(`unexpected fetch: ${url}`);
+};
+const app = newApp({
+  currentImage: { name: "a.png", width: 100, height: 100, mime: "image/png" },
+  session: sessionPayload("a.png", []),
+  imgLoaded: true,
+  blockMode: true,
+});
+(async () => {
+  const ensuringA1 = app._ensureBlocks();   // A1 in-flight
+  await tick();
+
+  await app.selectImage("b.png");            // B（blocks 即解決）
+  await tick();
+
+  await app.selectImage("a.png");            // A に戻る → A2 in-flight
+  await tick();
+  assert.equal(app.blocksLoading, true, "A2 が in-flight で loading 中");
+
+  // ここで stale な A1 が解決する。A1 の finally は A2 の loading を奪ってはいけない。
+  resolveA1();
+  await ensuringA1;
+  await tick();
+
+  assert.equal(app.blocksLoading, true, "stale A1 の finally で A2 の loading が落ちない");
+
+  // loading が落ちていないので、追加の _ensureBlocks は新規 fetch を起動しない
+  await app._ensureBlocks();
+  await tick();
+  assert.equal(aCalls, 2, "不要な 3 本目 fetch が立たない（A1, A2 の 2 本のみ）");
+})().catch((err) => { console.error(err); process.exit(1); });
+"""
+    )

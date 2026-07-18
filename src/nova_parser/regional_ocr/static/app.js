@@ -107,6 +107,7 @@ function regionalOcrApp() {
     blocksLoading: false,
     hoverBlock: null,
     _blocksRequestFor: null,
+    _blocksRequestEpoch: null,
     _blocksEpoch: 0,
 
     async init() {
@@ -388,14 +389,17 @@ function regionalOcrApp() {
     async _ensureBlocks() {
       if (!this.currentImage || this.blocks !== null) return;
       const imageName = this.currentImage.name;
-      // 同一画像の取得が既に走っている場合のみ抑止する（別画像への切替時は新規取得を許す）
-      if (this._blocksRequestFor === imageName) return;
-      this._blocksRequestFor = imageName;
-      this.blocksLoading = true;
-      // await 前に epoch を捕捉する。selectImage が画像を切り替えるたびに
-      // epoch を進めるので、応答が届いた時点で epoch が食い違っていれば
-      // 「画像名は一致するが実は別世代（同名へ切り戻った等）」の stale 応答だと判定できる。
+      // await 前に epoch を捕捉する。selectImage が画像を切り替える（同名再選択を含む）
+      // たびに epoch を進めるので、応答が届いた時点で epoch が食い違っていれば
+      // 「画像名は一致するが実は別世代」の stale 応答だと判定できる。
       const epoch = this._blocksEpoch;
+      // 同一画像 かつ 同一世代 の取得が既に走っている場合のみ抑止する。
+      // 世代も見ることで、同名再選択（epoch が進む）のときに新世代の取得が
+      // 「画像名一致」だけで飢餓させられるのを防ぐ。
+      if (this._blocksRequestFor === imageName && this._blocksRequestEpoch === epoch) return;
+      this._blocksRequestFor = imageName;
+      this._blocksRequestEpoch = epoch;
+      this.blocksLoading = true;
       try {
         const result = await api.getBlocks(imageName);
         // 取得中に画像が切り替わった場合、古い画像の blocks を反映しない
@@ -417,10 +421,11 @@ function regionalOcrApp() {
           this.blockMode = false;
         }
       } finally {
-        // 自分が最新のリクエストである場合だけローディング状態を解除する
-        // （古いリクエストの finally が新しいリクエストの表示を消さないように）
-        if (this._blocksRequestFor === imageName) {
+        // 自分（同一画像・同一世代）が最新のリクエストである場合だけ解除する。
+        // 古い世代の finally が新しい世代の loading 所有権を奪わないようにする。
+        if (this._blocksRequestFor === imageName && this._blocksRequestEpoch === epoch) {
           this._blocksRequestFor = null;
+          this._blocksRequestEpoch = null;
           this.blocksLoading = false;
         }
       }
