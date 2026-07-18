@@ -3,49 +3,52 @@
   "queries": [
     {
       "id": "q1",
-      "query": "Commit only the staged files on main with a detailed message.",
+      "query": "Commit only the staged files with a detailed message.",
       "should_trigger": true,
-      "expected_terms": [
-        "commit",
-        "staged",
-        "main",
-        "detailed",
-        "message"
-      ],
-      "notes": "Direct staged-only request"
+      "expected_terms": ["commit", "staged", "detailed"],
+      "notes": "Direct staged-only detailed commit request"
     },
     {
       "id": "q2",
       "query": "Write a rich Conventional Commits message and commit what is already staged.",
       "should_trigger": true,
-      "expected_terms": [
-        "commit",
-        "staged",
-        "conventional",
-        "message"
-      ],
-      "notes": "Detailed message wording without saying main explicitly"
+      "expected_terms": ["commit", "staged", "conventional"],
+      "notes": "Conventional Commits wording"
     },
     {
       "id": "q3",
-      "query": "Stage these files and then commit them.",
-      "should_trigger": false,
-      "expected_terms": [],
-      "notes": "Requires git add, which this skill must not do"
+      "query": "This feature branch has an open draft PR; commit the staged fix with details.",
+      "should_trigger": true,
+      "expected_terms": ["commit", "staged", "branch", "draft", "pr"],
+      "notes": "PR-gated branch workflow"
     },
     {
       "id": "q4",
-      "query": "Push the current branch to origin after committing.",
-      "should_trigger": false,
-      "expected_terms": [],
-      "notes": "Push is out of scope"
+      "query": "HEAD is detached at origin/main; commit the staged docs update with a detailed message.",
+      "should_trigger": true,
+      "expected_terms": ["commit", "staged", "detached", "origin", "main"],
+      "notes": "Detached origin/main workflow"
     },
     {
       "id": "q5",
-      "query": "Switch to main and commit the staged files.",
+      "query": "Stage these files and then commit them.",
       "should_trigger": false,
-      "expected_terms": [],
-      "notes": "Branch switching is out of scope even though commit is relevant"
+      "expected_terms": ["stage"],
+      "notes": "Requires git add"
+    },
+    {
+      "id": "q6",
+      "query": "Amend the previous commit with my unstaged changes.",
+      "should_trigger": false,
+      "expected_terms": ["amend", "unstaged"],
+      "notes": "Amend and unstaged work are out of scope"
+    },
+    {
+      "id": "q7",
+      "query": "Commit everything, push the branch, and open a pull request.",
+      "should_trigger": false,
+      "expected_terms": ["everything", "push"],
+      "notes": "Push and PR creation are out of scope"
     }
   ]
 }
