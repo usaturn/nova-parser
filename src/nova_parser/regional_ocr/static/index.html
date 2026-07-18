@@ -53,9 +53,20 @@
               :class="{ active: blockMode }"
               @click="toggleBlockMode()"
               :disabled="!!dragMode"
-              title="クリックした点を含む段組を矩形選択"
-            >段組選択</button>
-            <span class="muted" x-show="blocksLoading">段組検出中…</span>
+              title="クリックした点を含むテキストブロックを矩形選択"
+            >ブロック選択</button>
+            <select
+              class="block-granularity"
+              x-show="blockMode"
+              x-model="blockGranularity"
+              @change="setGranularity(blockGranularity)"
+              :disabled="!!dragMode"
+              title="ブロック選択の粒度"
+            >
+              <option value="vertical">縦ブロック</option>
+              <option value="paragraph">段落</option>
+            </select>
+            <span class="muted" x-show="blocksLoading">ブロック検出中…</span>
           </div>
 
           <template x-if="!currentImage">

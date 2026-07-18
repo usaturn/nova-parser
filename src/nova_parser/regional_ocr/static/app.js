@@ -103,7 +103,9 @@ function regionalOcrApp() {
     zoom: 1.0,
     zoomFit: true,
     blockMode: false,
-    blocks: null,
+    blockGranularity: "vertical",
+    paragraphBlocks: null,
+    verticalBlocks: null,
     blocksLoading: false,
     hoverBlock: null,
     _blocksRequestFor: null,
@@ -180,7 +182,8 @@ function regionalOcrApp() {
       this.selectedRectId = null;
       this.imgLoaded = false;
       this.draftRect = null;
-      this.blocks = null;
+      this.paragraphBlocks = null;
+      this.verticalBlocks = null;
       this.hoverBlock = null;
       this._blocksEpoch += 1;
       try {
@@ -390,8 +393,23 @@ function regionalOcrApp() {
       await this._ensureBlocks();
     },
 
+    activeBlocks() {
+      const paragraphs = this.paragraphBlocks || [];
+      if (this.blockGranularity === "paragraph") return paragraphs;
+      const vertical = this.verticalBlocks || [];
+      // 縦ブロックが 0 件でも段落があれば段落矩形へフォールバックする
+      return vertical.length ? vertical : paragraphs;
+    },
+
+    setGranularity(value) {
+      if (value !== "vertical" && value !== "paragraph") return;
+      this.blockGranularity = value;
+      // 粒度変更でホバーをクリアし、次の mousemove から新しい当たり判定を使う
+      this.hoverBlock = null;
+    },
+
     async _ensureBlocks() {
-      if (!this.currentImage || this.blocks !== null) return;
+      if (!this.currentImage || this.paragraphBlocks !== null) return;
       const imageName = this.currentImage.name;
       // await 前に epoch を捕捉する。selectImage が画像を切り替える（同名再選択を含む）
       // たびに epoch を進めるので、応答が届いた時点で epoch が食い違っていれば
@@ -410,16 +428,17 @@ function regionalOcrApp() {
         // （画像名一致だけでは selectImage の meta/session await 中に届いた
         //  stale 応答をすり抜けさせてしまうため、epoch も併せて確認する）
         if (!this.currentImage || this.currentImage.name !== imageName || epoch !== this._blocksEpoch) return;
-        this.blocks = result.blocks;
-        if (this.blocks.length === 0) {
-          const msg = `「${imageName}」から段組が検出されませんでした`;
+        this.paragraphBlocks = result.blocks || [];
+        this.verticalBlocks = result.vertical_blocks || [];
+        if (this.paragraphBlocks.length === 0 && this.verticalBlocks.length === 0) {
+          const msg = `「${imageName}」からテキストブロックが検出されませんでした`;
           // 同一画像を行き来した際に同文言の警告が重複蓄積しないようにする
           if (!this.warnings.includes(msg)) this.warnings = [...this.warnings, msg];
         }
       } catch (err) {
         console.error(err);
         if (this.currentImage && this.currentImage.name === imageName && epoch === this._blocksEpoch) {
-          const msg = `「${imageName}」の段組検出に失敗しました: ${err.message}`;
+          const msg = `「${imageName}」のテキストブロック検出に失敗しました: ${err.message}`;
           // 0 件警告と同様に、同一画像での連続失敗で同文言が重複蓄積しないよう抑止する
           if (!this.warnings.includes(msg)) this.warnings = [...this.warnings, msg];
           this.blockMode = false;
@@ -436,9 +455,10 @@ function regionalOcrApp() {
     },
 
     _addRegionFromBlockClick(event) {
-      if (!this.blocks || !this.blocks.length) return;
+      const blocks = this.activeBlocks();
+      if (!blocks.length) return;
       const { x, y } = this._displayCoord(event);
-      const block = hitTestBlock(this.blocks, x / this.scaleX, y / this.scaleY);
+      const block = hitTestBlock(blocks, x / this.scaleX, y / this.scaleY);
       if (!block) return;
       const rect = {
         rect_id: generateRectId(),
@@ -460,12 +480,13 @@ function regionalOcrApp() {
     },
 
     _updateHoverBlock(event) {
-      if (!this.blocks || !this.blocks.length || !this.imgLoaded) {
+      const blocks = this.activeBlocks();
+      if (!blocks.length || !this.imgLoaded) {
         this.hoverBlock = null;
         return;
       }
       const { x, y } = this._displayCoord(event);
-      this.hoverBlock = hitTestBlock(this.blocks, x / this.scaleX, y / this.scaleY);
+      this.hoverBlock = hitTestBlock(blocks, x / this.scaleX, y / this.scaleY);
     },
 
     selectRect(rectId) {

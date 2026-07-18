@@ -1460,7 +1460,7 @@ const app = newApp({
 (async () => {
   await app.toggleBlockMode();
   assert.equal(app.blockMode, true);
-  assert.deepEqual(app.blocks, [{ x: 10, y: 10, width: 30, height: 30 }]);
+  assert.deepEqual(app.paragraphBlocks, [{ x: 10, y: 10, width: 30, height: 30 }]);
   assert.equal(calls, 1);
 
   await app.toggleBlockMode();
@@ -1489,9 +1489,9 @@ const app = newApp({
 (async () => {
   await app.toggleBlockMode();
   assert.equal(app.blockMode, true, "0 件は成功扱いでモードは ON のまま");
-  assert.deepEqual(app.blocks, []);
+  assert.deepEqual(app.paragraphBlocks, []);
   assert.equal(app.warnings.length, 1);
-  assert.match(app.warnings[0], /段組が検出されませんでした/);
+  assert.match(app.warnings[0], /テキストブロックが検出されませんでした/);
 })().catch((err) => { console.error(err); process.exit(1); });
 """
     )
@@ -1512,9 +1512,9 @@ const app = newApp({
 (async () => {
   await app.toggleBlockMode();
   assert.equal(app.blockMode, false, "検出失敗時はモードを OFF に戻す");
-  assert.equal(app.blocks, null);
+  assert.equal(app.paragraphBlocks, null);
   assert.equal(app.warnings.length, 1);
-  assert.match(app.warnings[0], /段組検出に失敗/);
+  assert.match(app.warnings[0], /テキストブロック検出に失敗/);
 })().catch((err) => { console.error(err); process.exit(1); });
 """
     )
@@ -1535,7 +1535,7 @@ const app = newApp({
   scaleX: 2,
   scaleY: 2,
   blockMode: true,
-  blocks: [
+  paragraphBlocks: [
     { x: 0, y: 0, width: 100, height: 100 },
     { x: 10, y: 10, width: 30, height: 30 },
   ],
@@ -1582,7 +1582,7 @@ const app = newApp({
   scaleX: 1,
   scaleY: 1,
   blockMode: true,
-  blocks: [{ x: 50, y: 50, width: 20, height: 20 }],
+  paragraphBlocks: [{ x: 50, y: 50, width: 20, height: 20 }],
 });
 app.onMouseDown({
   target: { classList: { contains: () => false } },
@@ -1612,7 +1612,7 @@ const app = newApp({
   scaleX: 1,
   scaleY: 1,
   blockMode: true,
-  blocks: [block],
+  paragraphBlocks: [block],
 });
 app.onMouseMove({ clientX: 20, clientY: 20 });
 assert.deepEqual(app.hoverBlock, block, "ブロック上でホバーがセットされる");
@@ -1639,13 +1639,13 @@ global.fetch = (url, options = {}) => {
 const app = newApp({
   currentImage: { name: "old.png", width: 100, height: 100, mime: "image/png" },
   session: sessionPayload("old.png", []),
-  blocks: [{ x: 1, y: 1, width: 2, height: 2 }],
+  paragraphBlocks: [{ x: 1, y: 1, width: 2, height: 2 }],
   hoverBlock: { x: 1, y: 1, width: 2, height: 2 },
   blockMode: false,
 });
 (async () => {
   await app.selectImage("new.png");
-  assert.equal(app.blocks, null, "画像切替で blocks はリセット");
+  assert.equal(app.paragraphBlocks, null, "画像切替で blocks はリセット");
   assert.equal(app.hoverBlock, null, "画像切替で hoverBlock はリセット");
 })().catch((err) => { console.error(err); process.exit(1); });
 """
@@ -1673,14 +1673,14 @@ global.fetch = (url, options = {}) => {
 const app = newApp({
   currentImage: { name: "old.png", width: 100, height: 100, mime: "image/png" },
   session: sessionPayload("old.png", []),
-  blocks: [{ x: 1, y: 1, width: 2, height: 2 }],
+  paragraphBlocks: [{ x: 1, y: 1, width: 2, height: 2 }],
   blockMode: true,
 });
 (async () => {
   await app.selectImage("new.png");
   await tick();
   assert.ok(fetches.includes("/api/blocks/new.png"), "モード ON のまま画像切替すると新画像の blocks を再取得する");
-  assert.deepEqual(app.blocks, [{ x: 5, y: 5, width: 10, height: 10 }]);
+  assert.deepEqual(app.paragraphBlocks, [{ x: 5, y: 5, width: 10, height: 10 }]);
 })().catch((err) => { console.error(err); process.exit(1); });
 """
     )
@@ -1728,7 +1728,7 @@ const app = newApp({
   await tick();
 
   assert.deepEqual(
-    app.blocks,
+    app.paragraphBlocks,
     [{ x: 5, y: 5, width: 10, height: 10 }],
     "b.png の blocks が取得される（a.png の in-flight に飢餓させられない）",
   );
@@ -1789,7 +1789,7 @@ const app = newApp({
   await tick();
 
   assert.equal(
-    app.blocks,
+    app.paragraphBlocks,
     null,
     "meta/session await 中に届いた a.png の stale blocks を適用してはいけない（epoch 不一致で弾く）",
   );
@@ -1799,7 +1799,7 @@ const app = newApp({
   await tick();
 
   assert.deepEqual(
-    app.blocks,
+    app.paragraphBlocks,
     [{ x: 5, y: 5, width: 10, height: 10 }],
     "最終的には b.png の blocks が反映される",
   );
@@ -1853,7 +1853,7 @@ const app = newApp({
   await app.selectImage("a.png");
   await app._ensureBlocks(); // a.png に再訪問: 0 件だが同文言を重複追加してはいけない
 
-  const matches = app.warnings.filter((w) => /a\.png」から段組が検出されませんでした/.test(w));
+  const matches = app.warnings.filter((w) => /a\.png」からテキストブロックが検出されませんでした/.test(w));
   assert.equal(matches.length, 1, "同一画像への再訪問で同文言の警告が重複蓄積してはいけない");
 })().catch((err) => { console.error(err); process.exit(1); });
 """
@@ -1877,7 +1877,7 @@ const app = newApp({
   await app.toggleBlockMode();
   assert.equal(app.blockMode, false, "1 回目失敗でモード OFF");
   await app.toggleBlockMode();
-  const matches = app.warnings.filter((w) => /a\.png」の段組検出に失敗/.test(w));
+  const matches = app.warnings.filter((w) => /a\.png」のテキストブロック検出に失敗/.test(w));
   assert.equal(matches.length, 1, "同一画像の失敗を繰り返しても同文言の警告は 1 件に留まる");
 })().catch((err) => { console.error(err); process.exit(1); });
 """
@@ -1931,7 +1931,11 @@ const app = newApp({
   await tick();
   await tick();
 
-  assert.deepEqual(app.blocks, [{ x: 1, y: 1, width: 2, height: 2 }], "同名再選択後も最終的に blocks が反映される");
+  assert.deepEqual(
+    app.paragraphBlocks,
+    [{ x: 1, y: 1, width: 2, height: 2 }],
+    "同名再選択後も最終的に blocks が反映される",
+  );
   assert.equal(app.blocksLoading, false, "loading が正しく解除される");
   assert.equal(app.blockMode, true);
   assert.equal(aCalls, 2, "A1 破棄後に A2 が起動する（飢餓しない）");
@@ -2034,8 +2038,129 @@ const app = newApp({
   resolveA();
   await ensuring;
   await tick();
-  assert.equal(app.blocks, null, "OFF 後に到着した応答は適用されない");
+  assert.equal(app.paragraphBlocks, null, "OFF 後に到着した応答は適用されない");
   assert.equal(app.blockMode, false, "OFF のまま");
 })().catch((err) => { console.error(err); process.exit(1); });
+"""
+    )
+
+
+# ---------------------------------------------------------------------------
+# ブロック選択: 粒度 (vertical / paragraph)
+# ---------------------------------------------------------------------------
+
+
+def test_initial_granularity_is_vertical_and_persists_across_images() -> None:
+    """blockGranularity の初期値は vertical で、画像切替後も維持される（スペック 9）。"""
+    _run_node(
+        r"""
+const assert = require("node:assert/strict");
+global.window = {};
+global.fetch = (url) => {
+  if (url.startsWith("/api/image/")) {
+    return Promise.resolve({
+      ok: true,
+      json: async () => ({ image_width: 100, image_height: 100, mime_type: "image/png" }),
+    });
+  }
+  if (url.startsWith("/api/session/")) {
+    return Promise.resolve({
+      ok: true,
+      json: async () => ({
+        image_name: "a.png",
+        image_width: 100,
+        image_height: 100,
+        regions: [],
+        schema_version: 1,
+      }),
+    });
+  }
+  throw new Error(`unexpected fetch: ${url}`);
+};
+require("./src/nova_parser/regional_ocr/static/app.js");
+
+(async () => {
+  const app = window.regionalOcrApp();
+  assert.equal(app.blockGranularity, "vertical", "初期粒度は縦ブロック");
+  app.setGranularity("paragraph");
+  await app.selectImage("a.png");
+  assert.equal(app.blockGranularity, "paragraph", "画像切替で粒度を維持する");
+  assert.equal(app.paragraphBlocks, null, "画像切替で矩形一覧はリセットされる");
+  assert.equal(app.verticalBlocks, null);
+})();
+"""
+    )
+
+
+def test_set_granularity_clears_hover_and_does_not_fetch() -> None:
+    """粒度変更はホバーをクリアするだけで、追加 fetch は行わない（スペック 9）。"""
+    _run_node(
+        r"""
+const assert = require("node:assert/strict");
+global.window = {};
+let fetchCount = 0;
+global.fetch = () => { fetchCount += 1; throw new Error("must not fetch"); };
+require("./src/nova_parser/regional_ocr/static/app.js");
+
+const app = window.regionalOcrApp();
+Object.assign(app, {
+  currentImage: { name: "a.png", width: 100, height: 100, mime: "image/png" },
+  blockMode: true,
+  paragraphBlocks: [{ x: 0, y: 0, width: 10, height: 10 }],
+  verticalBlocks: [{ x: 0, y: 0, width: 20, height: 20 }],
+  hoverBlock: { x: 0, y: 0, width: 20, height: 20 },
+});
+app.setGranularity("paragraph");
+assert.equal(app.blockGranularity, "paragraph");
+assert.equal(app.hoverBlock, null, "粒度変更でホバーをクリアする");
+assert.equal(fetchCount, 0, "粒度変更で fetch してはいけない");
+assert.deepEqual(app.activeBlocks(), [{ x: 0, y: 0, width: 10, height: 10 }]);
+app.setGranularity("vertical");
+assert.deepEqual(app.activeBlocks(), [{ x: 0, y: 0, width: 20, height: 20 }]);
+"""
+    )
+
+
+def test_active_blocks_falls_back_to_paragraphs_when_vertical_empty() -> None:
+    """縦ブロック 0 件・段落ありなら段落矩形へフォールバックする（スペック 10）。"""
+    _run_node(
+        r"""
+const assert = require("node:assert/strict");
+global.window = {};
+require("./src/nova_parser/regional_ocr/static/app.js");
+
+const app = window.regionalOcrApp();
+app.paragraphBlocks = [{ x: 1, y: 1, width: 5, height: 5 }];
+app.verticalBlocks = [];
+assert.equal(app.blockGranularity, "vertical");
+assert.deepEqual(app.activeBlocks(), [{ x: 1, y: 1, width: 5, height: 5 }]);
+"""
+    )
+
+
+def test_ensure_blocks_stores_both_lists_and_warns_only_when_both_empty() -> None:
+    """_ensureBlocks は両矩形を保持し、両方 0 件のときだけ警告する（スペック 10）。"""
+    _run_node(
+        r"""
+const assert = require("node:assert/strict");
+global.window = {};
+let payload = { blocks: [{ x: 0, y: 0, width: 10, height: 10 }], vertical_blocks: [] };
+global.fetch = () => Promise.resolve({ ok: true, json: async () => payload });
+require("./src/nova_parser/regional_ocr/static/app.js");
+
+(async () => {
+  const app = window.regionalOcrApp();
+  app.currentImage = { name: "a.png", width: 100, height: 100, mime: "image/png" };
+  await app._ensureBlocks();
+  assert.deepEqual(app.paragraphBlocks, [{ x: 0, y: 0, width: 10, height: 10 }]);
+  assert.deepEqual(app.verticalBlocks, []);
+  assert.deepEqual(app.warnings, [], "段落があれば警告しない");
+
+  const app2 = window.regionalOcrApp();
+  app2.currentImage = { name: "b.png", width: 100, height: 100, mime: "image/png" };
+  payload = { blocks: [], vertical_blocks: [] };
+  await app2._ensureBlocks();
+  assert.deepEqual(app2.warnings, ["「b.png」からテキストブロックが検出されませんでした"]);
+})();
 """
     )
