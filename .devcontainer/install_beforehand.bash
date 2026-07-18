@@ -17,6 +17,8 @@ echo "Installing Codex CLI..."
 yarn global add @openai/codex@latest
 echo "Installing Grok Build..."
 curl -fsSL https://x.ai/cli/install.sh | bash
+echo "Installing AntiGravity CLI..."
+curl -fsSL https://antigravity.google/cli/install.sh | bash
 
 YARN_GLOBAL_BIN="$(yarn global bin)"
 export PATH="$YARN_GLOBAL_BIN:$HOME/.local/bin:$PATH"
