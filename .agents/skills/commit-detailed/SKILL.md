@@ -1,61 +1,137 @@
 ---
 name: commit-detailed
-description: Commit already-staged files to the `main` branch with a detailed commit message. Use when the user asks to commit staged changes only, wants a rich or detailed commit message, asks for a Conventional Commits subject plus explanatory body, or says things like "commit the staged files", "commit only what is staged", "commit this on main", "write a detailed commit message", or "$commit-detailed". Do not use this skill for `git add`, branch switching, rebasing, amending old commits, or pushing.
+description: Use when ユーザーが、すでに staged の変更だけを detailed または Conventional Commits 形式のメッセージで commit するよう依頼し、main、origin/main、current branch、open/draft PR、detached HEAD による実行可否判定が必要な場合。
 ---
 
 # Commit Detailed
 
-## Overview
+## 概要
 
-Use this skill to commit exactly the files that are already staged, and only when the current branch is `main`. Write a detailed commit message with a Conventional Commits subject and a Japanese body that explains background, key changes, impact, and tests when known.
+Git index にすでに登録されている変更だけを、ブランチと GitHub PR の安全条件に従って commit する。ブランチ名と commit message の記述は、すべて staged diff だけから導出する。
 
-## Workflow
+## ワークフロー
 
-### 1. Verify Preconditions
+### 1. HEAD の状態を判定する
 
-Run these checks first and stop if any fail:
+最初に次の read-only コマンドを実行する。
 
 ```bash
-git rev-parse --abbrev-ref HEAD
+git rev-parse --is-inside-work-tree
+git symbolic-ref --quiet --short HEAD
+```
+
+ほかの操作より先に結果を判定する。
+
+- 最初のコマンドが `true` を出力しない: 現在のディレクトリが Git worktree ではないと報告して終了する。
+- 出力が `main`: `main` は保護対象であると報告して終了する。GitHub への問い合わせ、staged diff の調査、ブランチ作成、commit は行わない。
+- 出力が別のブランチ: **main 以外の通常ブランチ**へ進む。
+- HEAD が detached のため終了コードが非0: **detached HEAD**へ進む。
+- その他のエラー: エラーを報告して終了する。
+
+### 2A. main 以外の通常ブランチ
+
+index が空でないことを確認する。
+
+```bash
 git diff --staged --name-only
 ```
 
-Required conditions:
+出力がなければ、staged changes がないと報告して終了する。`git add` は実行しない。
 
-- The current branch must be `main`.
-- There must be at least one staged file.
+staged file 名を**機密ファイル**の規則と照合する。疑わしい名前があれば、GitHub への問い合わせや commit より前に終了する。
 
-If the branch is not `main`:
-
-- Do not run `git switch`, `git checkout`, or any other branch-changing command.
-- Tell the user the current branch name and ask them to switch to `main` or confirm a different plan.
-
-If there are no staged files:
-
-- Do not run `git add`.
-- Tell the user there is nothing staged to commit.
-
-### 2. Inspect Only the Staged Change Set
-
-Read the staged state, not the whole working tree:
+現在のブランチを head とする open PR が1件以上あることを確認する。
 
 ```bash
-git status --short
+current_branch="$(git symbolic-ref --quiet --short HEAD)"
+gh pr list --head "$current_branch" --state open --limit 1 --json number,isDraft,url
+```
+
+結果は次のように厳密に解釈する。
+
+- 終了コードが非0: PR の状態は不明である。エラーを報告して終了する。
+- JSON が `[]`: open PR はない。commit を作成しなかったと報告して終了する。
+- JSON に要素がある: 条件を満たす。draft も open であるため許可する。
+
+closed または merged PR は条件を満たさない。
+
+### 2B. detached HEAD
+
+fetch せずに commit を解決して比較する。
+
+```bash
+git rev-parse --verify 'HEAD^{commit}'
+git rev-parse --verify 'refs/remotes/origin/main^{commit}'
+```
+
+`origin/main` を解決できない場合、または2つの hash が異なる場合は、理由を報告して終了する。
+
+ブランチ作成前に staged file 名を確認し、**機密ファイル**の規則と照合する。
+
+```bash
+git diff --staged --name-only
+```
+
+staged changes がない場合、または疑わしいファイルが staged されている場合は、ブランチを作成せず終了する。
+
+**許可された変更範囲を調査する**の手順で staged diff を確認し、次の形式の名前を生成する。
+
+```text
+<type>/<lowercase-kebab-case-summary>
+```
+
+`<type>` は次の表から選ぶ。
+
+| staged change | ブランチ種別 | commit type |
+|---|---|---|
+| ユーザー向け機能 | `feature` | `feat` |
+| 不具合修正 | `fix` | `fix` |
+| ドキュメントのみ | `docs` | `docs` |
+| 内部構造の整理 | `refactor` | `refactor` |
+| テストのみ | `test` | `test` |
+| フォーマットのみ | `chore` | `style` |
+| 保守作業 | `chore` | `chore` |
+| CI 設定 | `ci` | `ci` |
+| build system | `build` | `build` |
+| performance 改善 | `perf` | `perf` |
+
+staged diff の主要目的を表す短い英語要約を使う。候補を検証し、local と `origin` の両方で同名 ref を確認する。
+
+```bash
+git check-ref-format --branch "$candidate"
+git show-ref --verify --quiet "refs/heads/$candidate"
+git show-ref --verify --quiet "refs/remotes/origin/$candidate"
+```
+
+`git show-ref --verify --quiet` の終了コード1は、指定した ref が存在しないことを意味する。どちらかの ref が存在する場合は `-2`、次は `-3` と連番を付け、未使用名になるまで両方を再確認する。
+
+その local branch だけを作成する。
+
+```bash
+git switch -c "$candidate"
+```
+
+ブランチ作成に失敗した場合は、エラーを報告して終了する。既存 ref を削除または上書きしない。
+
+### 3. 許可された変更範囲を調査する
+
+staged state だけを使う。
+
+```bash
 git diff --staged --name-only
 git diff --staged --stat
 git diff --staged
-git log --oneline -10
 ```
 
-Interpretation rules:
+規則:
 
-- Base the commit message on the staged diff only.
-- Ignore unstaged edits except to mention that they remain in the working tree if that matters for user clarity.
-- Prefer the dominant change type when choosing the Conventional Commits prefix.
+- ブランチ名、subject、body は、この出力だけを根拠にする。
+- message を補う目的で unstaged / untracked file の内容を読まない。
+- staged diff の主要目的から commit type を選ぶ。
 
-### 3. Reject Obvious Sensitive Files
+### 4. 機密ファイル
 
-If the staged list contains files that look like secrets or credentials, stop and ask the user before committing. Treat these as suspicious by default:
+staged path が次のいずれかに該当する場合は終了し、index の確認をユーザーへ依頼する。
 
 - `.env`
 - `.env.*`
@@ -63,11 +139,13 @@ If the staged list contains files that look like secrets or credentials, stop an
 - `*.key`
 - `*.pfx`
 - `id_rsa*`
-- filenames containing `secret`, `token`, or `credential`
+- ファイル名に `secret`、`token`、`credential` のいずれかを含む
 
-### 4. Write the Commit Message
+detached HEAD の分岐では、この確認より前にブランチを作成しない。
 
-Use this structure:
+### 5. commit message を作成する
+
+次の構造を使う。
 
 ```text
 <type>: <short subject in Japanese>
@@ -85,62 +163,53 @@ Use this structure:
 - ...
 ```
 
-Message rules:
+規則:
 
-- Use a Conventional Commits subject such as `feat`, `fix`, `docs`, `refactor`, `test`, `style`, or `chore`.
-- Keep the subject concise and do not end it with a period.
-- Write the body in Japanese unless the user explicitly asks for another language.
-- Include `背景` and `変更点` whenever the staged diff is non-trivial.
-- Include `影響` when behavior, workflow, or user-visible expectations changed.
-- Include `テスト` only when there is concrete evidence. If no test was run, say so plainly instead of inventing one.
-- Avoid filler. The body should explain why the change exists and what was actually staged.
+- `feat`、`fix`、`docs`、`refactor`、`test`、`style`、`chore`、`ci`、`build`、`perf` のいずれかを使う。
+- subject は簡潔にし、末尾に句点を付けない。
+- ユーザーが別言語を明示しない限り body は日本語で書く。
+- 非自明な変更では `背景` と `変更点` を含める。
+- 動作、workflow、ユーザー向け仕様が変わる場合は `影響` を含める。
+- 具体的な test evidence だけを記載する。テストを実行していない場合は、その事実を明記する。
+- unstaged / untracked content から記述を推測しない。
 
-### 5. Commit the Staged Files Only
+### 6. index を commit する
 
-Commit without staging anything new:
+path の追加指定や scope の拡大をせずに commit する。
 
 ```bash
-git commit -m "$(cat <<'EOF'
+git commit -F - <<'EOF'
 <final message>
 EOF
-)"
 ```
 
-Do not add flags that widen scope or skip safety checks.
+`-a`、path 引数、`--amend`、`--no-verify` は使わない。
 
-### 6. Report the Result
+detached HEAD からブランチを作成した後に hook または検証が失敗した場合は、新規ブランチと staged state を維持する。現在のブランチと失敗を報告し、自動 rollback やブランチ削除は行わない。
 
-After a successful commit, run:
+### 7. 結果を報告する
+
+commit 成功後に次を実行する。
 
 ```bash
-git log -1 --stat
+git log -1 --format=fuller --stat
 git log -1 --name-status
+git status --short
 ```
 
-Report back with:
+次を報告する。
 
-- the short commit hash
-- the exact commit message used
-- the files included in the commit
-- whether unstaged changes are still present afterward, if any
+- short commit hash
+- 使用した正確な commit message
+- commit したファイル
+- 残っている unstaged / untracked changes
 
-## Resources
+## ガードレール
 
-This skill includes `evals/` only.
-
-- `evals/evals.json`: seeded scenarios for success and refusal paths
-- `evals/trigger_queries.json`: trigger coverage for staged-only and main-only commit requests
-
-## Validation
-
-- Ensure the frontmatter description stays aligned with staged-only, main-only commit behavior.
-- Keep the seeded evals in sync if the commit message structure or refusal conditions change.
-
-## Guardrails
-
-- Do not run `git add`.
-- Do not switch branches.
-- Do not push.
-- Do not use `--amend`.
-- Do not use `--no-verify` unless the user explicitly instructs it.
-- Do not include unstaged files in the commit.
+- `git add` を実行しない。
+- `main` では commit しない。
+- 自動 fetch しない。
+- push または PR 作成を行わない。
+- rebase または amend を行わない。
+- unstaged / untracked files を含めない。
+- ユーザーの明示指示なしに hook を回避しない。
