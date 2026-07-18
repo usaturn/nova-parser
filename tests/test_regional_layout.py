@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from nova_parser.regional_ocr.layout import drop_perimeter_rects, normalize_rects, split_bands
+from nova_parser.regional_ocr.layout import (
+    drop_perimeter_rects,
+    normalize_rects,
+    split_bands,
+    split_columns,
+)
 from nova_parser.regional_ocr.models import BlockRect
 
 W, H = 1000, 1000
@@ -99,3 +104,33 @@ class TestSplitBands:
         rects = [_r(100, 100, 800, 150), _r(100, 400, 800, 150)]
         bands = split_bands(rects, W, H)
         assert len(bands) == 1
+
+
+class TestSplitColumns:
+    def test_two_columns_by_left_edge(self):
+        a = _r(100, 100, 400, 200)
+        b = _r(100, 320, 400, 150)
+        c = _r(520, 100, 400, 370)
+        assert split_columns([a, b, c], W) == [[a, b], [c]]
+
+    def test_narrow_heading_joins_wider_body_column(self):
+        # 狭い見出しが、より幅の広い本文列の内側に収まる場合は同一列
+        heading = _r(150, 100, 200, 50)
+        body = _r(100, 170, 400, 300)
+        columns = split_columns([heading, body], W)
+        assert len(columns) == 1
+        assert sorted(r.y for r in columns[0]) == [100, 170]
+
+    def test_rect_spanning_two_columns_is_independent_block(self):
+        col_a = _r(100, 100, 300, 400)
+        col_b = _r(600, 100, 300, 400)
+        wide = _r(100, 550, 800, 100)
+        columns = split_columns([col_a, col_b, wide], W)
+        assert [wide] in columns
+        assert len(columns) == 3
+
+    def test_single_column_of_wide_rects_stays_one_column(self):
+        # 全矩形が幅広（1 段組バンド）の場合は通常クラスタリングで 1 列
+        a = _r(100, 100, 800, 150)
+        b = _r(100, 300, 800, 150)
+        assert split_columns([a, b], W) == [[a, b]]

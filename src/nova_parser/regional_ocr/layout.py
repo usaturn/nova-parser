@@ -280,3 +280,40 @@ def split_bands(rects: list[BlockRect], image_width: int, image_height: int) -> 
     for seg in segments:
         bands.extend(_split_by_spanning_rects(seg, image_width))
     return bands
+
+
+# --- 7.3 領域内の列推定 -------------------------------------------------------
+
+
+def split_columns(band: list[BlockRect], image_width: int) -> list[list[BlockRect]]:
+    """バンド内の矩形を列（または独立ブロック）へ左から順に分割する（スペック 7.3）。
+
+    複数列を横断する幅広矩形は、いずれか 1 列へ吸収せず独立ブロックとして返す。
+    暫定列が 2 未満のバンドでは横断判定が成立しないため、全体を通常クラスタリングする。
+    """
+    if len(band) <= 1:
+        return [list(band)] if band else []
+    content = _bbox(band)
+    wide_min = content.width * WIDE_RECT_BAND_WIDTH_RATIO
+    narrow = [r for r in band if r.width < wide_min]
+    wide = [r for r in band if r.width >= wide_min]
+    clusters = _cluster_by_x(narrow, image_width)
+    if len(clusters) < 2:
+        return _cluster_by_x(band, image_width)
+    groups: list[list[BlockRect]] = list(clusters)
+    for r in wide:
+        if _spanned_count(r, clusters) >= 2:
+            groups.append([r])
+            continue
+        best: list[BlockRect] | None = None
+        best_overlap = 0.0
+        for c in clusters:
+            overlap = _x_overlap(r, _bbox(c))
+            if overlap > best_overlap:
+                best, best_overlap = c, overlap
+        if best is None:
+            groups.append([r])
+        else:
+            best.append(r)
+    groups.sort(key=lambda c: (_bbox(c).left, _bbox(c).top))
+    return groups
