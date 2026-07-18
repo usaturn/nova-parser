@@ -117,6 +117,7 @@ class TestMergeColumnsAcrossSpanningHeadings:
 
     def test_does_not_merge_when_spanning_heading_has_no_x_overlap(self):
         # 右端だけの幅広中間矩形は左本文列を結合してはならない（GPT-5 M-3）
+        # ギャップ 150/1000=0.15 > COLUMN_REJOIN_MAX_GAP_RATIO のため小ギャップ経路でも未結合
         upper = [_r(100, 100, 300, 100)]
         mid = [_r(600, 250, 350, 30)]  # 幅 35%・高さ 3%、左本文と X 重なり 0
         lower = [_r(100, 350, 300, 100)]
@@ -127,6 +128,15 @@ class TestMergeColumnsAcrossSpanningHeadings:
             frozenset({(100, 100)}),
             frozenset({(100, 350)}),
         }
+
+    def test_rejoins_same_column_across_small_gap_without_x_overlapping_intervener(self):
+        # 小さなギャップ + 右だけの中間 → 左は再結合してよい（p203 型）
+        upper = [_r(100, 100, 300, 200)]
+        mid = [_r(600, 310, 350, 20)]
+        lower = [_r(100, 340, 300, 200)]  # gap = 40 on H=1000 → 0.04 < 0.05
+        result = merge_columns_across_spanning_headings([upper, mid, lower], W, H)
+        bodies = [g for g in result if any(r.x == 100 for r in g)]
+        assert len(bodies) == 1
 
 
 class TestMergeNarrowColumnGroups:

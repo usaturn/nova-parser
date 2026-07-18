@@ -129,6 +129,9 @@ SPAN_MERGE_HEADING_MAX_HEIGHT_RATIO = 0.05
 SPAN_MERGE_BLOCK_X_OVERLAP_RATIO = 0.2
 """中間の非見出しブロックが列再結合を阻害する最小 X 重なり率（上列幅比）。"""
 
+COLUMN_REJOIN_MAX_GAP_RATIO = 0.05
+"""列ブロッカー無しで上下列を再結合する最大縦ギャップ（画像高さ比）。"""
+
 SPAN_MERGE_SOFT_EDGE_PX = 2
 """上列下端〜下列上端の間に入る中間矩形を拾うソフト端（ピクセル）。"""
 
@@ -730,7 +733,8 @@ def merge_columns_across_spanning_headings(
 ) -> list[list[BlockRect]]:
     """帯見出しだけを挟んで上下に分断された同一本文列を再結合する。
 
-    中間にページ幅 35% 以上・高さ 5% 以下の横断見出しがある場合のみ結合する。
+    中間にページ幅 35% 以上・高さ 5% 以下の横断見出しが列を X 覆う場合に結合する。
+    列を X 交差しない中間物のみで縦ギャップが小さい場合も再結合する。
     カード行のように空ギャップだけで並ぶ本文列は結合しない（未結合優先）。
     """
     if len(groups) <= 1:
@@ -784,6 +788,19 @@ def merge_columns_across_spanning_headings(
                     or (bk.top >= upper.bottom - soft and bk.bottom <= lower.top + soft)
                 )
             ]
+            # 上列 X を十分な割合で跨ぐ中間物 = 列ブロッカー
+            column_blockers = [
+                bk for bk in interveners if _x_overlap(upper, bk) > upper.width * SPAN_MERGE_BLOCK_X_OVERLAP_RATIO
+            ]
+            gap = lower.top - upper.bottom
+            if not column_blockers:
+                # 列を X 交差しない横断見出し形状の中間物のみ + 小ギャップ → 再結合（p203 型）
+                # 隣接カード列を intervener に数えて結合しない（p249）。空ギャップも未結合。
+                soft_spans = [bk for bk in interveners if bk.width >= span_w and bk.height <= span_h]
+                if soft_spans and gap <= image_height * COLUMN_REJOIN_MAX_GAP_RATIO:
+                    union(i, j)
+                continue
+            # 列ブロッカーあり: 横断見出しが上下列を X 覆う場合のみ再結合
             spans = [
                 bk
                 for bk in interveners
@@ -804,7 +821,7 @@ def merge_columns_across_spanning_headings(
                 )
                 if is_span:
                     continue
-                xov = min(upper.right, bk.right) - max(upper.left, bk.left)
+                xov = _x_overlap(upper, bk)
                 if xov > upper.width * SPAN_MERGE_BLOCK_X_OVERLAP_RATIO:
                     blocked = True
                     break
