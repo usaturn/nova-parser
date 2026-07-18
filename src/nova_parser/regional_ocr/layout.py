@@ -171,6 +171,34 @@ def drop_perimeter_rects(rects: list[BlockRect], image_width: int, image_height:
     return kept
 
 
+def drop_noise_rects(rects: list[BlockRect], image_width: int, image_height: int) -> list[BlockRect]:
+    """OCR 誤検出の装飾・極小ラベルを除外する。
+
+    - 画像高さの 1.5% 未満の極小矩形（例: 独立したサブタイトル断片）
+    - 本文列に属さない幅広薄型の装飾（例: 丸印グラフィックの誤認識）
+    横断帯見出し（ページ幅の 40% 以上）は装飾扱いにしない。
+    """
+    kept: list[BlockRect] = []
+    micro_h = image_height * PERIMETER_MAX_HEIGHT_RATIO * 0.35  # ≈ 1.4% of H
+    deco_h = image_height * PERIMETER_MAX_HEIGHT_RATIO
+    edge_tol = image_width * COLUMN_EDGE_TOLERANCE_RATIO * 3
+    for r in rects:
+        hr_ok_micro = r.height >= micro_h
+        aspect = r.width / max(r.height, 1)
+        if not hr_ok_micro:
+            continue
+        if r.height < deco_h and aspect >= 8.0 and r.width < image_width * NARROW_COLUMN_MAX_WIDTH_RATIO * 1.6:
+            near_col = any(
+                o.height >= deco_h and abs(o.left - r.left) <= edge_tol and _v_gap(r, o) < image_height * 0.08
+                for o in rects
+                if o is not r
+            )
+            if not near_col:
+                continue
+        kept.append(r)
+    return kept
+
+
 # --- 7.2 横方向レイアウト領域（バンド） ---------------------------------------
 
 
@@ -178,22 +206,35 @@ def _cluster_by_x(rects: list[BlockRect], image_width: int) -> list[list[BlockRe
     """X 範囲の近さで矩形を列クラスタへまとめる（スペック 7.3 の同一列判定）。
 
     左端・右端が近い、または X 重なりが大きい矩形を同一クラスタとする。
+    連鎖結合を抑えるため、クラスタ代表はメンバの左右端中央値とし、
+    重なり率は max(幅) 基準、中心が離れた矩形は端が近くない限り結合しない。
     戻り値は左から右（同左端なら上から下）の順。
     """
     edge_tol = image_width * COLUMN_EDGE_TOLERANCE_RATIO
+    center_tol = edge_tol * 3
     clusters: list[list[BlockRect]] = []
     for r in sorted(rects, key=lambda r: (r.left, r.top)):
         target = None
+        rc = (r.left + r.right) / 2
         for c in clusters:
-            cb = _bbox(c)
-            min_w = min(r.width, cb.width)
-            if min_w <= 0:
+            lefts = sorted(x.left for x in c)
+            rights = sorted(x.right for x in c)
+            ml = lefts[len(lefts) // 2]
+            mr = rights[len(rights) // 2]
+            core_w = mr - ml
+            if core_w <= 0:
                 continue
-            if (
-                _x_overlap(r, cb) / min_w >= COLUMN_X_OVERLAP_RATIO
-                or abs(r.left - cb.left) <= edge_tol
-                or abs(r.right - cb.right) <= edge_tol
-            ):
+            ov = min(r.right, mr) - max(r.left, ml)
+            max_w = max(r.width, core_w)
+            left_close = abs(r.left - ml) <= edge_tol
+            right_close = abs(r.right - mr) <= edge_tol
+            center_close = abs(rc - (ml + mr) / 2) <= center_tol
+            fully_inside = r.left >= ml - edge_tol and r.right <= mr + edge_tol and r.width <= core_w * 1.05
+            if left_close or right_close or fully_inside:
+                if ov > 0 or left_close or right_close:
+                    target = c
+                    break
+            elif ov > 0 and max_w > 0 and ov / max_w >= COLUMN_X_OVERLAP_RATIO and center_close:
                 target = c
                 break
         if target is None:
@@ -323,12 +364,27 @@ def split_columns(band: list[BlockRect], image_width: int) -> list[list[BlockRec
 
 
 def _has_shared_row_boundary(gap_top: float, gap_bottom: float, neighbors: list[BlockRect], tol: float) -> bool:
-    """隣接列にも同じ行境界（空白区間内に上端が来る矩形）があるか（スペック 7.4）。"""
-    return any(gap_top - tol <= n.top <= gap_bottom + tol for n in neighbors)
+    """隣接列にも同じ行境界があるか（スペック 7.4: カード状の行）。
+
+    隣接側に「ギャップ上端付近で終わる内容」と「ギャップ下端付近で始まる内容」の
+    両方が揃うときだけ共有行境界とみなす。片方の列にたまたま近い上端があるだけでは
+    分割しない（連続本文の誤分割を防ぐ）。
+    """
+    if not neighbors:
+        return False
+    has_below = any(abs(n.top - gap_bottom) <= tol for n in neighbors)
+    has_above = any(abs(n.bottom - gap_top) <= tol for n in neighbors)
+    return has_below and has_above
 
 
 def _is_heading_break(group: list[BlockRect], cur: BlockRect) -> bool:
-    """直前グループと次矩形の幅・中心位置が大きく異なるか（見出し境界、スペック 7.4）。"""
+    """直前グループと次矩形の幅・中心位置が大きく異なるか（見出し境界、スペック 7.4）。
+
+    直前が単一矩形（見出しそのもの）のときだけ適用する。複数段落を統合した本文中の
+    短い行・部分幅行では分割しない。
+    """
+    if len(group) != 1:
+        return False
     gb = _bbox(group)
     max_w = max(gb.width, cur.width)
     if max_w <= 0:
@@ -403,6 +459,56 @@ def cancel_overmerged(band_groups: list[list[BlockRect]], image_width: int) -> l
     return result
 
 
+def merge_narrow_column_groups(groups: list[list[BlockRect]], image_width: int) -> list[list[BlockRect]]:
+    """欄外注釈候補（狭い列）の縦積みグループをバンド跨ぎで統合する（スペック 7.3）。
+
+    左端または右端が近く、X 重なりが大きく、Y 方向に並んだ狭いグループを 1 つにまとめる。
+    本文列（幅が NARROW 超）は対象外。
+    """
+    if len(groups) <= 1:
+        return groups
+    edge_tol = image_width * COLUMN_EDGE_TOLERANCE_RATIO
+    boxes = [_bbox(g) for g in groups]
+    used = [False] * len(groups)
+    result: list[list[BlockRect]] = []
+    order = sorted(range(len(groups)), key=lambda i: (boxes[i].left, boxes[i].top))
+    for i in order:
+        if used[i]:
+            continue
+        bi = boxes[i]
+        if bi.width > image_width * NARROW_COLUMN_MAX_WIDTH_RATIO:
+            result.append(groups[i])
+            used[i] = True
+            continue
+        merged = list(groups[i])
+        mb = bi
+        used[i] = True
+        changed = True
+        while changed:
+            changed = False
+            for j in order:
+                if used[j]:
+                    continue
+                bj = boxes[j]
+                if bj.width > image_width * NARROW_COLUMN_MAX_WIDTH_RATIO:
+                    continue
+                if abs(mb.left - bj.left) > edge_tol and abs(mb.right - bj.right) > edge_tol:
+                    continue
+                ov = _x_overlap(mb, bj)
+                min_w = min(mb.width, bj.width)
+                if min_w <= 0 or ov / min_w < COLUMN_X_OVERLAP_RATIO:
+                    continue
+                if _y_overlap(mb, bj) > min(mb.height, bj.height) * 0.15:
+                    continue
+                merged.extend(groups[j])
+                mb = _bbox(merged)
+                used[j] = True
+                changed = True
+        result.append(merged)
+    result.sort(key=lambda g: (_bbox(g).top, _bbox(g).left))
+    return result
+
+
 # --- 7.5 出力整形 -------------------------------------------------------------
 
 
@@ -456,6 +562,7 @@ def compute_vertical_blocks(image_width: int, image_height: int, blocks: list[Bl
     if not rects:
         return []
     body = drop_perimeter_rects(rects, image_width, image_height)
+    body = drop_noise_rects(body, image_width, image_height)
     if not body:
         return rects
     groups: list[list[BlockRect]] = []
@@ -464,6 +571,7 @@ def compute_vertical_blocks(image_width: int, image_height: int, blocks: list[Bl
         for column in split_columns(band, image_width):
             band_groups.extend(split_vertical(column, band, image_width, image_height))
         groups.extend(cancel_overmerged(band_groups, image_width))
+    groups = merge_narrow_column_groups(groups, image_width)
     if not groups:
         return body
     return finalize_blocks(groups, image_width, image_height)
