@@ -102,18 +102,22 @@ class TestMergeColumnsAcrossSpanningHeadings:
         upper = [_r(100, 100, 400, 200)]
         heading = [_r(50, 320, 400, 30)]  # 幅 40%・高さ 3% の横断見出し
         lower = [_r(100, 370, 400, 200)]
-        result = merge_columns_across_spanning_headings([upper, heading, lower], W, H)
+        groups = [upper, heading, lower]
+        result, bands = merge_columns_across_spanning_headings(groups, W, H, [0] * len(groups))
         merged_bodies = [g for g in result if any(r.y in (100, 370) for r in g)]
         assert len(merged_bodies) == 1
         assert {r.y for r in merged_bodies[0]} == {100, 370}
         assert heading in result or any(heading[0] in g for g in result)
+        assert len(bands) == len(result)
 
     def test_empty_gap_only_does_not_merge_card_rows(self):
         # 横断見出しなしの空ギャップだけでは上下本文列を結合しない
         upper = [_r(100, 100, 300, 150)]
         lower = [_r(100, 300, 300, 150)]
-        result = merge_columns_across_spanning_headings([upper, lower], W, H)
+        groups = [upper, lower]
+        result, bands = merge_columns_across_spanning_headings(groups, W, H, [0] * len(groups))
         assert len(result) == 2
+        assert bands == [0, 0]
 
     def test_does_not_merge_when_spanning_heading_has_no_x_overlap(self):
         # 右端だけの幅広中間矩形は左本文列を結合してはならない（GPT-5 M-3）
@@ -121,7 +125,8 @@ class TestMergeColumnsAcrossSpanningHeadings:
         upper = [_r(100, 100, 300, 100)]
         mid = [_r(600, 250, 350, 30)]  # 幅 35%・高さ 3%、左本文と X 重なり 0
         lower = [_r(100, 350, 300, 100)]
-        result = merge_columns_across_spanning_headings([upper, mid, lower], W, H)
+        groups = [upper, mid, lower]
+        result, _bands = merge_columns_across_spanning_headings(groups, W, H, [0] * len(groups))
         bodies = [g for g in result if any(r.x == 100 for r in g)]
         assert len(bodies) == 2
         assert {frozenset((r.x, r.y) for r in g) for g in bodies} == {
@@ -134,9 +139,13 @@ class TestMergeColumnsAcrossSpanningHeadings:
         upper = [_r(100, 100, 300, 200)]
         mid = [_r(600, 310, 350, 20)]
         lower = [_r(100, 340, 300, 200)]  # gap = 40 on H=1000 → 0.04 < 0.05
-        result = merge_columns_across_spanning_headings([upper, mid, lower], W, H)
+        groups = [upper, mid, lower]
+        result, bands = merge_columns_across_spanning_headings(groups, W, H, [0, 1, 2])
         bodies = [g for g in result if any(r.x == 100 for r in g)]
         assert len(bodies) == 1
+        # union 時は参加グループの min(band_id)
+        body_idx = next(i for i, g in enumerate(result) if any(r.x == 100 for r in g))
+        assert bands[body_idx] == 0
 
 
 class TestMergeNarrowColumnGroups:
@@ -336,3 +345,11 @@ class TestComputeVerticalBlocks:
             (False, True),
             (False, False),
         ]
+
+    def test_same_band_orders_left_to_right_when_right_column_starts_higher(self):
+        # GPT-5 L-1: 右列の top が上でも同一バンドなら左→右
+        left = _r(100, 200, 350, 250)
+        right = _r(550, 100, 350, 250)
+        out = compute_vertical_blocks(W, H, [left, right])
+        assert len(out) == 2
+        assert out[0].x < out[1].x

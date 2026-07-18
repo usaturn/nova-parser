@@ -8,7 +8,7 @@ Vision SDK・FastAPI・ファイル I/O へ依存しない（スペック 6.1）
 normalize_rects → drop_perimeter_rects → drop_noise_rects
 → split_bands → split_columns → split_vertical → cancel_overmerged
 → merge_narrow_column_groups → merge_columns_across_spanning_headings
-→ finalize_blocks
+→ sort by (band_id, left, top) → finalize_blocks
 """
 
 from __future__ import annotations
@@ -716,29 +716,26 @@ def merge_narrow_column_groups(
                 changed = True
         result.append(merged)
         result_bands.append(merged_band)
-    paired = sorted(
-        zip(result, result_bands, strict=True),
-        key=lambda pair: (_bbox(pair[0]).top, _bbox(pair[0]).left),
-    )
-    if not paired:
-        return [], []
-    sorted_groups, sorted_bands = zip(*paired, strict=True)
-    return list(sorted_groups), list(sorted_bands)
+    # 最終出力順は compute_vertical_blocks 側で (band_id, left, top) に安定ソートする。
+    # ここでは (top, left) のみの並び替えを行わない。
+    return result, result_bands
 
 
 def merge_columns_across_spanning_headings(
     groups: list[list[BlockRect]],
     image_width: int,
     image_height: int,
-) -> list[list[BlockRect]]:
+    band_ids: list[int],
+) -> tuple[list[list[BlockRect]], list[int]]:
     """帯見出しだけを挟んで上下に分断された同一本文列を再結合する。
 
     中間にページ幅 35% 以上・高さ 5% 以下の横断見出しが列を X 覆う場合に結合する。
     列を X 交差しない中間物のみで縦ギャップが小さい場合も再結合する。
     カード行のように空ギャップだけで並ぶ本文列は結合しない（未結合優先）。
+    戻り値は (統合後グループ, 各グループの band_id)。union 時は min(band_id)。
     """
     if len(groups) <= 1:
-        return groups
+        return groups, list(band_ids)
     boxes = [_bbox(g) for g in groups]
     body_min = image_width * NARROW_COLUMN_MAX_WIDTH_RATIO
     edge_tol = image_width * COLUMN_EDGE_TOLERANCE_RATIO * SPAN_MERGE_EDGE_TOL_FACTOR
@@ -832,13 +829,15 @@ def merge_columns_across_spanning_headings(
     for i in range(len(groups)):
         buckets.setdefault(find(i), []).append(i)
     result: list[list[BlockRect]] = []
+    result_bands: list[int] = []
     for ids in buckets.values():
         merged: list[BlockRect] = []
         for i in ids:
             merged.extend(groups[i])
         result.append(merged)
-    result.sort(key=lambda g: (_bbox(g).top, _bbox(g).left))
-    return result
+        result_bands.append(min(band_ids[i] for i in ids))
+    # 最終出力順は compute_vertical_blocks 側で (band_id, left, top) に安定ソートする。
+    return result, result_bands
 
 
 # --- 7.5 出力整形 -------------------------------------------------------------
@@ -907,8 +906,14 @@ def compute_vertical_blocks(image_width: int, image_height: int, blocks: list[Bl
         for g in band_groups:
             tagged_groups.append(g)
             tagged_bands.append(band_id)
-    groups, _band_ids = merge_narrow_column_groups(tagged_groups, image_width, tagged_bands)
-    groups = merge_columns_across_spanning_headings(groups, image_width, image_height)
+    groups, band_ids = merge_narrow_column_groups(tagged_groups, image_width, tagged_bands)
+    groups, band_ids = merge_columns_across_spanning_headings(groups, image_width, image_height, band_ids)
     if not groups:
         return body
+    # 同一バンド内は左→右、バンド間は上→下（band_id 昇順）で安定ソート
+    order = sorted(
+        range(len(groups)),
+        key=lambda i: (band_ids[i], _bbox(groups[i]).left, _bbox(groups[i]).top),
+    )
+    groups = [groups[i] for i in order]
     return finalize_blocks(groups, image_width, image_height)
