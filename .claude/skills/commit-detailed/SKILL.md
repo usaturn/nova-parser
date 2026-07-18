@@ -19,11 +19,11 @@ Task 呼び出し前に、親スレッドで以下を順に Bash で確認する
 
    ```bash
    branch="$(git rev-parse --abbrev-ref HEAD)"
-   gh pr list --head "$branch" --state open --json number,url
+   gh pr list --head "$branch" --state open --json number --jq 'length'
    ```
 
-   - 出力が 1 件以上（PR あり）→ そのまま Task 呼び出し（次節）へ進む。
-   - 出力が空（PR なし）→ `AskUserQuestion` で「このブランチに対応する Open PR がありません。PR 無しのままこのブランチに commit しますか?」を確認する。
+   - 出力が `1` 以上（PR あり）→ そのまま Task 呼び出し（次節）へ進む。
+   - 出力が `0`（PR なし）→ `AskUserQuestion` で「このブランチに対応する Open PR がありません。PR 無しのままこのブランチに commit しますか?」を確認する。
      - Yes → Task 呼び出しへ進む。
      - No → 「PR 未作成のため中断しました」と報告して中断する。
 
