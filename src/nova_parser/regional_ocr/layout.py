@@ -169,6 +169,13 @@ def _x_overlap(a, b) -> float:
     return min(a.right, b.right) - max(a.left, b.left)
 
 
+def _covers_column_x(heading: _Box, col: _Box) -> bool:
+    """heading が col の幅の SPAN_COVER_RATIO 以上を X 方向に覆うか。"""
+    if col.width <= 0:
+        return False
+    return _x_overlap(heading, col) / col.width >= SPAN_COVER_RATIO
+
+
 def _y_overlap(a, b) -> float:
     """Y 方向の重なり幅。重ならない場合は負値。"""
     return min(a.bottom, b.bottom) - max(a.top, b.top)
@@ -682,12 +689,24 @@ def merge_columns_across_spanning_headings(
                     or (bk.top >= upper.bottom - soft and bk.bottom <= lower.top + soft)
                 )
             ]
-            spans = [bk for bk in interveners if bk.width >= span_w and bk.height <= span_h]
+            spans = [
+                bk
+                for bk in interveners
+                if bk.width >= span_w
+                and bk.height <= span_h
+                and _covers_column_x(bk, upper)
+                and _covers_column_x(bk, lower)
+            ]
             if not spans:
                 continue
             blocked = False
             for bk in interveners:
-                is_span = bk.width >= span_w and bk.height <= span_h
+                is_span = (
+                    bk.width >= span_w
+                    and bk.height <= span_h
+                    and _covers_column_x(bk, upper)
+                    and _covers_column_x(bk, lower)
+                )
                 if is_span:
                     continue
                 xov = min(upper.right, bk.right) - max(upper.left, bk.left)
