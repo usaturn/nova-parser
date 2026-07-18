@@ -411,7 +411,9 @@ function regionalOcrApp() {
       } catch (err) {
         console.error(err);
         if (this.currentImage && this.currentImage.name === imageName && epoch === this._blocksEpoch) {
-          this.warnings = [...this.warnings, `「${imageName}」の段組検出に失敗しました: ${err.message}`];
+          const msg = `「${imageName}」の段組検出に失敗しました: ${err.message}`;
+          // 0 件警告と同様に、同一画像での連続失敗で同文言が重複蓄積しないよう抑止する
+          if (!this.warnings.includes(msg)) this.warnings = [...this.warnings, msg];
           this.blockMode = false;
         }
       } finally {

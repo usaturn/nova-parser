@@ -1858,3 +1858,27 @@ const app = newApp({
 })().catch((err) => { console.error(err); process.exit(1); });
 """
     )
+
+
+def test_detect_failure_warning_does_not_duplicate_on_repeated_failures() -> None:
+    _run_node_inline(
+        _BLOCKS_PAYLOAD
+        + r"""
+global.fetch = () => Promise.resolve({ ok: false, status: 502, json: async () => ({}) });
+console.error = () => {};
+const app = newApp({
+  currentImage: { name: "a.png", width: 100, height: 100, mime: "image/png" },
+  session: sessionPayload("a.png", []),
+  imgLoaded: true,
+  warnings: [],
+});
+(async () => {
+  // 1 回目の失敗で blockMode は OFF に戻る。再度 ON にして 2 回目も失敗させる。
+  await app.toggleBlockMode();
+  assert.equal(app.blockMode, false, "1 回目失敗でモード OFF");
+  await app.toggleBlockMode();
+  const matches = app.warnings.filter((w) => /a\.png」の段組検出に失敗/.test(w));
+  assert.equal(matches.length, 1, "同一画像の失敗を繰り返しても同文言の警告は 1 件に留まる");
+})().catch((err) => { console.error(err); process.exit(1); });
+"""
+    )
