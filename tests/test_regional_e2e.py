@@ -266,12 +266,12 @@ def test_session_put_order_preserves_latest_state_across_image_switch(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 段組選択モード（ブロック検出 → キャッシュ → 矩形 PUT → OCR）
+# ブロック選択モード（ブロック検出 → キャッシュ → 矩形 PUT → OCR）
 # ---------------------------------------------------------------------------
 
 
 def test_index_html_contains_block_mode_toggle(tmp_path):
-    """GET / の HTML に段組選択トグルが含まれる。"""
+    """GET / の HTML にブロック選択トグルと粒度セレクタが含まれる。"""
     image_dir = tmp_path / "images"
     image_dir.mkdir()
     output_dir = tmp_path / "output"
@@ -279,8 +279,12 @@ def test_index_html_contains_block_mode_toggle(tmp_path):
     client = _make_client(image_dir, output_dir, _simple_factory(FakeVisionClient()))
     body = client.get("/").text
 
-    assert "段組選択" in body
+    assert "ブロック選択" in body
+    assert "段組選択" not in body, "旧称が残っている"
     assert "toggleBlockMode" in body
+    assert "blockGranularity" in body
+    assert "縦ブロック" in body
+    assert "段落" in body
 
 
 def test_block_select_workflow_detect_cache_put_ocr(tmp_path):
@@ -293,7 +297,8 @@ def test_block_select_workflow_detect_cache_put_ocr(tmp_path):
 
     responses = [
         _FakeResponse(blocks=[[(10, 10), (60, 10), (60, 40), (10, 40)]]),  # document_text_detection 用
-        _FakeResponse(text="段組OCR結果"),  # 単発 OCR (text_detection) 用
+        _FakeResponse(text="段組OCR結果"),  # 段落粒度の単発 OCR (text_detection) 用
+        _FakeResponse(text="縦ブロックOCR結果"),  # 縦ブロック粒度の単発 OCR 用
     ]
     fake = FakeVisionClient(responses)
     client = _make_client(image_dir, output_dir, _simple_factory(fake))
@@ -331,3 +336,38 @@ def test_block_select_workflow_detect_cache_put_ocr(tmp_path):
     assert ocr_resp.status_code == 200
     assert ocr_resp.json()["ocr_status"] == "done"
     assert ocr_resp.json()["text"] == "段組OCR結果"
+
+    # 縦ブロック粒度でも Region 作成 → 保存 → OCR が動く（スペック 11.5）
+    vertical = first.json()["vertical_blocks"]
+    assert vertical, "vertical_blocks が返っていない"
+    v_block = vertical[0]
+    put_v = client.put(
+        "/api/session/img1.png",
+        json={
+            "image_name": "img1.png",
+            "image_width": 100,
+            "image_height": 100,
+            "regions": [
+                {
+                    "rectangle": {"rect_id": "blk-r0", "draw_order": 0, **block},
+                    "text": None,
+                    "ocr_status": "pending",
+                    "ocr_error": None,
+                    "ocr_completed_at": None,
+                },
+                {
+                    "rectangle": {"rect_id": "vblk-r0", "draw_order": 1, **v_block},
+                    "text": None,
+                    "ocr_status": "pending",
+                    "ocr_error": None,
+                    "ocr_completed_at": None,
+                },
+            ],
+            "schema_version": 1,
+        },
+    )
+    assert put_v.status_code == 200
+
+    ocr_v = client.post("/api/ocr/img1.png/vblk-r0")
+    assert ocr_v.status_code == 200
+    assert ocr_v.json()["ocr_status"] == "done"
