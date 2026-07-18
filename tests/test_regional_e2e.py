@@ -263,3 +263,71 @@ def test_session_put_order_preserves_latest_state_across_image_switch(tmp_path):
     assert [r["rectangle"]["rect_id"] for r in final_b["regions"]] == ["b-r0"], (
         "img_b への書き込みが img_a に漏れ出している"
     )
+
+
+# ---------------------------------------------------------------------------
+# 段組選択モード（ブロック検出 → キャッシュ → 矩形 PUT → OCR）
+# ---------------------------------------------------------------------------
+
+
+def test_index_html_contains_block_mode_toggle(tmp_path):
+    """GET / の HTML に段組選択トグルが含まれる。"""
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    output_dir = tmp_path / "output"
+
+    client = _make_client(image_dir, output_dir, _simple_factory(FakeVisionClient()))
+    body = client.get("/").text
+
+    assert "段組選択" in body
+    assert "toggleBlockMode" in body
+
+
+def test_block_select_workflow_detect_cache_put_ocr(tmp_path):
+    """blocks 取得 → 2 回目はキャッシュ → ブロック矩形を PUT → 単発 OCR で done のフルパス。"""
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "img1.png", (100, 100))
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    responses = [
+        _FakeResponse(blocks=[[(10, 10), (60, 10), (60, 40), (10, 40)]]),  # document_text_detection 用
+        _FakeResponse(text="段組OCR結果"),  # 単発 OCR (text_detection) 用
+    ]
+    fake = FakeVisionClient(responses)
+    client = _make_client(image_dir, output_dir, _simple_factory(fake))
+
+    first = client.get("/api/blocks/img1.png")
+    assert first.status_code == 200
+    block = first.json()["blocks"][0]
+    assert block == {"x": 10, "y": 10, "width": 50, "height": 30}
+
+    second = client.get("/api/blocks/img1.png")
+    assert second.json() == first.json()
+    assert len(fake.document_calls) == 1, "2 回目はキャッシュで Vision を呼ばない"
+
+    put_resp = client.put(
+        "/api/session/img1.png",
+        json={
+            "image_name": "img1.png",
+            "image_width": 100,
+            "image_height": 100,
+            "regions": [
+                {
+                    "rectangle": {"rect_id": "blk-r0", "draw_order": 0, **block},
+                    "text": None,
+                    "ocr_status": "pending",
+                    "ocr_error": None,
+                    "ocr_completed_at": None,
+                },
+            ],
+            "schema_version": 1,
+        },
+    )
+    assert put_resp.status_code == 200
+
+    ocr_resp = client.post("/api/ocr/img1.png/blk-r0")
+    assert ocr_resp.status_code == 200
+    assert ocr_resp.json()["ocr_status"] == "done"
+    assert ocr_resp.json()["text"] == "段組OCR結果"

@@ -47,6 +47,15 @@
             <button type="button" @click="zoomIn()" :disabled="!!dragMode" title="拡大">＋</button>
             <button type="button" @click="zoomReset()" :disabled="!!dragMode" title="100%">1:1</button>
             <button type="button" @click="zoomFitToggle()" :disabled="!!dragMode" title="ウィンドウに合わせる">fit</button>
+            <button
+              type="button"
+              class="block-mode-btn"
+              :class="{ active: blockMode }"
+              @click="toggleBlockMode()"
+              :disabled="blocksLoading || !!dragMode"
+              title="クリックした点を含む段組を矩形選択"
+            >段組選択</button>
+            <span class="muted" x-show="blocksLoading">段組検出中…</span>
           </div>
 
           <template x-if="!currentImage">
@@ -55,6 +64,7 @@
 
           <div
             class="canvas-wrap"
+            :class="{ 'block-mode': blockMode }"
             x-show="currentImage"
             @mousedown="onMouseDown($event)"
             @mousemove.window="onMouseMove($event)"
@@ -100,6 +110,11 @@
                 class="region draft"
                 x-show="draftRect"
                 :style="draftRect ? draftStyle() : ''"
+              ></div>
+              <div
+                class="region draft block-hover"
+                x-show="blockMode && hoverBlock"
+                :style="hoverBlock ? regionStyle(hoverBlock) : ''"
               ></div>
             </div>
           </div>
