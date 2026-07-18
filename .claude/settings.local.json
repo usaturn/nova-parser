@@ -10,7 +10,6 @@
     "context7"
   ],
   "enabledPlugins": {
-    "feature-dev@anthropics/claude-code": true,
-    "feature-dev@claude-plugins-official": true
+    "feature-dev@anthropics/claude-code": true
   }
 }

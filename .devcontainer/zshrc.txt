@@ -88,9 +88,10 @@ alias gitm="git fetch -p && git checkout origin/main"
 alias gitc="git branch -a| fzf | xargs git checkout"
 alias gitd="git branch | fzf | xargs git branch -D"
 alias gits="git stash list | fzf | awk -F '{|}' '{print $2}' | git stash apply"
-alias ccd="claude --allow-dangerously-skip-permissions"
+alias ccd="claude --dangerously-skip-permissions"
 alias cod="codex --dangerously-bypass-approvals-and-sandbox"
-alias gem="gemini --approval-mode=yolo"
+alias agd="agy --dangerously-skip-permissions"
+alias grk="grok --no-alt-screen"
 
 # bun completions
 [ -s "/home/vscode/.bun/_bun" ] && source "/home/vscode/.bun/_bun"
