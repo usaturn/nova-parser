@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import datetime
+
 import pytest
 from pydantic import ValidationError
 
@@ -15,6 +17,9 @@ from nova_parser.regional_ocr.errors import (
     StemCollisionError,
 )
 from nova_parser.regional_ocr.models import (
+    BlockDetectionResponse,
+    BlockDetectionResult,
+    BlockRect,
     ImageSession,
     Rectangle,
     RegionRecord,
@@ -214,3 +219,25 @@ def test_error_class_hierarchy_regional_ocr_error_is_exception():
 def test_error_class_hierarchy_adc_not_configured_error_is_ocr_backend_error():
     """AC-37: AdcNotConfiguredError が OcrBackendError のサブクラスである。"""
     assert issubclass(AdcNotConfiguredError, OcrBackendError)
+
+
+def test_block_rect_edge_properties():
+    """BlockRect は Rectangle と同じ left/top/right/bottom を持つ。"""
+    rect = BlockRect(x=10, y=20, width=30, height=40)
+    assert (rect.left, rect.top, rect.right, rect.bottom) == (10, 20, 40, 60)
+
+
+def test_block_detection_response_extends_cache_model_with_vertical_blocks():
+    """BlockDetectionResponse はキャッシュモデルに vertical_blocks を加えたレスポンス専用モデル。"""
+    rect = BlockRect(x=1, y=2, width=3, height=4)
+    resp = BlockDetectionResponse(
+        image_name="a.png",
+        image_width=100,
+        image_height=100,
+        blocks=[rect],
+        detected_at=datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC),
+    )
+    assert resp.vertical_blocks == []
+    assert resp.schema_version == 1
+    # キャッシュモデル側には vertical_blocks が存在しない（保存対象外の保証）
+    assert "vertical_blocks" not in BlockDetectionResult.model_fields

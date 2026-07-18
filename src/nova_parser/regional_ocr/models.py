@@ -78,6 +78,26 @@ class BlockRect(BaseModel):
     width: int = Field(gt=0)
     height: int = Field(gt=0)
 
+    @property
+    def left(self) -> int:
+        """矩形の左端 X 座標。"""
+        return self.x
+
+    @property
+    def top(self) -> int:
+        """矩形の上端 Y 座標。"""
+        return self.y
+
+    @property
+    def right(self) -> int:
+        """矩形の右端 X 座標。"""
+        return self.x + self.width
+
+    @property
+    def bottom(self) -> int:
+        """矩形の下端 Y 座標。"""
+        return self.y + self.height
+
 
 class BlockDetectionResult(BaseModel):
     """1 枚の画像に対するブロック検出結果（キャッシュ形式兼 API レスポンス）。"""
@@ -88,6 +108,15 @@ class BlockDetectionResult(BaseModel):
     blocks: list[BlockRect]
     detected_at: datetime.datetime
     schema_version: int = 1
+
+
+class BlockDetectionResponse(BlockDetectionResult):
+    """GET /api/blocks/{name} のレスポンス。キャッシュ形式へローカル生成の縦ブロックを加える。
+
+    vertical_blocks はキャッシュへ保存せず、API 要求ごとに layout.compute_vertical_blocks で再生成する。
+    """
+
+    vertical_blocks: list[BlockRect] = Field(default_factory=list)
 
 
 class ImageListResponse(BaseModel):
