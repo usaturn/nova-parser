@@ -1,6 +1,6 @@
 ---
 name: commit-detailed
-description: Use when ユーザーが、すでに staged の変更だけを detailed または Conventional Commits 形式のメッセージで commit するよう依頼する場合。
+description: Use when ユーザーが、すでに staged の変更だけを detailed または Conventional Commits 形式のメッセージで commit するよう依頼する場合。ファイルの stage、push、PR 作成、rebase、amend も同時に求める依頼では使用しない。
 ---
 
 # Commit Detailed
@@ -40,18 +40,33 @@ git diff --staged --name-only
 
 staged file 名を**機密ファイル**の規則と照合する。疑わしい名前があれば、GitHub への問い合わせや commit より前に終了する。
 
-現在のブランチを head とする open PR が1件以上あることを確認する。
+現在のブランチの upstream と、その remote repository の GitHub identity を確定する。
 
 ```bash
 current_branch="$(git symbolic-ref --quiet --short HEAD)"
-gh pr list --head "$current_branch" --state open --limit 1 --json number,isDraft,url
+git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}'
+upstream_remote="$(git config --get "branch.$current_branch.remote")"
+remote_url="$(git remote get-url "$upstream_remote")"
+gh repo view "$remote_url" --json nameWithOwner --jq .nameWithOwner
 ```
 
-結果は次のように厳密に解釈する。
+upstream がない、`branch.<current_branch>.remote` が空または取得不能、remote 名から URL を取得できない、`gh repo view` が非0、または `owner/name` が空の場合は repository identity を確認できないため終了する。
+
+現在のブランチを head とし、同じ repository identity を持つ open PR が1件以上あることを確認する。
+
+```bash
+gh pr list --head "$current_branch" --state open --limit 1000 \
+  --json number,isDraft,url,headRefName,headRepository,headRepositoryOwner,isCrossRepository
+```
+
+結果は1件で打ち切らず、返されたすべての要素を次のように厳密に解釈する。
 
 - 終了コードが非0: PR の状態は不明である。エラーを報告して終了する。
-- JSON が `[]`: open PR はない。commit を作成しなかったと報告して終了する。
-- JSON に要素がある: 条件を満たす。draft も open であるため許可する。
+- JSON の解析に失敗した場合: PR の状態は不明である。エラーを報告して終了する。
+- 各 PR について `headRefName` が現在のブランチと一致し、`headRepositoryOwner.login/headRepository.name` が upstream remote の `owner/name` と一致するか確認する。
+- `headRepository` または `headRepositoryOwner` が欠ける要素は一致と見なさない。`isCrossRepository` だけで identity を推測しない。
+- branch 名と repository identity の両方が一致する open PR が1件もない: commit を作成しなかったと報告して終了する。同名 branch の fork PR だけがある場合もここで停止する。
+- 両方が一致する open PR が1件以上ある: 条件を満たす。draft も open であるため許可する。
 
 closed または merged PR は条件を満たさない。
 
@@ -103,7 +118,15 @@ git show-ref --verify --quiet "refs/heads/$candidate"
 git show-ref --verify --quiet "refs/remotes/origin/$candidate"
 ```
 
-`git show-ref --verify --quiet` の終了コード1は、指定した ref が存在しないことを意味する。どちらかの ref が存在する場合は `-2`、次は `-3` と連番を付け、未使用名になるまで両方を再確認する。
+`git check-ref-format` が非0の場合は候補を再生成するか停止し、ブランチ作成へ進まない。
+
+local と `origin` の各 `git show-ref --verify --quiet` は終了コードを個別に解釈する。
+
+- 終了コード0: ref が存在し、候補は衝突している。
+- 終了コード1: 指定した ref は存在しない。
+- その他の終了コード: ref の有無を判定できないため停止する。
+
+どちらかの ref が存在する場合は `-2`、次は `-3` と連番を付け、未使用名になるまで両方を再確認する。両コマンドが終了コード1の場合だけ、その候補でブランチ作成へ進む。
 
 その local branch だけを作成する。
 

@@ -49,6 +49,34 @@
       "should_trigger": false,
       "expected_terms": [],
       "notes": "Push and PR creation are out of scope"
+    },
+    {
+      "id": "q8",
+      "query": "Commit only what is already staged with a detailed Conventional Commits message, then push the branch and create a pull request.",
+      "should_trigger": false,
+      "expected_terms": [],
+      "notes": "Hard negative: staged detailed commit combined with push and PR creation"
+    },
+    {
+      "id": "q9",
+      "query": "Stage the unstaged and untracked files, then commit them with a detailed Conventional Commits message.",
+      "should_trigger": false,
+      "expected_terms": [],
+      "notes": "Hard negative: staging combined with a detailed Conventional Commit"
+    },
+    {
+      "id": "q10",
+      "query": "Amend the previous commit using the already-staged changes with a detailed Conventional Commits message, then force-push it.",
+      "should_trigger": false,
+      "expected_terms": [],
+      "notes": "Hard negative: amend and force-push combined with positive trigger wording"
+    },
+    {
+      "id": "q11",
+      "query": "Commit only the staged files with a detailed Conventional Commits message, then rebase the branch onto main.",
+      "should_trigger": false,
+      "expected_terms": [],
+      "notes": "Hard negative: rebase combined with positive trigger wording"
     }
   ]
 }
