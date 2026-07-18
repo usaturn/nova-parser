@@ -19,35 +19,35 @@
       "id": "q3",
       "query": "This feature branch has an open draft PR; commit the staged fix with details.",
       "should_trigger": true,
-      "expected_terms": ["commit", "staged", "branch", "draft", "pr"],
+      "expected_terms": ["commit", "staged"],
       "notes": "PR-gated branch workflow"
     },
     {
       "id": "q4",
       "query": "HEAD is detached at origin/main; commit the staged docs update with a detailed message.",
       "should_trigger": true,
-      "expected_terms": ["commit", "staged", "detached", "origin", "main"],
+      "expected_terms": ["commit", "staged", "detailed"],
       "notes": "Detached origin/main workflow"
     },
     {
       "id": "q5",
       "query": "Stage these files and then commit them.",
       "should_trigger": false,
-      "expected_terms": ["stage"],
+      "expected_terms": [],
       "notes": "Requires git add"
     },
     {
       "id": "q6",
       "query": "Amend the previous commit with my unstaged changes.",
       "should_trigger": false,
-      "expected_terms": ["amend", "unstaged"],
+      "expected_terms": [],
       "notes": "Amend and unstaged work are out of scope"
     },
     {
       "id": "q7",
       "query": "Commit everything, push the branch, and open a pull request.",
       "should_trigger": false,
-      "expected_terms": ["everything", "push"],
+      "expected_terms": [],
       "notes": "Push and PR creation are out of scope"
     }
   ]

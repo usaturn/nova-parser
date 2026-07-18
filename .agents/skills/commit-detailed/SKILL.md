@@ -1,6 +1,6 @@
 ---
 name: commit-detailed
-description: Use when ユーザーが、すでに staged の変更だけを detailed または Conventional Commits 形式のメッセージで commit するよう依頼し、main、origin/main、current branch、open/draft PR、detached HEAD による実行可否判定が必要な場合。
+description: Use when ユーザーが、すでに staged の変更だけを detailed または Conventional Commits 形式のメッセージで commit するよう依頼する場合。
 ---
 
 # Commit Detailed
