@@ -129,6 +129,32 @@ class TestMergeColumnsAcrossSpanningHeadings:
         }
 
 
+class TestMergeNarrowColumnGroups:
+    def test_does_not_merge_independent_sidebars_across_body_bands(self):
+        # GPT-5 M-2: 共通空白で分かれた上下バンドの独立狭い列は結合しない
+        # compute_vertical_blocks 経由でバンド分割 + 統合まで通す
+        main_top = _r(100, 100, 400, 150)
+        main_bot = _r(100, 400, 400, 150)
+        side_top = _r(700, 100, 200, 100)
+        side_bot = _r(700, 400, 200, 100)
+        out = compute_vertical_blocks(W, H, [main_top, main_bot, side_top, side_bot])
+        assert len(out) == 4
+        # 狭い列が 1 本の縦長矩形に潰れていないこと
+        narrow = [b for b in out if b.width < W * 0.3]
+        assert len(narrow) == 2
+        assert max(b.height for b in narrow) < 250
+
+    def test_merges_narrow_within_same_band(self):
+        # 同一バンド内の縦に並んだ狭い段落は統合できる
+        n1 = _r(700, 100, 180, 80)
+        n2 = _r(705, 220, 170, 90)  # 間ギャップあり・Y 非重複
+        body = _r(100, 100, 400, 300)
+        out = compute_vertical_blocks(W, H, [body, n1, n2])
+        narrow = [b for b in out if b.x >= 600]
+        assert len(narrow) == 1
+        assert narrow[0].height > 150
+
+
 class TestSplitBands:
     def test_splits_at_gap_common_to_all_columns(self):
         upper = [_r(100, 100, 400, 200), _r(520, 100, 400, 200)]

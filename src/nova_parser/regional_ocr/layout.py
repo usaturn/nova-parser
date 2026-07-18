@@ -578,18 +578,86 @@ def cancel_overmerged(band_groups: list[list[BlockRect]], image_width: int) -> l
     return result
 
 
-def merge_narrow_column_groups(groups: list[list[BlockRect]], image_width: int) -> list[list[BlockRect]]:
-    """欄外注釈候補（狭い列）の縦積みグループをバンド跨ぎで統合する（スペック 7.3）。
+def _gap_y_box(upper: _Box, lower: _Box) -> _Box | None:
+    """上ボックス bottom 〜 下ボックス top の Y ギャップ矩形（X は両ボックスの和）。"""
+    gap_top = upper.bottom
+    gap_bottom = lower.top
+    if gap_bottom <= gap_top:
+        return None
+    return _Box(
+        left=min(upper.left, lower.left),
+        top=gap_top,
+        right=max(upper.right, lower.right),
+        bottom=gap_bottom,
+    )
 
-    左端または右端が近く、X 重なりが大きく、Y 方向に並んだ狭いグループを 1 つにまとめる。
-    本文列（幅が NARROW 超）は対象外。
+
+def _intervening_in_gap(
+    upper: _Box,
+    lower: _Box,
+    boxes: list[_Box],
+    skip: set[int],
+) -> bool:
+    """upper と lower の間の Y ギャップに、Y 方向へ完全に収まる他グループがあるか。
+
+    空ギャップは共通空白で分離された独立領域（独立サイドバー）を示す。
+    上下バンドの本文がギャップへ少し食い込むだけでは intervening とみなさない。
+    Y が接している・重なっている場合はギャップ無しとして True（連続扱い）。
+    """
+    gap = _gap_y_box(upper, lower)
+    if gap is None:
+        return True
+    for i, b in enumerate(boxes):
+        if i in skip:
+            continue
+        if b.top >= gap.top and b.bottom <= gap.bottom:
+            return True
+    return False
+
+
+def _body_blocks_in_gap(
+    upper: _Box,
+    lower: _Box,
+    boxes: list[_Box],
+    skip: set[int],
+    image_width: int,
+) -> bool:
+    """upper と lower の間の Y ギャップに、狭い列 X 帯を覆う本文幅ボックスがあるか。"""
+    narrow = _gap_y_box(upper, lower)
+    if narrow is None:
+        return False
+    body_min = image_width * NARROW_COLUMN_MAX_WIDTH_RATIO
+    for i, b in enumerate(boxes):
+        if i in skip:
+            continue
+        if b.width <= body_min:
+            continue
+        if _y_overlap(b, narrow) <= 0:
+            continue
+        if narrow.width > 0 and _x_overlap(b, narrow) / narrow.width >= SPAN_COVER_RATIO:
+            return True
+    return False
+
+
+def merge_narrow_column_groups(
+    groups: list[list[BlockRect]],
+    image_width: int,
+    band_ids: list[int],
+) -> tuple[list[list[BlockRect]], list[int]]:
+    """欄外注釈候補の縦積みを統合する（スペック 7.3）。
+
+    原則は同一 band_id 内のみ。例外として、中間 Y に他グループがあり、かつ
+    狭い列 X 帯を覆う本文幅ブロックが無い場合はバンドをまたいで統合できる（p203）。
+    空ギャップのみで分かれた独立サイドバーは結合しない。
+    戻り値は (統合後グループ, 各グループの band_id)。band_id は参加最小値。
     """
     if len(groups) <= 1:
-        return groups
+        return groups, list(band_ids)
     edge_tol = image_width * COLUMN_EDGE_TOLERANCE_RATIO
     boxes = [_bbox(g) for g in groups]
     used = [False] * len(groups)
     result: list[list[BlockRect]] = []
+    result_bands: list[int] = []
     order = sorted(range(len(groups)), key=lambda i: (boxes[i].left, boxes[i].top))
     for i in order:
         if used[i]:
@@ -597,10 +665,14 @@ def merge_narrow_column_groups(groups: list[list[BlockRect]], image_width: int) 
         bi = boxes[i]
         if bi.width > image_width * NARROW_COLUMN_MAX_WIDTH_RATIO:
             result.append(groups[i])
+            result_bands.append(band_ids[i])
             used[i] = True
             continue
         merged = list(groups[i])
         mb = bi
+        merged_band = band_ids[i]
+        merged_bands = {band_ids[i]}
+        merged_indices = {i}
         used[i] = True
         changed = True
         while changed:
@@ -619,13 +691,36 @@ def merge_narrow_column_groups(groups: list[list[BlockRect]], image_width: int) 
                     continue
                 if _y_overlap(mb, bj) > min(mb.height, bj.height) * NARROW_MERGE_MAX_Y_OVERLAP_RATIO:
                     continue
+                # 異なる band: 空ギャップ（独立領域）または狭い X を覆う本文があれば禁止
+                if band_ids[j] not in merged_bands:
+                    if mb.bottom <= bj.top:
+                        upper, lower = mb, bj
+                    elif bj.bottom <= mb.top:
+                        upper, lower = bj, mb
+                    else:
+                        upper, lower = (mb, bj) if mb.top <= bj.top else (bj, mb)
+                    skip = merged_indices | {j}
+                    if not _intervening_in_gap(upper, lower, boxes, skip):
+                        continue
+                    if _body_blocks_in_gap(upper, lower, boxes, skip, image_width):
+                        continue
                 merged.extend(groups[j])
                 mb = _bbox(merged)
+                merged_band = min(merged_band, band_ids[j])
+                merged_bands.add(band_ids[j])
+                merged_indices.add(j)
                 used[j] = True
                 changed = True
         result.append(merged)
-    result.sort(key=lambda g: (_bbox(g).top, _bbox(g).left))
-    return result
+        result_bands.append(merged_band)
+    paired = sorted(
+        zip(result, result_bands, strict=True),
+        key=lambda pair: (_bbox(pair[0]).top, _bbox(pair[0]).left),
+    )
+    if not paired:
+        return [], []
+    sorted_groups, sorted_bands = zip(*paired, strict=True)
+    return list(sorted_groups), list(sorted_bands)
 
 
 def merge_columns_across_spanning_headings(
@@ -785,13 +880,17 @@ def compute_vertical_blocks(image_width: int, image_height: int, blocks: list[Bl
     body = drop_noise_rects(body, image_width, image_height)
     if not body:
         return rects
-    groups: list[list[BlockRect]] = []
-    for band in split_bands(body, image_width, image_height):
+    tagged_groups: list[list[BlockRect]] = []
+    tagged_bands: list[int] = []
+    for band_id, band in enumerate(split_bands(body, image_width, image_height)):
         band_groups: list[list[BlockRect]] = []
         for column in split_columns(band, image_width):
             band_groups.extend(split_vertical(column, band, image_width, image_height))
-        groups.extend(cancel_overmerged(band_groups, image_width))
-    groups = merge_narrow_column_groups(groups, image_width)
+        band_groups = cancel_overmerged(band_groups, image_width)
+        for g in band_groups:
+            tagged_groups.append(g)
+            tagged_bands.append(band_id)
+    groups, _band_ids = merge_narrow_column_groups(tagged_groups, image_width, tagged_bands)
     groups = merge_columns_across_spanning_headings(groups, image_width, image_height)
     if not groups:
         return body
