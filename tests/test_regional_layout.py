@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from nova_parser.regional_ocr.layout import (
+    SPANNING_HEADING_WIDTH_RATIO,
     cancel_overmerged,
     compute_vertical_blocks,
+    drop_noise_rects,
     drop_perimeter_rects,
     finalize_blocks,
+    merge_columns_across_spanning_headings,
     normalize_rects,
     split_bands,
     split_columns,
@@ -75,6 +78,42 @@ class TestDropPerimeterRects:
         header = _r(700, 15, 200, 30)
         body = _r(100, 200, 800, 600)
         assert drop_perimeter_rects([header, body], W, H) == [body]
+
+
+class TestDropNoiseRects:
+    def test_drops_thin_wide_decoration_but_keeps_band_heading(self):
+        # 幅狭の薄型装飾は落とすが、ページ幅 35% 以上の横断帯見出しは残す
+        deco = _r(100, 100, 200, 20)  # frac=0.20, aspect=10
+        heading = _r(100, 200, int(W * SPANNING_HEADING_WIDTH_RATIO), 25)
+        out = drop_noise_rects([deco, heading], W, H)
+        assert heading in out
+        assert deco not in out
+
+    def test_keeps_card_heading_with_horizontal_peer(self):
+        # 同 Y 帯に水平ピアがあるカード見出しは装飾扱いにしない
+        left = _r(100, 100, 280, 25)
+        right = _r(450, 100, 280, 25)
+        out = drop_noise_rects([left, right], W, H)
+        assert left in out and right in out
+
+
+class TestMergeColumnsAcrossSpanningHeadings:
+    def test_merges_columns_split_by_spanning_heading(self):
+        upper = [_r(100, 100, 400, 200)]
+        heading = [_r(50, 320, 400, 30)]  # 幅 40%・高さ 3% の横断見出し
+        lower = [_r(100, 370, 400, 200)]
+        result = merge_columns_across_spanning_headings([upper, heading, lower], W, H)
+        merged_bodies = [g for g in result if any(r.y in (100, 370) for r in g)]
+        assert len(merged_bodies) == 1
+        assert {r.y for r in merged_bodies[0]} == {100, 370}
+        assert heading in result or any(heading[0] in g for g in result)
+
+    def test_empty_gap_only_does_not_merge_card_rows(self):
+        # 横断見出しなしの空ギャップだけでは上下本文列を結合しない
+        upper = [_r(100, 100, 300, 150)]
+        lower = [_r(100, 300, 300, 150)]
+        result = merge_columns_across_spanning_headings([upper, lower], W, H)
+        assert len(result) == 2
 
 
 class TestSplitBands:
@@ -156,6 +195,13 @@ class TestSplitVertical:
         neighbors = [_r(450, 100, 300, 150), _r(450, 300, 300, 150)]
         groups = split_vertical(column, column + neighbors, W, H)
         assert groups == [[column[0]], [column[1]]]
+
+    def test_does_not_split_when_only_narrow_sidebar_aligns(self):
+        # 狭いサイドバーだけが Y 境界を共有しても、本文列は分割しない
+        column = [_r(100, 100, 400, 150), _r(100, 300, 400, 150)]
+        sidebar = [_r(700, 100, 150, 150), _r(700, 300, 150, 150)]
+        groups = split_vertical(column, column + sidebar, W, H)
+        assert groups == [column]
 
     def test_splits_heading_with_different_width_and_large_gap(self):
         heading = _r(100, 100, 400, 50)

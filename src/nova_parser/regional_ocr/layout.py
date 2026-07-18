@@ -64,6 +64,62 @@ PAD_X_RATIO = 0.006
 PAD_Y_RATIO = 0.006
 """出力矩形の上下余白（画像高さ比）。スペック 7.5。"""
 
+# --- Task 9 判定強化用の閾値 --------------------------------------------------
+
+NOISE_MICRO_HEIGHT_FACTOR = 0.35
+"""極小ノイズ高さ = PERIMETER_MAX_HEIGHT_RATIO * この係数（≈ 画像高さの 1.4%）。"""
+
+NOISE_DECORATION_ASPECT_RATIO = 8.0
+"""装飾候補とみなす最小アスペクト比（幅 / 高さ）。"""
+
+SPANNING_HEADING_WIDTH_RATIO = 0.35
+"""横断帯見出しとみなす最小幅（画像幅比）。drop_noise / 列再結合の双方で使用。"""
+
+NOISE_CARD_HEADING_WIDTH_RATIO = 0.25
+"""カード行見出しとして残す最小幅（画像幅比）。水平ピアがある場合のみ。"""
+
+NOISE_PEER_MIN_WIDTH_RATIO = 0.12
+"""カード見出し判定の水平ピアとみなす最小幅（画像幅比）。"""
+
+NOISE_PEER_Y_TOLERANCE_RATIO = 0.03
+"""カード見出しと同 Y 帯の水平ピアとみなす中心 Y 差（画像高さ比）。"""
+
+NOISE_NEAR_COLUMN_V_GAP_RATIO = 0.08
+"""装飾除外を抑止する「直下/直上の本文列」との最大縦間隔（画像高さ比）。"""
+
+CLUSTER_CENTER_TOL_FACTOR = 3
+"""列クラスタの中心近接許容 = COLUMN_EDGE_TOLERANCE * この係数。"""
+
+CLUSTER_FULLY_INSIDE_WIDTH_FACTOR = 1.05
+"""列コア幅に対し「完全に内側」とみなす最大幅倍率。"""
+
+SHARED_ROW_GAP_FILL_RATIO = 0.25
+"""隣接本文列がギャップ区間を埋めているとみなす最小縦重なり率（ギャップ高比）。"""
+
+NARROW_MERGE_MAX_Y_OVERLAP_RATIO = 0.15
+"""欄外注釈グループ統合を拒否する最小 Y 重なり率（狭い方の高さ比）。"""
+
+SPAN_MERGE_EDGE_TOL_FACTOR = 2
+"""横断見出し挟みの列再結合で許容する左端差 = COLUMN_EDGE_TOLERANCE * この係数。"""
+
+SPAN_MERGE_MIN_COL_HEIGHT_RATIO = 0.08
+"""列再結合の対象とする最小列高さ（画像高さ比）。"""
+
+SPAN_MERGE_WIDTH_DIFF_RATIO = 0.25
+"""列再結合で許す上下列の最大幅差率。"""
+
+SPAN_MERGE_X_OVERLAP_RATIO = 0.6
+"""列再結合に要する最小 X 重なり率（狭い方の幅比）。"""
+
+SPAN_MERGE_HEADING_MAX_HEIGHT_RATIO = 0.05
+"""横断見出しとみなす最大高さ（画像高さ比）。"""
+
+SPAN_MERGE_BLOCK_X_OVERLAP_RATIO = 0.2
+"""中間の非見出しブロックが列再結合を阻害する最小 X 重なり率（上列幅比）。"""
+
+SPAN_MERGE_SOFT_EDGE_PX = 2
+"""上列下端〜下列上端の間に入る中間矩形を拾うソフト端（ピクセル）。"""
+
 
 # --- 内部ヘルパー -------------------------------------------------------------
 
@@ -181,18 +237,18 @@ def drop_noise_rects(rects: list[BlockRect], image_width: int, image_height: int
     - 同 Y 帯に水平ピアがあるカード見出し行（幅 25% 以上）
     """
     kept: list[BlockRect] = []
-    micro_h = image_height * PERIMETER_MAX_HEIGHT_RATIO * 0.35  # ≈ 1.4% of H
+    micro_h = image_height * PERIMETER_MAX_HEIGHT_RATIO * NOISE_MICRO_HEIGHT_FACTOR
     deco_h = image_height * PERIMETER_MAX_HEIGHT_RATIO
-    edge_tol = image_width * COLUMN_EDGE_TOLERANCE_RATIO * 3
-    y_peer_tol = image_height * 0.03
+    edge_tol = image_width * COLUMN_EDGE_TOLERANCE_RATIO * CLUSTER_CENTER_TOL_FACTOR
+    y_peer_tol = image_height * NOISE_PEER_Y_TOLERANCE_RATIO
     for r in rects:
         if r.height < micro_h:
             continue
         aspect = r.width / max(r.height, 1)
-        if r.height < deco_h and aspect >= 8.0:
+        if r.height < deco_h and aspect >= NOISE_DECORATION_ASPECT_RATIO:
             frac = r.width / image_width
             # 横断帯見出し
-            if frac >= 0.35:
+            if frac >= SPANNING_HEADING_WIDTH_RATIO:
                 kept.append(r)
                 continue
             # カード行の見出し: 同 Y に水平ピアがある
@@ -202,13 +258,15 @@ def drop_noise_rects(rects: list[BlockRect], image_width: int, image_height: int
                 if o is not r
                 and abs((o.top + o.bottom) / 2 - (r.top + r.bottom) / 2) <= y_peer_tol
                 and _x_overlap(r, o) <= 0
-                and o.width >= image_width * 0.12
+                and o.width >= image_width * NOISE_PEER_MIN_WIDTH_RATIO
             ]
-            if peers and frac >= 0.25:
+            if peers and frac >= NOISE_CARD_HEADING_WIDTH_RATIO:
                 kept.append(r)
                 continue
             near_col = any(
-                o.height >= deco_h and abs(o.left - r.left) <= edge_tol and _v_gap(r, o) < image_height * 0.08
+                o.height >= deco_h
+                and abs(o.left - r.left) <= edge_tol
+                and _v_gap(r, o) < image_height * NOISE_NEAR_COLUMN_V_GAP_RATIO
                 for o in rects
                 if o is not r
             )
@@ -230,7 +288,7 @@ def _cluster_by_x(rects: list[BlockRect], image_width: int) -> list[list[BlockRe
     戻り値は左から右（同左端なら上から下）の順。
     """
     edge_tol = image_width * COLUMN_EDGE_TOLERANCE_RATIO
-    center_tol = edge_tol * 3
+    center_tol = edge_tol * CLUSTER_CENTER_TOL_FACTOR
     clusters: list[list[BlockRect]] = []
     for r in sorted(rects, key=lambda r: (r.left, r.top)):
         target = None
@@ -248,7 +306,11 @@ def _cluster_by_x(rects: list[BlockRect], image_width: int) -> list[list[BlockRe
             left_close = abs(r.left - ml) <= edge_tol
             right_close = abs(r.right - mr) <= edge_tol
             center_close = abs(rc - (ml + mr) / 2) <= center_tol
-            fully_inside = r.left >= ml - edge_tol and r.right <= mr + edge_tol and r.width <= core_w * 1.05
+            fully_inside = (
+                r.left >= ml - edge_tol
+                and r.right <= mr + edge_tol
+                and r.width <= core_w * CLUSTER_FULLY_INSIDE_WIDTH_FACTOR
+            )
             if left_close or right_close or fully_inside:
                 if ov > 0 or left_close or right_close:
                     target = c
@@ -403,7 +465,9 @@ def _has_shared_row_boundary(
         cb = _bbox(cluster)
         if cb.width <= min_body:
             continue
-        fills = any((min(n.bottom, gap_bottom) - max(n.top, gap_top)) > gap_h * 0.25 for n in cluster)
+        fills = any(
+            (min(n.bottom, gap_bottom) - max(n.top, gap_top)) > gap_h * SHARED_ROW_GAP_FILL_RATIO for n in cluster
+        )
         if fills:
             continue
         has_below = any(abs(n.top - gap_bottom) <= tol for n in cluster)
@@ -534,7 +598,7 @@ def merge_narrow_column_groups(groups: list[list[BlockRect]], image_width: int) 
                 min_w = min(mb.width, bj.width)
                 if min_w <= 0 or ov / min_w < COLUMN_X_OVERLAP_RATIO:
                     continue
-                if _y_overlap(mb, bj) > min(mb.height, bj.height) * 0.15:
+                if _y_overlap(mb, bj) > min(mb.height, bj.height) * NARROW_MERGE_MAX_Y_OVERLAP_RATIO:
                     continue
                 merged.extend(groups[j])
                 mb = _bbox(merged)
@@ -559,8 +623,11 @@ def merge_columns_across_spanning_headings(
         return groups
     boxes = [_bbox(g) for g in groups]
     body_min = image_width * NARROW_COLUMN_MAX_WIDTH_RATIO
-    edge_tol = image_width * COLUMN_EDGE_TOLERANCE_RATIO * 2
-    min_col_h = image_height * 0.08
+    edge_tol = image_width * COLUMN_EDGE_TOLERANCE_RATIO * SPAN_MERGE_EDGE_TOL_FACTOR
+    min_col_h = image_height * SPAN_MERGE_MIN_COL_HEIGHT_RATIO
+    span_w = image_width * SPANNING_HEADING_WIDTH_RATIO
+    span_h = image_height * SPAN_MERGE_HEADING_MAX_HEIGHT_RATIO
+    soft = SPAN_MERGE_SOFT_EDGE_PX
     parent = list(range(len(groups)))
 
     def find(i: int) -> int:
@@ -581,12 +648,12 @@ def merge_columns_across_spanning_headings(
             bj = boxes[j]
             if bj.width < body_min or bj.height < min_col_h:
                 continue
-            if abs(bi.width - bj.width) / max(bi.width, bj.width) > 0.25:
+            if abs(bi.width - bj.width) / max(bi.width, bj.width) > SPAN_MERGE_WIDTH_DIFF_RATIO:
                 continue
             if abs(bi.left - bj.left) > edge_tol:
                 continue
             ov = min(bi.right, bj.right) - max(bi.left, bj.left)
-            if ov < min(bi.width, bj.width) * 0.6:
+            if ov < min(bi.width, bj.width) * SPAN_MERGE_X_OVERLAP_RATIO:
                 continue
             if bi.bottom <= bj.top:
                 upper, lower = bi, bj
@@ -600,19 +667,19 @@ def merge_columns_across_spanning_headings(
                 if k not in (i, j)
                 and (
                     (bk.top < lower.top and bk.bottom > upper.bottom)
-                    or (bk.top >= upper.bottom - 2 and bk.bottom <= lower.top + 2)
+                    or (bk.top >= upper.bottom - soft and bk.bottom <= lower.top + soft)
                 )
             ]
-            spans = [bk for bk in interveners if bk.width >= image_width * 0.35 and bk.height <= image_height * 0.05]
+            spans = [bk for bk in interveners if bk.width >= span_w and bk.height <= span_h]
             if not spans:
                 continue
             blocked = False
             for bk in interveners:
-                is_span = bk.width >= image_width * 0.35 and bk.height <= image_height * 0.05
+                is_span = bk.width >= span_w and bk.height <= span_h
                 if is_span:
                     continue
                 xov = min(upper.right, bk.right) - max(upper.left, bk.left)
-                if xov > upper.width * 0.2:
+                if xov > upper.width * SPAN_MERGE_BLOCK_X_OVERLAP_RATIO:
                     blocked = True
                     break
             if not blocked:
