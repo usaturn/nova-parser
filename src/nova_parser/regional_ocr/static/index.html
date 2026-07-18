@@ -52,7 +52,7 @@
               class="block-mode-btn"
               :class="{ active: blockMode }"
               @click="toggleBlockMode()"
-              :disabled="blocksLoading || !!dragMode"
+              :disabled="!!dragMode"
               title="クリックした点を含む段組を矩形選択"
             >段組選択</button>
             <span class="muted" x-show="blocksLoading">段組検出中…</span>

@@ -379,6 +379,10 @@ function regionalOcrApp() {
       if (this.blockMode) {
         this.blockMode = false;
         this.hoverBlock = null;
+        // 検出中に OFF された場合、in-flight 応答を破棄しローディング表示を即消しする。
+        // epoch を進めることで、到着した応答は _ensureBlocks の epoch ガードで弾かれる。
+        this._blocksEpoch += 1;
+        this.blocksLoading = false;
         return;
       }
       if (!this.currentImage) return;

@@ -1999,3 +1999,43 @@ const app = newApp({
 })().catch((err) => { console.error(err); process.exit(1); });
 """
     )
+
+
+def test_toggle_off_during_detection_discards_incoming_blocks() -> None:
+    _run_node_inline(
+        _BLOCKS_PAYLOAD
+        + r"""
+let resolveA;
+global.fetch = (url) => {
+  if (url === "/api/blocks/a.png") {
+    return new Promise((resolve) => {
+      resolveA = () => resolve(fetchResponse(blocksPayload("a.png", [{ x: 1, y: 1, width: 2, height: 2 }])));
+    });
+  }
+  throw new Error(`unexpected fetch: ${url}`);
+};
+const app = newApp({
+  currentImage: { name: "a.png", width: 100, height: 100, mime: "image/png" },
+  session: sessionPayload("a.png", []),
+  imgLoaded: true,
+  blockMode: true,
+});
+(async () => {
+  const ensuring = app._ensureBlocks();  // in-flight
+  await tick();
+  assert.equal(app.blocksLoading, true, "検出中");
+
+  // 検出中に OFF する
+  await app.toggleBlockMode();
+  assert.equal(app.blockMode, false, "検出中でも OFF にできる");
+  assert.equal(app.blocksLoading, false, "OFF でローディング表示が即消える");
+
+  // 遅れて応答が届いても blocks / blockMode に反映されない
+  resolveA();
+  await ensuring;
+  await tick();
+  assert.equal(app.blocks, null, "OFF 後に到着した応答は適用されない");
+  assert.equal(app.blockMode, false, "OFF のまま");
+})().catch((err) => { console.error(err); process.exit(1); });
+"""
+    )
