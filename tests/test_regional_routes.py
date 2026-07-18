@@ -831,7 +831,23 @@ def test_create_app_returns_fastapi_with_required_routes(tmp_path):
 
     assert isinstance(app, FastAPI)
 
-    route_paths = {route.path for route in app.routes}
+    # FastAPI のバージョンによっては include_router のルートが _IncludedRouter に
+    # ネストされ、app.routes のトップレベルに path が現れないため、再帰的に収集する。
+    def _collect_route_paths(routes) -> set[str]:
+        paths: set[str] = set()
+        for route in routes:
+            path = getattr(route, "path", None)
+            if path is not None:
+                paths.add(path)
+            sub = getattr(route, "routes", None)
+            if sub is None:
+                # _IncludedRouter は routes を持たず original_router 経由で保持する
+                sub = getattr(getattr(route, "original_router", None), "routes", None)
+            if sub:
+                paths.update(_collect_route_paths(sub))
+        return paths
+
+    route_paths = _collect_route_paths(app.routes)
     assert "/api/images" in route_paths
     assert "/api/image/{name}" in route_paths
     assert "/api/image/{name}/raw" in route_paths
