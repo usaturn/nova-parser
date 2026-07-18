@@ -20,11 +20,34 @@ import nova_parser.gemini_backend as _gemini_backend
 
 
 class _FakeResponse:
-    """Vision API レスポンスのスタブ。"""
+    """Vision API レスポンスのスタブ。
 
-    def __init__(self, *, text: str = "", error_message: str = "") -> None:
-        self.full_text_annotation = SimpleNamespace(text=text)
+    blocks は document_text_detection のブロック検出結果を表し、
+    1 ブロックあたり頂点 (x, y) タプルのリストで指定する。
+    """
+
+    def __init__(
+        self,
+        *,
+        text: str = "",
+        error_message: str = "",
+        blocks: "list[list[tuple[int, int]]] | None" = None,
+    ) -> None:
+        self.full_text_annotation = SimpleNamespace(text=text, pages=_make_pages(blocks or []))
         self.error = SimpleNamespace(message=error_message)
+
+
+def _make_pages(blocks: "list[list[tuple[int, int]]]") -> list[SimpleNamespace]:
+    """頂点リスト群から full_text_annotation.pages 相当の構造を組み立てる。"""
+    if not blocks:
+        return []
+    page_blocks = [
+        SimpleNamespace(
+            bounding_box=SimpleNamespace(vertices=[SimpleNamespace(x=x, y=y) for x, y in vertices]),
+        )
+        for vertices in blocks
+    ]
+    return [SimpleNamespace(blocks=page_blocks)]
 
 
 class FakeVisionClient:
@@ -43,10 +66,18 @@ class FakeVisionClient:
             # 単一 _FakeResponse（既存テストとの互換）
             self._responses = [response_or_responses]
         self.calls: list[dict[str, Any]] = []
+        self.document_calls: list[dict[str, Any]] = []
 
     def text_detection(self, *, image: Any, image_context: Any) -> _FakeResponse:
         """text_detection 呼び出しを記録し、キューから応答を返す。"""
         self.calls.append({"image": image, "image_context": image_context})
+        if len(self._responses) > 1:
+            return self._responses.pop(0)
+        return self._responses[0]
+
+    def document_text_detection(self, *, image: Any, image_context: Any) -> _FakeResponse:
+        """document_text_detection 呼び出しを記録し、text_detection と同じキューから応答を返す。"""
+        self.document_calls.append({"image": image, "image_context": image_context})
         if len(self._responses) > 1:
             return self._responses.pop(0)
         return self._responses[0]
