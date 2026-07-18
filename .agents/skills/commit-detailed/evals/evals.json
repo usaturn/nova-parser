@@ -3,36 +3,137 @@
   "evals": [
     {
       "id": 1,
-      "name": "commit-staged-docs-change",
-      "prompt": "Commit only the staged documentation changes on main with a detailed message.",
-      "expected_output": "A commit on main that includes only the staged docs files and uses a detailed Conventional Commits message with a Japanese body.",
+      "name": "stop-on-main",
+      "prompt": "Commit only the staged documentation changes with a detailed message. The current branch is main.",
+      "expected_output": "A no-op result that reports main is protected and does not inspect PRs, create a branch, or commit.",
       "files": [],
       "expectations": [
-        "The result confirms the current branch is main before committing.",
-        "The commit message includes a Conventional Commits subject and a multi-line body.",
-        "The skill does not run git add or git push."
+        "The result checks the current branch and stops because it is main.",
+        "The result does not run git commit, git switch, or a GitHub PR query.",
+        "The result does not run git add or git push."
       ]
     },
     {
       "id": 2,
-      "name": "refuse-non-main-branch",
-      "prompt": "Commit the staged files with a detailed message while the current branch is feature/parser-cleanup.",
-      "expected_output": "A refusal that explains the branch is not main and asks the user to switch or confirm a different plan.",
+      "name": "commit-on-open-pr-branch",
+      "prompt": "Commit only the staged parser fix with a detailed message. The current branch is fix/parser-cleanup and GitHub has an open PR whose head is that branch.",
+      "expected_output": "A staged-only commit on the current branch after confirming at least one open PR.",
       "files": [],
       "expectations": [
-        "The result refuses to commit when the current branch is not main.",
-        "The skill does not switch branches automatically."
+        "The result checks for an open PR whose head is the current branch.",
+        "The commit includes only staged files.",
+        "The commit message has a Conventional Commits subject and a detailed Japanese body.",
+        "The result does not run git add, git switch, or git push."
       ]
     },
     {
       "id": 3,
-      "name": "refuse-empty-stage",
-      "prompt": "Commit with a detailed message, but there are no staged changes.",
-      "expected_output": "A refusal that explains nothing is staged and does not add files automatically.",
+      "name": "commit-on-draft-pr-branch",
+      "prompt": "Commit the already-staged test changes with a detailed message. The current non-main branch has a draft PR that is still open.",
+      "expected_output": "A staged-only commit because an open draft PR satisfies the PR gate.",
       "files": [],
       "expectations": [
-        "The result says there are no staged changes to commit.",
-        "The skill does not run git add."
+        "The result treats a draft PR as open.",
+        "The result commits only the staged files.",
+        "The result does not require a ready-for-review PR."
+      ]
+    },
+    {
+      "id": 4,
+      "name": "stop-without-open-pr",
+      "prompt": "Commit the staged files with a detailed message. The current branch is feature/new-mode, but it has no open PR; its only PR is closed.",
+      "expected_output": "A no-op result that reports there is no open PR and leaves the index unchanged.",
+      "files": [],
+      "expectations": [
+        "The result excludes closed and merged PRs.",
+        "The result does not commit or create another branch.",
+        "The result does not run git add or git push."
+      ]
+    },
+    {
+      "id": 5,
+      "name": "create-branch-from-origin-main-detached-head",
+      "prompt": "Commit the staged documentation update with a detailed message. HEAD is detached and resolves to the same commit as refs/remotes/origin/main.",
+      "expected_output": "A new docs/<kebab-case-summary> branch created from detached HEAD followed by a staged-only detailed commit.",
+      "files": [],
+      "expectations": [
+        "The result verifies detached HEAD equals refs/remotes/origin/main without fetching.",
+        "The branch name is derived only from the staged diff and uses the <type>/<kebab-case-summary> format.",
+        "The result checks for local and origin branch-name collisions before git switch -c.",
+        "The commit includes only staged files."
+      ]
+    },
+    {
+      "id": 6,
+      "name": "stop-on-unrelated-detached-head",
+      "prompt": "Commit the staged files with a detailed message. HEAD is detached but does not equal refs/remotes/origin/main.",
+      "expected_output": "A no-op result that does not create a branch or commit.",
+      "files": [],
+      "expectations": [
+        "The result compares HEAD with refs/remotes/origin/main.",
+        "The result does not create a branch when the commits differ.",
+        "The result does not commit the staged files."
+      ]
+    },
+    {
+      "id": 7,
+      "name": "stop-with-empty-index",
+      "prompt": "Commit with a detailed message on a non-main branch with an open PR, but there are no staged changes.",
+      "expected_output": "A no-op result that reports nothing is staged and does not stage files automatically.",
+      "files": [],
+      "expectations": [
+        "The result reports there are no staged changes.",
+        "The result does not run git add or git commit."
+      ]
+    },
+    {
+      "id": 8,
+      "name": "stop-on-suspicious-staged-file",
+      "prompt": "Commit the staged files with a detailed message on a permitted branch, but .env.production is staged.",
+      "expected_output": "A refusal that identifies the suspicious staged file and does not commit it.",
+      "files": [],
+      "expectations": [
+        "The result detects .env.production as suspicious.",
+        "The result stops before git commit or branch creation.",
+        "The result asks the user to review the staged sensitive file."
+      ]
+    },
+    {
+      "id": 9,
+      "name": "stop-when-pr-query-fails",
+      "prompt": "Commit the staged files with a detailed message on a non-main branch, but gh cannot determine PR state because authentication fails.",
+      "expected_output": "A safe failure that reports PR state could not be verified and does not commit.",
+      "files": [],
+      "expectations": [
+        "The result treats a failed PR query differently from an empty successful result.",
+        "The result does not commit when PR state is unknown.",
+        "The result does not bypass GitHub authentication checks."
+      ]
+    },
+    {
+      "id": 10,
+      "name": "stop-when-only-same-name-fork-pr-exists",
+      "prompt": "Commit only the staged parser fix with a detailed message. The current branch is fix/parser-cleanup, its upstream is origin/fix/parser-cleanup, and origin resolves to acme/nova. GitHub has no open PR from acme/nova:fix/parser-cleanup; the only open PR with headRefName fix/parser-cleanup comes from fork-user/nova.",
+      "expected_output": "A no-op result that rejects the same-name fork PR because its head repository identity does not match the upstream remote repository.",
+      "files": [],
+      "expectations": [
+        "The result resolves the current branch upstream remote and its GitHub owner/name before allowing the PR gate.",
+        "The result compares both head branch name and head repository owner/name for every returned open PR.",
+        "The result does not commit when only a same-name PR from a different fork repository exists.",
+        "The result does not run git add, git switch, git push, or create a pull request."
+      ]
+    },
+    {
+      "id": 11,
+      "name": "stop-on-sensitive-file-before-detached-branch-creation",
+      "prompt": "Commit only the staged changes with a detailed message. HEAD is detached and resolves to the same commit as refs/remotes/origin/main, but .env.production is staged.",
+      "expected_output": "A safe refusal that detects the sensitive staged path and stops before both branch creation and commit.",
+      "files": [],
+      "expectations": [
+        "The result verifies detached HEAD equals refs/remotes/origin/main without fetching.",
+        "The result detects .env.production as suspicious after confirming the detached commit is eligible.",
+        "The result stops before git switch -c and git commit.",
+        "The result asks the user to review the staged sensitive file and does not run git add."
       ]
     }
   ]
