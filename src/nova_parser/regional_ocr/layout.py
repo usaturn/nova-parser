@@ -169,3 +169,114 @@ def drop_perimeter_rects(rects: list[BlockRect], image_width: int, image_height:
         if connected:
             kept.append(r)
     return kept
+
+
+# --- 7.2 横方向レイアウト領域（バンド） ---------------------------------------
+
+
+def _cluster_by_x(rects: list[BlockRect], image_width: int) -> list[list[BlockRect]]:
+    """X 範囲の近さで矩形を列クラスタへまとめる（スペック 7.3 の同一列判定）。
+
+    左端・右端が近い、または X 重なりが大きい矩形を同一クラスタとする。
+    戻り値は左から右（同左端なら上から下）の順。
+    """
+    edge_tol = image_width * COLUMN_EDGE_TOLERANCE_RATIO
+    clusters: list[list[BlockRect]] = []
+    for r in sorted(rects, key=lambda r: (r.left, r.top)):
+        target = None
+        for c in clusters:
+            cb = _bbox(c)
+            min_w = min(r.width, cb.width)
+            if min_w <= 0:
+                continue
+            if (
+                _x_overlap(r, cb) / min_w >= COLUMN_X_OVERLAP_RATIO
+                or abs(r.left - cb.left) <= edge_tol
+                or abs(r.right - cb.right) <= edge_tol
+            ):
+                target = c
+                break
+        if target is None:
+            clusters.append([r])
+        else:
+            target.append(r)
+    clusters.sort(key=lambda c: (_bbox(c).left, _bbox(c).top))
+    return clusters
+
+
+def _spanned_count(rect, columns: list[list[BlockRect]]) -> int:
+    """rect が横断している列数。列幅の SPAN_COVER_RATIO 以上を覆う列を数える。"""
+    count = 0
+    for c in columns:
+        cb = _bbox(c)
+        if cb.width > 0 and _x_overlap(rect, cb) / cb.width >= SPAN_COVER_RATIO:
+            count += 1
+    return count
+
+
+def _segment_by_y_gaps(rects: list[BlockRect], gap_min: float) -> list[list[BlockRect]]:
+    """全矩形の Y 射影が gap_min 以上途切れる位置でセグメントへ分割する。"""
+    ordered = sorted(rects, key=lambda r: (r.top, r.left))
+    segments: list[list[BlockRect]] = [[ordered[0]]]
+    covered_bottom = ordered[0].bottom
+    for r in ordered[1:]:
+        if r.top - covered_bottom >= gap_min:
+            segments.append([r])
+        else:
+            segments[-1].append(r)
+        covered_bottom = max(covered_bottom, r.bottom)
+    return segments
+
+
+def _split_by_spanning_rects(seg: list[BlockRect], image_width: int) -> list[list[BlockRect]]:
+    """複数の暫定列を横断する帯見出しを単独バンドへ切り出し、上下を別バンドにする。"""
+    ordered = sorted(seg, key=lambda r: (r.top, r.left))
+    if len(ordered) <= 1:
+        return [ordered]
+    content = _bbox(ordered)
+    wide_min = content.width * WIDE_RECT_BAND_WIDTH_RATIO
+    narrow = [r for r in ordered if r.width < wide_min]
+    columns = _cluster_by_x(narrow, image_width)
+    spanning = [r for r in ordered if r.width >= wide_min and _spanned_count(r, columns) >= BAND_HEADING_SPAN_COLUMNS]
+    if not spanning:
+        return [ordered]
+    spanning.sort(key=lambda r: r.top)
+    span_ids = {id(r) for r in spanning}
+    buckets: list[list[BlockRect]] = [[] for _ in range(len(spanning) + 1)]
+    for r in ordered:
+        if id(r) in span_ids:
+            continue
+        center = r.top + r.height / 2
+        idx = sum(1 for s in spanning if (s.top + s.height / 2) <= center)
+        buckets[idx].append(r)
+    bands: list[list[BlockRect]] = []
+    for i, s in enumerate(spanning):
+        if buckets[i]:
+            bands.append(buckets[i])
+        bands.append([s])
+    if buckets[-1]:
+        bands.append(buckets[-1])
+    return bands
+
+
+def split_bands(rects: list[BlockRect], image_width: int, image_height: int) -> list[list[BlockRect]]:
+    """本文矩形を横方向レイアウト領域（バンド）へ上から順に分割する（スペック 7.2）。
+
+    複数の暫定列があるページでのみ、全列に共通する縦空白で一次分割する
+    （単一の狭い列内の空白だけでは分割しない）。その後、各セグメント内の
+    帯見出し（複数列を横断する幅広矩形）を単独バンドへ切り出す。
+    """
+    if not rects:
+        return []
+    content = _bbox(rects)
+    wide_min = content.width * WIDE_RECT_BAND_WIDTH_RATIO
+    provisional = _cluster_by_x([r for r in rects if r.width < wide_min], image_width)
+    gap_min = image_height * BAND_GAP_MIN_RATIO
+    if len(provisional) >= 2:
+        segments = _segment_by_y_gaps(rects, gap_min)
+    else:
+        segments = [sorted(rects, key=lambda r: (r.top, r.left))]
+    bands: list[list[BlockRect]] = []
+    for seg in segments:
+        bands.extend(_split_by_spanning_rects(seg, image_width))
+    return bands

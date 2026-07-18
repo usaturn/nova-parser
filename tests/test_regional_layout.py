@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from nova_parser.regional_ocr.layout import drop_perimeter_rects, normalize_rects
+from nova_parser.regional_ocr.layout import drop_perimeter_rects, normalize_rects, split_bands
 from nova_parser.regional_ocr.models import BlockRect
 
 W, H = 1000, 1000
@@ -66,3 +66,36 @@ class TestDropPerimeterRects:
         header = _r(700, 15, 200, 30)
         body = _r(100, 200, 800, 600)
         assert drop_perimeter_rects([header, body], W, H) == [body]
+
+
+class TestSplitBands:
+    def test_splits_at_gap_common_to_all_columns(self):
+        upper = [_r(100, 100, 400, 200), _r(520, 100, 400, 200)]
+        lower = [_r(100, 340, 400, 200), _r(520, 340, 400, 200)]
+        bands = split_bands(upper + lower, W, H)
+        assert len(bands) == 2
+        assert sorted(b.y for b in bands[0]) == [100, 100]
+        assert sorted(b.y for b in bands[1]) == [340, 340]
+
+    def test_gap_only_in_narrow_sidebar_does_not_split(self):
+        # 本文列が連続していれば、欄外注釈内の大きな空白では領域分割しない
+        main = _r(100, 100, 350, 600)
+        sidebar_top = _r(600, 100, 150, 100)
+        sidebar_bottom = _r(600, 400, 150, 100)
+        bands = split_bands([main, sidebar_top, sidebar_bottom], W, H)
+        assert len(bands) == 1
+        assert len(bands[0]) == 3
+
+    def test_band_heading_spanning_two_columns_becomes_own_band(self):
+        upper = [_r(100, 100, 400, 200), _r(520, 100, 400, 200)]
+        heading = _r(100, 305, 820, 40)
+        lower = [_r(100, 350, 400, 200), _r(520, 350, 400, 200)]
+        bands = split_bands(upper + [heading] + lower, W, H)
+        assert len(bands) == 3
+        assert bands[1] == [heading]
+
+    def test_single_column_page_is_one_band_despite_gaps(self):
+        # 暫定列が 1 のページでは空白による分割を行わない（縦統合は Task 7 の担当）
+        rects = [_r(100, 100, 800, 150), _r(100, 400, 800, 150)]
+        bands = split_bands(rects, W, H)
+        assert len(bands) == 1
