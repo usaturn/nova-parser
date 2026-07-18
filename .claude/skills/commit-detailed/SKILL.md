@@ -1,21 +1,31 @@
 ---
 name: commit-detailed
-description: ステージング済みファイルを main ブランチに、詳細なコミットメッセージ (Conventional Commits subject + 背景/変更点/影響/テストを含む body) でコミットするスキル。ユーザが「詳細メッセージで commit して」「staged を main に詳しくコミット」「/commit-detailed」等で依頼したときにトリガーする。git add は行わない（既にステージング済みの前提）。実行は専用の Sonnet サブエージェント `commit-detailed` に委譲する。
+description: ステージング済みファイルを、カレントの feature ブランチに詳細なコミットメッセージ (Conventional Commits subject + 背景/変更点/影響/テストを含む body) でコミットするスキル。main ブランチ上では何もせず中断する。main 以外では対応する Open PR の有無を確認し、PR が無い場合はユーザに確認してから commit する。ユーザが「詳細メッセージで commit して」「staged を詳しくコミット」「/commit-detailed」等で依頼したときにトリガーする。git add は行わない。実行は専用の Sonnet サブエージェント `commit-detailed` に委譲する。
 ---
 
 # Commit Detailed
 
-ステージング済みのファイルを **main ブランチに**、**詳細メッセージ付き** で commit するスキル。実際のコミットは Sonnet 駆動のサブエージェント `commit-detailed` に Task で委譲する。
+ステージング済みのファイルを **カレントの feature ブランチに**、**詳細メッセージ付き** で commit するスキル。main ブランチ上では何もしない。実際のコミットは Sonnet 駆動のサブエージェント `commit-detailed` に Task で委譲する。
 
 ## 前提確認
 
-Task 呼び出し前に、親スレッドで以下を 1 回ずつ Bash で確認する。いずれか満たさなければ、ユーザに報告して中断する:
+Task 呼び出し前に、親スレッドで以下を順に Bash で確認する。
 
-1. `.claude/agents/commit-detailed.md` が存在する
-2. `git rev-parse --abbrev-ref HEAD` の結果が `main`
-3. `git diff --staged --name-only` に少なくとも 1 ファイル含まれる
+1. `.claude/agents/commit-detailed.md` が存在する。無ければユーザに報告して中断。
+2. `git rev-parse --abbrev-ref HEAD` を確認する。
+   - 結果が `main` の場合は **何もせず中断** し、「main 上のため中断しました。先に feature ブランチを切ってから再実行してください」とユーザに報告する。勝手にブランチを作成・切替しない。
+3. `git diff --staged --name-only` に少なくとも 1 ファイル含まれる。空なら「staged なし」と報告して中断。
+4. 対応する Open PR の有無を確認する。
 
-現在ブランチが `main` でない場合は、`git switch main` を勝手に実行せず、ユーザに「main に切り替えてから再実行しますか? それともこのブランチでコミットしますか?」と確認する（勝手なブランチ操作は破壊的リスク）。
+   ```bash
+   branch="$(git rev-parse --abbrev-ref HEAD)"
+   gh pr list --head "$branch" --state open --json number --jq 'length'
+   ```
+
+   - 出力が `1` 以上（PR あり）→ そのまま Task 呼び出し（次節）へ進む。
+   - 出力が `0`（PR なし）→ `AskUserQuestion` で「このブランチに対応する Open PR がありません。PR 無しのままこのブランチに commit しますか?」を確認する。
+     - Yes → Task 呼び出しへ進む。
+     - No → 「PR 未作成のため中断しました」と報告して中断する。
 
 ## ワークフロー
 
@@ -24,7 +34,7 @@ Task 呼び出し前に、親スレッドで以下を 1 回ずつ Bash で確認
 `commit-detailed` サブエージェントを 1 回だけ Task で呼ぶ。プロンプトは最小限でよい:
 
 ```
-staged 済みの変更を、main ブランチに詳細メッセージで commit してください。
+staged 済みの変更を、カレントの feature ブランチに詳細メッセージで commit してください。
 ユーザ依頼: <原文>
 追加コンテキスト（あれば）: <ユーザが口頭で付けた背景、例: 「今回は X 対応」>
 ```
@@ -36,14 +46,14 @@ staged 済みの変更を、main ブランチに詳細メッセージで commit 
 ### 2. 結果の扱い
 
 - サブエージェントの stdout をそのままユーザに表示する（要約しない）
-- サブエージェントが中断理由（branch 不一致 / staged 空 / 機密ファイル混入）を返した場合は、その理由を明示してユーザに次アクションを確認する
+- サブエージェントが中断理由（branch が main / staged 空 / 機密ファイル混入）を返した場合は、その理由を明示してユーザに次アクションを確認する
 - commit 成功後、push が必要かどうかは **確認せず実行しない**（push はこのスキルの責務外）
 
 ## 使い分けの早見表
 
 | 依頼の形 | 使うスキル |
 |---|---|
-| 「staged を main に詳しくコミット」 | 本スキル (`commit-detailed`) |
+| 「staged を詳しくコミット」（feature ブランチ上） | 本スキル (`commit-detailed`) |
 | 「短い conventional commit で」 | `git-commit` スキル |
 | 「まだ add してない。全部コミットまで通して」 | `git-commit` スキル（add 含む） |
 | 「push まで通して」 | 本スキルで commit → 別途ユーザに push 確認 |
@@ -51,7 +61,8 @@ staged 済みの変更を、main ブランチに詳細メッセージで commit 
 ## やらないこと
 
 - サブエージェントを介さず親スレッドで直接 `git commit` を実行する
-- ユーザ確認なしに `git switch`/`git checkout` でブランチを切り替える
+- ユーザ確認なしに `git switch`/`git checkout` でブランチを切り替える、または新規作成する
+- main ブランチ上で commit する（main では何もしない）
 - `git add` を実行する（ステージングはユーザ責任）
 - `git push` を実行する
 - サブエージェントが返したコミットメッセージや結果を要約・再フォーマットする
