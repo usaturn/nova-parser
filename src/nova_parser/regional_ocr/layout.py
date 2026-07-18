@@ -317,3 +317,87 @@ def split_columns(band: list[BlockRect], image_width: int) -> list[list[BlockRec
             best.append(r)
     groups.sort(key=lambda c: (_bbox(c).left, _bbox(c).top))
     return groups
+
+
+# --- 7.4 縦方向統合 -----------------------------------------------------------
+
+
+def _has_shared_row_boundary(gap_top: float, gap_bottom: float, neighbors: list[BlockRect], tol: float) -> bool:
+    """隣接列にも同じ行境界（空白区間内に上端が来る矩形）があるか（スペック 7.4）。"""
+    return any(gap_top - tol <= n.top <= gap_bottom + tol for n in neighbors)
+
+
+def _is_heading_break(group: list[BlockRect], cur: BlockRect) -> bool:
+    """直前グループと次矩形の幅・中心位置が大きく異なるか（見出し境界、スペック 7.4）。"""
+    gb = _bbox(group)
+    max_w = max(gb.width, cur.width)
+    if max_w <= 0:
+        return False
+    width_diff = abs(gb.width - cur.width) / max_w
+    center_diff = abs((gb.left + gb.right) / 2 - (cur.left + cur.right) / 2) / max_w
+    return width_diff >= HEADING_WIDTH_DIFF_RATIO or center_diff >= HEADING_CENTER_DIFF_RATIO
+
+
+def split_vertical(
+    column: list[BlockRect],
+    band: list[BlockRect],
+    image_width: int,
+    image_height: int,
+) -> list[list[BlockRect]]:
+    """同一列内の段落矩形を縦方向に統合し、根拠のある位置でのみ分割する（スペック 7.4）。
+
+    band には同一バンドの全矩形（自列を含む）を渡す。隣接列の行境界判定に使う。
+    欄外注釈候補（幅が画像幅の 25% 以下）は大きな縦空白を挟んでも統合する。
+    """
+    ordered = sorted(column, key=lambda r: (r.top, r.left))
+    if len(ordered) <= 1:
+        return [ordered] if ordered else []
+    col_box = _bbox(ordered)
+    is_narrow = col_box.width <= image_width * NARROW_COLUMN_MAX_WIDTH_RATIO
+    gap_min = image_height * VERTICAL_SPLIT_GAP_RATIO
+    align_tol = image_height * ROW_ALIGN_TOLERANCE_RATIO
+    column_ids = {id(r) for r in column}
+    neighbors = [r for r in band if id(r) not in column_ids]
+    groups: list[list[BlockRect]] = [[ordered[0]]]
+    for cur in ordered[1:]:
+        group_bottom = max(r.bottom for r in groups[-1])
+        gap = cur.top - group_bottom
+        split = False
+        if gap >= gap_min and not is_narrow:
+            if _has_shared_row_boundary(group_bottom, cur.top, neighbors, align_tol):
+                split = True
+            elif _is_heading_break(groups[-1], cur):
+                split = True
+        if split:
+            groups.append([cur])
+        else:
+            groups[-1].append(cur)
+    return groups
+
+
+# --- 8 過結合の取り消し -------------------------------------------------------
+
+
+def _spans_boxes(box: _Box, others: list[_Box]) -> int:
+    """box が横方向に覆っている他グループ数（Y 重なりがあるものだけ数える）。"""
+    count = 0
+    for o in others:
+        if o.width > 0 and _y_overlap(box, o) > 0 and _x_overlap(box, o) / o.width >= SPAN_COVER_RATIO:
+            count += 1
+    return count
+
+
+def cancel_overmerged(band_groups: list[list[BlockRect]], image_width: int) -> list[list[BlockRect]]:
+    """統合の結果、複数の推定列をまたぐ巨大矩形になったグループを解体する（スペック 8）。
+
+    解体したグループの元段落は単独ブロックとして残す（未結合を優先）。
+    """
+    boxes = [_bbox(g) for g in band_groups]
+    result: list[list[BlockRect]] = []
+    for i, group in enumerate(band_groups):
+        others = [b for j, b in enumerate(boxes) if j != i]
+        if len(group) >= 2 and _spans_boxes(boxes[i], others) >= 2:
+            result.extend([r] for r in group)
+        else:
+            result.append(group)
+    return result

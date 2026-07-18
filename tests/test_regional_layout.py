@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from nova_parser.regional_ocr.layout import (
+    cancel_overmerged,
     drop_perimeter_rects,
     normalize_rects,
     split_bands,
     split_columns,
+    split_vertical,
 )
 from nova_parser.regional_ocr.models import BlockRect
 
@@ -134,3 +136,48 @@ class TestSplitColumns:
         a = _r(100, 100, 800, 150)
         b = _r(100, 300, 800, 150)
         assert split_columns([a, b], W) == [[a, b]]
+
+
+class TestSplitVertical:
+    def test_merges_stacked_paragraphs_in_same_column(self):
+        column = [_r(100, 100, 400, 100), _r(100, 220, 400, 100)]
+        assert split_vertical(column, column, W, H) == [column]
+
+    def test_narrow_sidebar_merges_across_large_gap(self):
+        # 欄外注釈候補（幅 25% 以下）は大きな縦空白を挟んでも統合する
+        column = [_r(700, 100, 150, 100), _r(700, 500, 150, 100)]
+        assert split_vertical(column, column, W, H) == [column]
+
+    def test_splits_at_row_boundary_shared_with_neighbor_column(self):
+        # 2×2 カード: 隣接列にも同じ行境界がある場合は分割する
+        column = [_r(100, 100, 300, 150), _r(100, 300, 300, 150)]
+        neighbors = [_r(450, 100, 300, 150), _r(450, 300, 300, 150)]
+        groups = split_vertical(column, column + neighbors, W, H)
+        assert groups == [[column[0]], [column[1]]]
+
+    def test_splits_heading_with_different_width_and_large_gap(self):
+        heading = _r(100, 100, 400, 50)
+        body = _r(100, 210, 150, 100)
+        groups = split_vertical([heading, body], [heading, body], W, H)
+        assert groups == [[heading], [body]]
+
+    def test_uncertain_gap_without_evidence_merges(self):
+        # 根拠のない空白では分割しない（スペック 8: 単一の空白だけでは分割しない）
+        column = [_r(100, 100, 400, 100), _r(100, 260, 400, 100)]
+        assert split_vertical(column, column, W, H) == [column]
+
+
+class TestCancelOvermerged:
+    def test_cancels_group_spanning_two_other_columns(self):
+        a1 = _r(100, 100, 300, 100)
+        a2 = _r(100, 400, 900, 80)  # 統合すると 2 列をまたぐ
+        g2 = [_r(450, 100, 300, 100)]
+        g3 = [_r(800, 100, 150, 100)]
+        result = cancel_overmerged([[a1, a2], g2, g3], W)
+        assert [a1] in result and [a2] in result
+        assert len(result) == 4
+
+    def test_keeps_normal_column_groups(self):
+        g1 = [_r(100, 100, 300, 100), _r(100, 220, 300, 100)]
+        g2 = [_r(450, 100, 300, 100)]
+        assert cancel_overmerged([g1, g2], W) == [g1, g2]
