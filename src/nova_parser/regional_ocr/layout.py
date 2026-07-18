@@ -144,3 +144,28 @@ def normalize_rects(rects: list[BlockRect], image_width: int, image_height: int)
             kept.append(r)
     kept.sort(key=lambda r: (r.y, r.x))
     return kept
+
+
+# --- 7.1 ページ外周要素の除外 -------------------------------------------------
+
+
+def drop_perimeter_rects(rects: list[BlockRect], image_width: int, image_height: int) -> list[BlockRect]:
+    """上下の外周帯に完全に収まり、本文から孤立した小矩形を除外する（スペック 7.1）。
+
+    ヘッダー・フッター・ページ番号候補が対象。外周帯をまたいで本文側へ
+    伸びる矩形、および本文と縦に連続する矩形は除外しない。
+    """
+    band = image_height * PERIMETER_BAND_RATIO
+    max_height = image_height * PERIMETER_MAX_HEIGHT_RATIO
+    gap_max = image_height * PERIMETER_ISOLATION_GAP_RATIO
+    body = [r for r in rects if not (r.bottom <= band or r.top >= image_height - band)]
+    kept: list[BlockRect] = []
+    for r in rects:
+        inside_band = r.bottom <= band or r.top >= image_height - band
+        if not inside_band or r.height > max_height:
+            kept.append(r)
+            continue
+        connected = any(_x_overlap(r, b) > 0 and _v_gap(r, b) <= gap_max for b in body)
+        if connected:
+            kept.append(r)
+    return kept
