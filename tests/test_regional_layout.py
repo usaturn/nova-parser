@@ -312,6 +312,11 @@ class TestFinalizeBlocks:
         out = finalize_blocks([g1, g2], W, H)
         assert out[0].x > out[1].x  # 並び替えは行わない（順序はパイプラインが決める）
 
+    def test_small_rect_gets_extra_padding(self):
+        # 短辺 40 → extra = 40 * SMALL_RECT_EXTRA_PAD_RATIO、通常 pad 6 に上乗せ
+        out = finalize_blocks([[_r(500, 500, 80, 40)]], W, H)
+        assert out[0].width > 80 + int(W * 0.006) * 2  # extra 込みで広がる
+
 
 class TestComputeVerticalBlocks:
     def test_empty_input_returns_empty(self):

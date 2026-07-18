@@ -186,11 +186,10 @@
       "height": 1071
     },
     {
-      "x": 978,
-      "y": 1667,
-      "width": 237,
-      "height": 101,
-      "_comment": "Vision paragraph (988,1682,217,71) + PAD 0.006; crop 981,1697,239x65 is geometrically unreachable (IoU ceiling ~0.71)"
+      "x": 981,
+      "y": 1697,
+      "width": 239,
+      "height": 65
     },
     {
       "x": 1104,

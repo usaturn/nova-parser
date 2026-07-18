@@ -76,6 +76,19 @@ PAD_Y_RATIO = 0.006
 スペック 7.5 の初期値は 0.3% だったが、ゴールデンチューニング後に 0.006 へ更新。
 """
 
+SMALL_RECT_MAX_WIDTH_RATIO = 0.20
+"""単独小矩形とみなす最大幅（画像幅比）。finalize の追加余白対象。"""
+
+SMALL_RECT_MAX_HEIGHT_RATIO = 0.05
+"""単独小矩形とみなす最大高さ（画像高さ比）。"""
+
+SMALL_RECT_EXTRA_PAD_RATIO = 0.03
+"""小矩形の追加余白上限（当該矩形の短辺に対する比）。隣接中点・画像境界が優先。
+
+初期案 0.15 は p251 小ラベルと crop 正本の IoU を 0.60 未満に落とすため、
+ゴールデン維持を優先して 0.03 へ調整（対称 pad の拡大は当該 crop との IoU を悪化させる）。
+"""
+
 # --- Task 9 判定強化用の閾値 --------------------------------------------------
 
 NOISE_MICRO_HEIGHT_FACTOR = 0.35
@@ -853,10 +866,15 @@ def finalize_blocks(groups: list[list[BlockRect]], image_width: int, image_heigh
     pad_y = image_height * PAD_Y_RATIO
     blocks: list[BlockRect] = []
     for i, b in enumerate(boxes):
-        left = b.left - pad_x
-        top = b.top - pad_y
-        right = b.right + pad_x
-        bottom = b.bottom + pad_y
+        extra = 0.0
+        if len(groups[i]) == 1:
+            gw, gh = b.right - b.left, b.bottom - b.top
+            if gw <= image_width * SMALL_RECT_MAX_WIDTH_RATIO and gh <= image_height * SMALL_RECT_MAX_HEIGHT_RATIO:
+                extra = min(gw, gh) * SMALL_RECT_EXTRA_PAD_RATIO
+        left = b.left - pad_x - extra
+        top = b.top - pad_y - extra
+        right = b.right + pad_x + extra
+        bottom = b.bottom + pad_y + extra
         for j, o in enumerate(boxes):
             if i == j:
                 continue

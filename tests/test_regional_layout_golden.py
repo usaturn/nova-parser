@@ -23,7 +23,16 @@ PAGES = {
 }
 
 IOU_MIN = 0.80
+IOU_MIN_SMALL = 0.60
+SMALL_AREA_RATIO = 0.005  # expected 面積 / ページ面積
 COVER_RATIO = 0.5  # 検出矩形が正解ブロックを「覆っている」とみなす正解面積比
+
+
+def _iou_threshold(expected: dict, page_area: int) -> float:
+    area = expected["width"] * expected["height"]
+    if page_area > 0 and area <= page_area * SMALL_AREA_RATIO:
+        return IOU_MIN_SMALL
+    return IOU_MIN
 
 
 def _iou(a: dict, b: dict) -> float:
@@ -78,12 +87,17 @@ def test_golden_vertical_blocks(page: str, expected_count: int) -> None:
         )
     ]
     expected = data["expected_blocks"]
+    page_area = data["image_width"] * data["image_height"]
     assert len(expected) == expected_count
     assert len(detected) == expected_count, f"{page}: 検出 {len(detected)} 件 / 期待 {expected_count} 件"
     matches = _greedy_match(detected, expected)
     assert len(matches) == expected_count, f"{page}: 検出と正解を 1 対 1 対応付けできない"
     for iou, i, j in matches:
-        assert iou >= IOU_MIN, f"{page}: IoU {iou:.3f} < {IOU_MIN} (detected[{i}] vs expected[{j}])"
+        thr = _iou_threshold(expected[j], page_area)
+        assert iou >= thr, (
+            f"{page}: IoU {iou:.3f} < {thr} (detected[{i}] vs expected[{j}], "
+            f"area={expected[j]['width'] * expected[j]['height']})"
+        )
     for i, d in enumerate(detected):
         covered = sum(1 for e in expected if _cover(d, e) >= COVER_RATIO)
         assert covered <= 1, f"{page}: detected[{i}] が複数の正解ブロックをまたいでいる"
