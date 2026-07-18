@@ -377,3 +377,17 @@ button:disabled {
 .muted {
   color: var(--muted);
 }
+
+.zoom-toolbar .block-mode-btn.active {
+  background: var(--selected);
+  color: #14141f;
+}
+
+.canvas-wrap.block-mode {
+  cursor: crosshair;
+}
+
+.region.block-hover {
+  border-color: var(--selected);
+  background: rgba(235, 203, 139, 0.15);
+}

@@ -831,10 +831,151 @@ def test_create_app_returns_fastapi_with_required_routes(tmp_path):
 
     assert isinstance(app, FastAPI)
 
-    route_paths = {route.path for route in app.routes}
+    # FastAPI のバージョンによっては include_router のルートが _IncludedRouter に
+    # ネストされ、app.routes のトップレベルに path が現れないため、再帰的に収集する。
+    def _collect_route_paths(routes) -> set[str]:
+        paths: set[str] = set()
+        for route in routes:
+            path = getattr(route, "path", None)
+            if path is not None:
+                paths.add(path)
+            sub = getattr(route, "routes", None)
+            if sub is None:
+                # _IncludedRouter は routes を持たず original_router 経由で保持する
+                sub = getattr(getattr(route, "original_router", None), "routes", None)
+            if sub:
+                paths.update(_collect_route_paths(sub))
+        return paths
+
+    route_paths = _collect_route_paths(app.routes)
     assert "/api/images" in route_paths
     assert "/api/image/{name}" in route_paths
     assert "/api/image/{name}/raw" in route_paths
     assert "/api/session/{name}" in route_paths
     assert "/api/ocr/{name}/{rect_id}" in route_paths
     assert "/api/ocr/batch/stream" in route_paths
+
+
+# ---------------------------------------------------------------------------
+# GET /api/blocks/{name} — 段組ブロック検出＋キャッシュ
+# ---------------------------------------------------------------------------
+
+
+def test_get_blocks_detects_and_persists_on_first_call(tmp_path):
+    """初回 GET /api/blocks/{name} は document_text_detection を 1 回呼び、結果を {stem}.blocks.json に保存する。"""
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "a.png", (100, 100))
+    output_dir = tmp_path / "output"
+
+    fake = FakeVisionClient(_FakeResponse(blocks=[[(10, 10), (60, 10), (60, 40), (10, 40)]]))
+    client = _make_client(image_dir, output_dir, _simple_factory(fake))
+
+    resp = client.get("/api/blocks/a.png")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["image_name"] == "a.png"
+    assert data["image_width"] == 100
+    assert data["image_height"] == 100
+    assert data["blocks"] == [{"x": 10, "y": 10, "width": 50, "height": 30}]
+    assert data["schema_version"] == 1
+    assert (output_dir / "a.blocks.json").exists()
+    assert len(fake.document_calls) == 1
+
+
+def test_get_blocks_uses_cache_on_second_call(tmp_path):
+    """2 回目の GET /api/blocks/{name} はキャッシュを返し、Vision API を呼ばない。"""
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "a.png", (100, 100))
+    output_dir = tmp_path / "output"
+
+    fake = FakeVisionClient(_FakeResponse(blocks=[[(10, 10), (60, 10), (60, 40), (10, 40)]]))
+    client = _make_client(image_dir, output_dir, _simple_factory(fake))
+
+    first = client.get("/api/blocks/a.png")
+    second = client.get("/api/blocks/a.png")
+
+    assert second.status_code == 200
+    assert second.json() == first.json()
+    assert len(fake.document_calls) == 1, "キャッシュヒット時は Vision を呼ばない"
+
+
+def test_get_blocks_returns_404_for_unknown_image(tmp_path):
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    output_dir = tmp_path / "output"
+
+    client = _make_client(image_dir, output_dir, _simple_factory(FakeVisionClient()))
+    resp = client.get("/api/blocks/missing.png")
+
+    assert resp.status_code == 404
+
+
+def test_get_blocks_returns_502_when_vision_reports_error(tmp_path):
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "a.png")
+    output_dir = tmp_path / "output"
+
+    fake = FakeVisionClient(_FakeResponse(error_message="vision down"))
+    client = _make_client(image_dir, output_dir, _simple_factory(fake))
+    resp = client.get("/api/blocks/a.png")
+
+    assert resp.status_code == 502
+    assert "vision down" in resp.json()["detail"]
+    assert not (output_dir / "a.blocks.json").exists(), "エラー時はキャッシュを残さない"
+
+
+def test_get_blocks_returns_409_on_stem_collision(tmp_path):
+    """同 stem・別拡張子の画像がある場合、GET /api/blocks/{name} は 409 を返す（キャッシュ誤用防止）。"""
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "a.png")
+    Image.new("RGB", (200, 150), color=(10, 20, 30)).save(image_dir / "a.webp")
+    output_dir = tmp_path / "output"
+
+    fake = FakeVisionClient(_FakeResponse(blocks=[[(10, 10), (60, 10), (60, 40), (10, 40)]]))
+    client = _make_client(image_dir, output_dir, _simple_factory(fake))
+    resp = client.get("/api/blocks/a.png")
+
+    assert resp.status_code == 409
+    assert not (output_dir / "a.blocks.json").exists(), "衝突時は検出・キャッシュ生成しない"
+
+
+def test_get_blocks_redetects_when_cache_belongs_to_replaced_extension(tmp_path):
+    """stem 衝突解消後（a.png 削除→別寸法 a.webp 配置）、GET /api/blocks/a.webp は
+    旧 a.png キャッシュを返さず再検出し、a.webp の image_name と新寸法を返す（L-1）。"""
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "a.png", (100, 100))
+    output_dir = tmp_path / "output"
+
+    fake = FakeVisionClient(_FakeResponse(blocks=[[(10, 10), (60, 10), (60, 40), (10, 40)]]))
+    client = _make_client(image_dir, output_dir, _simple_factory(fake))
+
+    # a.png で a.blocks.json キャッシュを生成（image_name="a.png", 100x100）
+    first = client.get("/api/blocks/a.png")
+    assert first.status_code == 200
+    assert first.json()["image_name"] == "a.png"
+    assert len(fake.document_calls) == 1
+
+    # 入力を別寸法の a.webp へ置換（a.png を削除）。a.blocks.json は残る。
+    (image_dir / "a.png").unlink()
+    Image.new("RGB", (200, 150), color=(10, 20, 30)).save(image_dir / "a.webp")
+
+    resp = client.get("/api/blocks/a.webp")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["image_name"] == "a.webp", "旧 a.png キャッシュを返してはいけない"
+    assert data["image_width"] == 200
+    assert data["image_height"] == 150
+    assert len(fake.document_calls) == 2, "不一致キャッシュは再検出する"
+    # キャッシュが a.webp の内容で上書きされている
+    from nova_parser.regional_ocr.blocks import load_blocks
+
+    reloaded = load_blocks(output_dir, "a.webp")
+    assert reloaded is not None
+    assert reloaded.image_name == "a.webp"

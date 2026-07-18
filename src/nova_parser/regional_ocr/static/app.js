@@ -11,6 +11,11 @@ const api = {
     if (!r.ok) throw new Error(`GET /api/image/${name} failed: ${r.status}`);
     return r.json();
   },
+  async getBlocks(name) {
+    const r = await fetch(`/api/blocks/${encodeURIComponent(name)}`);
+    if (!r.ok) throw new Error(`GET /api/blocks/${name} failed: ${r.status}`);
+    return r.json();
+  },
   async getSession(name) {
     const r = await fetch(`/api/session/${encodeURIComponent(name)}`);
     if (!r.ok) throw new Error(`GET /api/session/${name} failed: ${r.status}`);
@@ -66,6 +71,15 @@ function nextDrawOrder(regions) {
   return Math.max(...regions.map((r) => r.rectangle.draw_order)) + 1;
 }
 
+function hitTestBlock(blocks, x, y) {
+  let best = null;
+  for (const b of blocks) {
+    if (x < b.x || y < b.y || x >= b.x + b.width || y >= b.y + b.height) continue;
+    if (!best || b.width * b.height < best.width * best.height) best = b;
+  }
+  return best;
+}
+
 function regionalOcrApp() {
   return {
     images: [],
@@ -88,6 +102,13 @@ function regionalOcrApp() {
     ocrLog: [],
     zoom: 1.0,
     zoomFit: true,
+    blockMode: false,
+    blocks: null,
+    blocksLoading: false,
+    hoverBlock: null,
+    _blocksRequestFor: null,
+    _blocksRequestEpoch: null,
+    _blocksEpoch: 0,
 
     async init() {
       try {
@@ -159,6 +180,9 @@ function regionalOcrApp() {
       this.selectedRectId = null;
       this.imgLoaded = false;
       this.draftRect = null;
+      this.blocks = null;
+      this.hoverBlock = null;
+      this._blocksEpoch += 1;
       try {
         const meta = await api.getImageMeta(name);
         this.currentImage = {
@@ -168,6 +192,7 @@ function regionalOcrApp() {
           mime: meta.mime_type,
         };
         this.session = await api.getSession(name);
+        if (this.blockMode) this._ensureBlocks();
       } catch (err) {
         console.error(err);
         this.currentImage = null;
@@ -281,6 +306,10 @@ function regionalOcrApp() {
       if (!this.session || !this.imgLoaded) return;
       if (event.target.classList.contains("handle") || event.target.classList.contains("region")) return;
       if (event.target.classList.contains("region-delete")) return;
+      if (this.blockMode) {
+        this._addRegionFromBlockClick(event);
+        return;
+      }
       const { x, y } = this._displayCoord(event);
       this.dragMode = "create";
       this.dragStart = { x, y };
@@ -289,6 +318,10 @@ function regionalOcrApp() {
     },
 
     onMouseMove(event) {
+      if (this.blockMode && !this.dragMode) {
+        this._updateHoverBlock(event);
+        return;
+      }
       if (!this.dragMode) return;
       if (this.dragMode === "create") {
         const { x, y } = this._displayCoord(event);
@@ -340,6 +373,99 @@ function regionalOcrApp() {
       });
       this.selectedRectId = rect.rect_id;
       this.scheduleSave();
+    },
+
+    async toggleBlockMode() {
+      if (this.blockMode) {
+        this.blockMode = false;
+        this.hoverBlock = null;
+        // 検出中に OFF された場合、in-flight 応答を破棄しローディング表示を即消しする。
+        // epoch を進めることで、到着した応答は _ensureBlocks の epoch ガードで弾かれる。
+        this._blocksEpoch += 1;
+        this.blocksLoading = false;
+        return;
+      }
+      if (!this.currentImage) return;
+      this.blockMode = true;
+      await this._ensureBlocks();
+    },
+
+    async _ensureBlocks() {
+      if (!this.currentImage || this.blocks !== null) return;
+      const imageName = this.currentImage.name;
+      // await 前に epoch を捕捉する。selectImage が画像を切り替える（同名再選択を含む）
+      // たびに epoch を進めるので、応答が届いた時点で epoch が食い違っていれば
+      // 「画像名は一致するが実は別世代」の stale 応答だと判定できる。
+      const epoch = this._blocksEpoch;
+      // 同一画像 かつ 同一世代 の取得が既に走っている場合のみ抑止する。
+      // 世代も見ることで、同名再選択（epoch が進む）のときに新世代の取得が
+      // 「画像名一致」だけで飢餓させられるのを防ぐ。
+      if (this._blocksRequestFor === imageName && this._blocksRequestEpoch === epoch) return;
+      this._blocksRequestFor = imageName;
+      this._blocksRequestEpoch = epoch;
+      this.blocksLoading = true;
+      try {
+        const result = await api.getBlocks(imageName);
+        // 取得中に画像が切り替わった場合、古い画像の blocks を反映しない
+        // （画像名一致だけでは selectImage の meta/session await 中に届いた
+        //  stale 応答をすり抜けさせてしまうため、epoch も併せて確認する）
+        if (!this.currentImage || this.currentImage.name !== imageName || epoch !== this._blocksEpoch) return;
+        this.blocks = result.blocks;
+        if (this.blocks.length === 0) {
+          const msg = `「${imageName}」から段組が検出されませんでした`;
+          // 同一画像を行き来した際に同文言の警告が重複蓄積しないようにする
+          if (!this.warnings.includes(msg)) this.warnings = [...this.warnings, msg];
+        }
+      } catch (err) {
+        console.error(err);
+        if (this.currentImage && this.currentImage.name === imageName && epoch === this._blocksEpoch) {
+          const msg = `「${imageName}」の段組検出に失敗しました: ${err.message}`;
+          // 0 件警告と同様に、同一画像での連続失敗で同文言が重複蓄積しないよう抑止する
+          if (!this.warnings.includes(msg)) this.warnings = [...this.warnings, msg];
+          this.blockMode = false;
+        }
+      } finally {
+        // 自分（同一画像・同一世代）が最新のリクエストである場合だけ解除する。
+        // 古い世代の finally が新しい世代の loading 所有権を奪わないようにする。
+        if (this._blocksRequestFor === imageName && this._blocksRequestEpoch === epoch) {
+          this._blocksRequestFor = null;
+          this._blocksRequestEpoch = null;
+          this.blocksLoading = false;
+        }
+      }
+    },
+
+    _addRegionFromBlockClick(event) {
+      if (!this.blocks || !this.blocks.length) return;
+      const { x, y } = this._displayCoord(event);
+      const block = hitTestBlock(this.blocks, x / this.scaleX, y / this.scaleY);
+      if (!block) return;
+      const rect = {
+        rect_id: generateRectId(),
+        draw_order: nextDrawOrder(this.session.regions),
+        x: block.x,
+        y: block.y,
+        width: block.width,
+        height: block.height,
+      };
+      this.session.regions.push({
+        rectangle: rect,
+        text: null,
+        ocr_status: "pending",
+        ocr_error: null,
+        ocr_completed_at: null,
+      });
+      this.selectedRectId = rect.rect_id;
+      this.scheduleSave();
+    },
+
+    _updateHoverBlock(event) {
+      if (!this.blocks || !this.blocks.length || !this.imgLoaded) {
+        this.hoverBlock = null;
+        return;
+      }
+      const { x, y } = this._displayCoord(event);
+      this.hoverBlock = hitTestBlock(this.blocks, x / this.scaleX, y / this.scaleY);
     },
 
     selectRect(rectId) {

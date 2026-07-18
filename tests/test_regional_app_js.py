@@ -332,11 +332,11 @@ const __APP_SOURCE = fs.readFileSync(
 const __APP_FACTORY = new Function(
   "window",
   __APP_SOURCE +
-    "\n;return { clampInt, displayToNatural, generateRectId, nextDrawOrder, regionalOcrApp };",
+    "\n;return { clampInt, displayToNatural, generateRectId, nextDrawOrder, hitTestBlock, regionalOcrApp };",
 );
-const { clampInt, displayToNatural, generateRectId, nextDrawOrder, regionalOcrApp } =
+const { clampInt, displayToNatural, generateRectId, nextDrawOrder, hitTestBlock, regionalOcrApp } =
   __APP_FACTORY(global.window);
-const internals = { clampInt, displayToNatural, generateRectId, nextDrawOrder };
+const internals = { clampInt, displayToNatural, generateRectId, nextDrawOrder, hitTestBlock };
 
 function newApp(overrides = {}) {
   const app = regionalOcrApp();
@@ -1377,5 +1377,665 @@ for (let i = 0; i < 55; i++) {
 assert.equal(app.ocrLog.length, 50, "log must cap at 50");
 assert.equal(app.ocrLog[0].seq, 5, "earliest entries are evicted FIFO");
 assert.equal(app.ocrLog[49].seq, 54);
+"""
+    )
+
+
+# ---------------------------------------------------------------------------
+# 段組選択: hitTestBlock（純関数）
+# ---------------------------------------------------------------------------
+
+
+def test_hit_test_block_returns_containing_block_or_null() -> None:
+    _run_node_inline(
+        r"""
+const blocks = [{ x: 10, y: 10, width: 30, height: 30 }];
+assert.deepEqual(internals.hitTestBlock(blocks, 20, 20), blocks[0]);
+assert.equal(internals.hitTestBlock(blocks, 5, 5), null, "外側の点は null");
+assert.equal(internals.hitTestBlock([], 20, 20), null, "空配列は null");
+"""
+    )
+
+
+def test_hit_test_block_boundary_is_half_open() -> None:
+    _run_node_inline(
+        r"""
+const blocks = [{ x: 10, y: 10, width: 30, height: 30 }];
+assert.deepEqual(internals.hitTestBlock(blocks, 10, 10), blocks[0], "左上端は含む");
+assert.equal(internals.hitTestBlock(blocks, 40, 40), null, "右下端 (x+width, y+height) は含まない");
+assert.deepEqual(internals.hitTestBlock(blocks, 39.9, 39.9), blocks[0]);
+"""
+    )
+
+
+def test_hit_test_block_prefers_smallest_area_on_overlap() -> None:
+    _run_node_inline(
+        r"""
+const outer = { x: 0, y: 0, width: 100, height: 100 };
+const inner = { x: 20, y: 20, width: 30, height: 30 };
+assert.deepEqual(internals.hitTestBlock([outer, inner], 25, 25), inner, "重なりは最小面積を採用");
+assert.deepEqual(internals.hitTestBlock([inner, outer], 25, 25), inner, "順序に依存しない");
+assert.deepEqual(internals.hitTestBlock([outer, inner], 5, 5), outer, "inner の外なら outer");
+"""
+    )
+
+
+# ---------------------------------------------------------------------------
+# 段組選択: blockMode の状態遷移・クリック作成・ホバー
+# ---------------------------------------------------------------------------
+
+_BLOCKS_PAYLOAD = r"""
+function blocksPayload(imageName, blocks) {
+  return {
+    image_name: imageName,
+    image_width: 100,
+    image_height: 100,
+    blocks,
+    detected_at: "2026-07-18T00:00:00Z",
+    schema_version: 1,
+  };
+}
+"""
+
+
+def test_toggle_block_mode_fetches_blocks_once_and_caches() -> None:
+    _run_node_inline(
+        _BLOCKS_PAYLOAD
+        + r"""
+let calls = 0;
+global.fetch = (url) => {
+  if (url === "/api/blocks/a.png") {
+    calls += 1;
+    return Promise.resolve(
+      fetchResponse(blocksPayload("a.png", [{ x: 10, y: 10, width: 30, height: 30 }])),
+    );
+  }
+  throw new Error(`unexpected fetch: ${url}`);
+};
+const app = newApp({
+  currentImage: { name: "a.png", width: 100, height: 100, mime: "image/png" },
+  session: sessionPayload("a.png", []),
+  imgLoaded: true,
+});
+(async () => {
+  await app.toggleBlockMode();
+  assert.equal(app.blockMode, true);
+  assert.deepEqual(app.blocks, [{ x: 10, y: 10, width: 30, height: 30 }]);
+  assert.equal(calls, 1);
+
+  await app.toggleBlockMode();
+  assert.equal(app.blockMode, false, "再トグルで OFF");
+  assert.equal(app.hoverBlock, null, "OFF でホバーはクリア");
+
+  await app.toggleBlockMode();
+  assert.equal(app.blockMode, true);
+  assert.equal(calls, 1, "blocks はキャッシュされ再フェッチしない");
+})().catch((err) => { console.error(err); process.exit(1); });
+"""
+    )
+
+
+def test_toggle_block_mode_appends_warning_and_stays_on_when_zero_blocks() -> None:
+    _run_node_inline(
+        _BLOCKS_PAYLOAD
+        + r"""
+global.fetch = () => Promise.resolve(fetchResponse(blocksPayload("a.png", [])));
+const app = newApp({
+  currentImage: { name: "a.png", width: 100, height: 100, mime: "image/png" },
+  session: sessionPayload("a.png", []),
+  imgLoaded: true,
+  warnings: [],
+});
+(async () => {
+  await app.toggleBlockMode();
+  assert.equal(app.blockMode, true, "0 件は成功扱いでモードは ON のまま");
+  assert.deepEqual(app.blocks, []);
+  assert.equal(app.warnings.length, 1);
+  assert.match(app.warnings[0], /段組が検出されませんでした/);
+})().catch((err) => { console.error(err); process.exit(1); });
+"""
+    )
+
+
+def test_toggle_block_mode_reports_failure_and_turns_off() -> None:
+    _run_node_inline(
+        _BLOCKS_PAYLOAD
+        + r"""
+global.fetch = () => Promise.resolve({ ok: false, status: 502, json: async () => ({}) });
+console.error = () => {};
+const app = newApp({
+  currentImage: { name: "a.png", width: 100, height: 100, mime: "image/png" },
+  session: sessionPayload("a.png", []),
+  imgLoaded: true,
+  warnings: [],
+});
+(async () => {
+  await app.toggleBlockMode();
+  assert.equal(app.blockMode, false, "検出失敗時はモードを OFF に戻す");
+  assert.equal(app.blocks, null);
+  assert.equal(app.warnings.length, 1);
+  assert.match(app.warnings[0], /段組検出に失敗/);
+})().catch((err) => { console.error(err); process.exit(1); });
+"""
+    )
+
+
+def test_block_mode_click_creates_pending_region_from_smallest_block() -> None:
+    _run_node_inline(
+        _BLOCKS_PAYLOAD
+        + r"""
+setupCanvas({
+  imgRect: { left: 0, top: 0, width: 200, height: 200 },
+  wrapRect: { left: 0, top: 0, width: 200, height: 200 },
+});
+const app = newApp({
+  currentImage: { name: "a.png", width: 100, height: 100, mime: "image/png" },
+  session: sessionPayload("a.png", ["existing"]),
+  imgLoaded: true,
+  scaleX: 2,
+  scaleY: 2,
+  blockMode: true,
+  blocks: [
+    { x: 0, y: 0, width: 100, height: 100 },
+    { x: 10, y: 10, width: 30, height: 30 },
+  ],
+});
+app.onMouseDown({
+  target: { classList: { contains: () => false } },
+  clientX: 30,
+  clientY: 30,
+});
+assert.equal(app.dragMode, null, "blockMode 中は draft ドラッグを開始しない");
+assert.equal(app.session.regions.length, 2);
+const region = app.session.regions[1];
+assert.deepEqual(
+  {
+    x: region.rectangle.x,
+    y: region.rectangle.y,
+    width: region.rectangle.width,
+    height: region.rectangle.height,
+  },
+  { x: 10, y: 10, width: 30, height: 30 },
+  "display(30,30) → natural(15,15) を含む最小ブロックの矩形になる",
+);
+assert.equal(region.ocr_status, "pending");
+assert.equal(region.rectangle.draw_order, 1);
+assert.equal(app.selectedRectId, region.rectangle.rect_id);
+assert.equal(app.savingState, "saving", "作成後は autosave がスケジュールされる");
+dropAutosaveTimer(app);
+"""
+    )
+
+
+def test_block_mode_click_outside_any_block_is_no_op() -> None:
+    _run_node_inline(
+        _BLOCKS_PAYLOAD
+        + r"""
+setupCanvas({
+  imgRect: { left: 0, top: 0, width: 100, height: 100 },
+  wrapRect: { left: 0, top: 0, width: 100, height: 100 },
+});
+const app = newApp({
+  currentImage: { name: "a.png", width: 100, height: 100, mime: "image/png" },
+  session: sessionPayload("a.png", []),
+  imgLoaded: true,
+  scaleX: 1,
+  scaleY: 1,
+  blockMode: true,
+  blocks: [{ x: 50, y: 50, width: 20, height: 20 }],
+});
+app.onMouseDown({
+  target: { classList: { contains: () => false } },
+  clientX: 5,
+  clientY: 5,
+});
+assert.equal(app.session.regions.length, 0, "ブロック外クリックでは矩形を作らない");
+assert.equal(app.dragMode, null);
+assert.equal(app.savingState, "idle");
+"""
+    )
+
+
+def test_block_mode_mousemove_sets_and_clears_hover_block() -> None:
+    _run_node_inline(
+        _BLOCKS_PAYLOAD
+        + r"""
+setupCanvas({
+  imgRect: { left: 0, top: 0, width: 100, height: 100 },
+  wrapRect: { left: 0, top: 0, width: 100, height: 100 },
+});
+const block = { x: 10, y: 10, width: 30, height: 30 };
+const app = newApp({
+  currentImage: { name: "a.png", width: 100, height: 100, mime: "image/png" },
+  session: sessionPayload("a.png", []),
+  imgLoaded: true,
+  scaleX: 1,
+  scaleY: 1,
+  blockMode: true,
+  blocks: [block],
+});
+app.onMouseMove({ clientX: 20, clientY: 20 });
+assert.deepEqual(app.hoverBlock, block, "ブロック上でホバーがセットされる");
+
+app.onMouseMove({ clientX: 90, clientY: 90 });
+assert.equal(app.hoverBlock, null, "ブロック外でホバーはクリアされる");
+"""
+    )
+
+
+def test_select_image_resets_blocks_and_hover() -> None:
+    _run_node_inline(
+        _BLOCKS_PAYLOAD
+        + r"""
+global.fetch = (url, options = {}) => {
+  if (url === "/api/image/new.png") {
+    return Promise.resolve(fetchResponse({ image_width: 200, image_height: 200, mime_type: "image/png" }));
+  }
+  if (url === "/api/session/new.png") {
+    return Promise.resolve(fetchResponse(sessionPayload("new.png", [])));
+  }
+  throw new Error(`unexpected fetch: ${url}`);
+};
+const app = newApp({
+  currentImage: { name: "old.png", width: 100, height: 100, mime: "image/png" },
+  session: sessionPayload("old.png", []),
+  blocks: [{ x: 1, y: 1, width: 2, height: 2 }],
+  hoverBlock: { x: 1, y: 1, width: 2, height: 2 },
+  blockMode: false,
+});
+(async () => {
+  await app.selectImage("new.png");
+  assert.equal(app.blocks, null, "画像切替で blocks はリセット");
+  assert.equal(app.hoverBlock, null, "画像切替で hoverBlock はリセット");
+})().catch((err) => { console.error(err); process.exit(1); });
+"""
+    )
+
+
+def test_select_image_refetches_blocks_when_block_mode_stays_on() -> None:
+    _run_node_inline(
+        _BLOCKS_PAYLOAD
+        + r"""
+const fetches = [];
+global.fetch = (url, options = {}) => {
+  fetches.push(url);
+  if (url === "/api/image/new.png") {
+    return Promise.resolve(fetchResponse({ image_width: 200, image_height: 200, mime_type: "image/png" }));
+  }
+  if (url === "/api/session/new.png") {
+    return Promise.resolve(fetchResponse(sessionPayload("new.png", [])));
+  }
+  if (url === "/api/blocks/new.png") {
+    return Promise.resolve(fetchResponse(blocksPayload("new.png", [{ x: 5, y: 5, width: 10, height: 10 }])));
+  }
+  throw new Error(`unexpected fetch: ${url}`);
+};
+const app = newApp({
+  currentImage: { name: "old.png", width: 100, height: 100, mime: "image/png" },
+  session: sessionPayload("old.png", []),
+  blocks: [{ x: 1, y: 1, width: 2, height: 2 }],
+  blockMode: true,
+});
+(async () => {
+  await app.selectImage("new.png");
+  await tick();
+  assert.ok(fetches.includes("/api/blocks/new.png"), "モード ON のまま画像切替すると新画像の blocks を再取得する");
+  assert.deepEqual(app.blocks, [{ x: 5, y: 5, width: 10, height: 10 }]);
+})().catch((err) => { console.error(err); process.exit(1); });
+"""
+    )
+
+
+def test_rapid_image_switch_during_blocks_fetch_still_loads_new_image_blocks() -> None:
+    _run_node_inline(
+        _BLOCKS_PAYLOAD
+        + r"""
+let resolveA;
+global.fetch = (url, options = {}) => {
+  if (url === "/api/blocks/a.png") {
+    return new Promise((resolve) => {
+      resolveA = () => resolve(fetchResponse(blocksPayload("a.png", [{ x: 1, y: 1, width: 2, height: 2 }])));
+    });
+  }
+  if (url === "/api/image/b.png") {
+    return Promise.resolve(fetchResponse({ image_width: 100, image_height: 100, mime_type: "image/png" }));
+  }
+  if (url === "/api/session/b.png") {
+    return Promise.resolve(fetchResponse(sessionPayload("b.png", [])));
+  }
+  if (url === "/api/blocks/b.png") {
+    return Promise.resolve(fetchResponse(blocksPayload("b.png", [{ x: 5, y: 5, width: 10, height: 10 }])));
+  }
+  throw new Error(`unexpected fetch: ${url}`);
+};
+const app = newApp({
+  currentImage: { name: "a.png", width: 100, height: 100, mime: "image/png" },
+  session: sessionPayload("a.png", []),
+  imgLoaded: true,
+  blockMode: true,
+});
+(async () => {
+  const ensuring = app._ensureBlocks();
+  await tick();
+  assert.equal(app.blocksLoading, true, "a.png の取得が in-flight");
+
+  const selecting = app.selectImage("b.png");
+  await selecting;
+  await tick();
+
+  resolveA();
+  await ensuring;
+  await tick();
+
+  assert.deepEqual(
+    app.blocks,
+    [{ x: 5, y: 5, width: 10, height: 10 }],
+    "b.png の blocks が取得される（a.png の in-flight に飢餓させられない）",
+  );
+  assert.equal(app.blockMode, true);
+})().catch((err) => { console.error(err); process.exit(1); });
+"""
+    )
+
+
+def test_stale_blocks_response_during_image_switch_meta_await_is_not_applied() -> None:
+    _run_node_inline(
+        _BLOCKS_PAYLOAD
+        + r"""
+let resolveABlocks;
+let resolveBMeta;
+global.fetch = (url) => {
+  if (url === "/api/blocks/a.png") {
+    return new Promise((resolve) => {
+      resolveABlocks = () => resolve(fetchResponse(blocksPayload("a.png", [{ x: 1, y: 1, width: 2, height: 2 }])));
+    });
+  }
+  if (url === "/api/image/b.png") {
+    return new Promise((resolve) => {
+      resolveBMeta = () => resolve(fetchResponse({ image_width: 100, image_height: 100, mime_type: "image/png" }));
+    });
+  }
+  if (url === "/api/session/b.png") {
+    return Promise.resolve(fetchResponse(sessionPayload("b.png", [])));
+  }
+  if (url === "/api/blocks/b.png") {
+    return Promise.resolve(fetchResponse(blocksPayload("b.png", [{ x: 5, y: 5, width: 10, height: 10 }])));
+  }
+  throw new Error(`unexpected fetch: ${url}`);
+};
+const app = newApp({
+  currentImage: { name: "a.png", width: 100, height: 100, mime: "image/png" },
+  session: sessionPayload("a.png", []),
+  imgLoaded: true,
+  blockMode: true,
+});
+(async () => {
+  const ensuringA = app._ensureBlocks();
+  await tick();
+  assert.equal(app.blocksLoading, true, "a.png の取得が in-flight");
+
+  const selecting = app.selectImage("b.png");
+  await tick();
+  assert.equal(
+    app.currentImage.name,
+    "a.png",
+    "selectImage は meta fetch を await 中で、currentImage はまだ a.png のまま",
+  );
+
+  // この時点で a.png の stale な blocks 応答が届く。currentImage.name はまだ
+  // "a.png" のままなので、画像名だけの stale ガードだと素通りしてしまう。
+  resolveABlocks();
+  await ensuringA;
+  await tick();
+
+  assert.equal(
+    app.blocks,
+    null,
+    "meta/session await 中に届いた a.png の stale blocks を適用してはいけない（epoch 不一致で弾く）",
+  );
+
+  resolveBMeta();
+  await selecting;
+  await tick();
+
+  assert.deepEqual(
+    app.blocks,
+    [{ x: 5, y: 5, width: 10, height: 10 }],
+    "最終的には b.png の blocks が反映される",
+  );
+})().catch((err) => { console.error(err); process.exit(1); });
+"""
+    )
+
+
+def test_zero_block_warning_does_not_duplicate_on_revisiting_same_image() -> None:
+    _run_node_inline(
+        _BLOCKS_PAYLOAD
+        + r"""
+global.fetch = (url) => {
+  if (url === "/api/blocks/a.png") {
+    return Promise.resolve(fetchResponse(blocksPayload("a.png", [])));
+  }
+  if (url === "/api/blocks/b.png") {
+    return Promise.resolve(fetchResponse(blocksPayload("b.png", [])));
+  }
+  if (url === "/api/image/b.png") {
+    return Promise.resolve(fetchResponse({ image_width: 100, image_height: 100, mime_type: "image/png" }));
+  }
+  if (url === "/api/session/b.png") {
+    return Promise.resolve(fetchResponse(sessionPayload("b.png", [])));
+  }
+  if (url === "/api/image/a.png") {
+    return Promise.resolve(fetchResponse({ image_width: 100, image_height: 100, mime_type: "image/png" }));
+  }
+  if (url === "/api/session/a.png") {
+    return Promise.resolve(fetchResponse(sessionPayload("a.png", [])));
+  }
+  throw new Error(`unexpected fetch: ${url}`);
+};
+const app = newApp({
+  currentImage: { name: "a.png", width: 100, height: 100, mime: "image/png" },
+  session: sessionPayload("a.png", []),
+  imgLoaded: true,
+  // selectImage 内の _ensureBlocks 呼び出しは blockMode 時のみ発火し、かつ
+  // await されない（fire-and-forget）。本テストは _ensureBlocks の警告重複抑止
+  // ロジック自体を検証したいので、blockMode は false のままにして selectImage
+  // 側の自動発火とは競合させず、各切替後に明示的に _ensureBlocks を await する。
+  blockMode: false,
+  warnings: [],
+});
+(async () => {
+  await app._ensureBlocks(); // a.png: 0 件 -> 警告 #1
+
+  await app.selectImage("b.png");
+  await app._ensureBlocks(); // b.png: 0 件（別文言の警告、本テストでは対象外）
+
+  await app.selectImage("a.png");
+  await app._ensureBlocks(); // a.png に再訪問: 0 件だが同文言を重複追加してはいけない
+
+  const matches = app.warnings.filter((w) => /a\.png」から段組が検出されませんでした/.test(w));
+  assert.equal(matches.length, 1, "同一画像への再訪問で同文言の警告が重複蓄積してはいけない");
+})().catch((err) => { console.error(err); process.exit(1); });
+"""
+    )
+
+
+def test_detect_failure_warning_does_not_duplicate_on_repeated_failures() -> None:
+    _run_node_inline(
+        _BLOCKS_PAYLOAD
+        + r"""
+global.fetch = () => Promise.resolve({ ok: false, status: 502, json: async () => ({}) });
+console.error = () => {};
+const app = newApp({
+  currentImage: { name: "a.png", width: 100, height: 100, mime: "image/png" },
+  session: sessionPayload("a.png", []),
+  imgLoaded: true,
+  warnings: [],
+});
+(async () => {
+  // 1 回目の失敗で blockMode は OFF に戻る。再度 ON にして 2 回目も失敗させる。
+  await app.toggleBlockMode();
+  assert.equal(app.blockMode, false, "1 回目失敗でモード OFF");
+  await app.toggleBlockMode();
+  const matches = app.warnings.filter((w) => /a\.png」の段組検出に失敗/.test(w));
+  assert.equal(matches.length, 1, "同一画像の失敗を繰り返しても同文言の警告は 1 件に留まる");
+})().catch((err) => { console.error(err); process.exit(1); });
+"""
+    )
+
+
+def test_reselecting_same_image_during_blocks_fetch_recovers() -> None:
+    _run_node_inline(
+        _BLOCKS_PAYLOAD
+        + r"""
+let resolveA;
+let aCalls = 0;
+global.fetch = (url) => {
+  if (url === "/api/blocks/a.png") {
+    aCalls += 1;
+    return new Promise((resolve) => {
+      resolveA = () => resolve(fetchResponse(blocksPayload("a.png", [{ x: 1, y: 1, width: 2, height: 2 }])));
+    });
+  }
+  if (url === "/api/image/a.png") {
+    return Promise.resolve(fetchResponse({ image_width: 100, image_height: 100, mime_type: "image/png" }));
+  }
+  if (url === "/api/session/a.png") {
+    return Promise.resolve(fetchResponse(sessionPayload("a.png", [])));
+  }
+  throw new Error(`unexpected fetch: ${url}`);
+};
+const app = newApp({
+  currentImage: { name: "a.png", width: 100, height: 100, mime: "image/png" },
+  session: sessionPayload("a.png", []),
+  imgLoaded: true,
+  blockMode: true,
+});
+(async () => {
+  const ensuring = app._ensureBlocks();      // a.png (A1) を in-flight にする
+  await tick();
+  assert.equal(app.blocksLoading, true, "A1 が in-flight");
+  const firstResolve = resolveA;
+
+  // in-flight のまま同じ画像を再選択する（selectImage が blocks=null, epoch++ する）
+  await app.selectImage("a.png");
+  await tick();
+
+  // A1 応答が届く（epoch 不一致で破棄されるはず）
+  firstResolve();
+  await ensuring;
+  await tick();
+
+  // 再選択で起動した A2 応答を解決する
+  resolveA();
+  await tick();
+  await tick();
+
+  assert.deepEqual(app.blocks, [{ x: 1, y: 1, width: 2, height: 2 }], "同名再選択後も最終的に blocks が反映される");
+  assert.equal(app.blocksLoading, false, "loading が正しく解除される");
+  assert.equal(app.blockMode, true);
+  assert.equal(aCalls, 2, "A1 破棄後に A2 が起動する（飢餓しない）");
+})().catch((err) => { console.error(err); process.exit(1); });
+"""
+    )
+
+
+def test_stale_finally_does_not_release_new_generation_loading() -> None:
+    _run_node_inline(
+        _BLOCKS_PAYLOAD
+        + r"""
+let resolveA1;
+let aCalls = 0;
+global.fetch = (url) => {
+  if (url === "/api/blocks/a.png") {
+    aCalls += 1;
+    if (aCalls === 1) {
+      return new Promise((resolve) => {
+        resolveA1 = () => resolve(fetchResponse(blocksPayload("a.png", [{ x: 1, y: 1, width: 2, height: 2 }])));
+      });
+    }
+    // A2 以降は未解決のまま（in-flight を維持）
+    return new Promise(() => {});
+  }
+  if (url === "/api/image/a.png" || url === "/api/image/b.png") {
+    return Promise.resolve(fetchResponse({ image_width: 100, image_height: 100, mime_type: "image/png" }));
+  }
+  if (url === "/api/session/a.png" || url === "/api/session/b.png") {
+    return Promise.resolve(fetchResponse(sessionPayload(url.endsWith("a.png") ? "a.png" : "b.png", [])));
+  }
+  if (url === "/api/blocks/b.png") {
+    return Promise.resolve(fetchResponse(blocksPayload("b.png", [{ x: 5, y: 5, width: 10, height: 10 }])));
+  }
+  throw new Error(`unexpected fetch: ${url}`);
+};
+const app = newApp({
+  currentImage: { name: "a.png", width: 100, height: 100, mime: "image/png" },
+  session: sessionPayload("a.png", []),
+  imgLoaded: true,
+  blockMode: true,
+});
+(async () => {
+  const ensuringA1 = app._ensureBlocks();   // A1 in-flight
+  await tick();
+
+  await app.selectImage("b.png");            // B（blocks 即解決）
+  await tick();
+
+  await app.selectImage("a.png");            // A に戻る → A2 in-flight
+  await tick();
+  assert.equal(app.blocksLoading, true, "A2 が in-flight で loading 中");
+
+  // ここで stale な A1 が解決する。A1 の finally は A2 の loading を奪ってはいけない。
+  resolveA1();
+  await ensuringA1;
+  await tick();
+
+  assert.equal(app.blocksLoading, true, "stale A1 の finally で A2 の loading が落ちない");
+
+  // loading が落ちていないので、追加の _ensureBlocks は新規 fetch を起動しない
+  await app._ensureBlocks();
+  await tick();
+  assert.equal(aCalls, 2, "不要な 3 本目 fetch が立たない（A1, A2 の 2 本のみ）");
+})().catch((err) => { console.error(err); process.exit(1); });
+"""
+    )
+
+
+def test_toggle_off_during_detection_discards_incoming_blocks() -> None:
+    _run_node_inline(
+        _BLOCKS_PAYLOAD
+        + r"""
+let resolveA;
+global.fetch = (url) => {
+  if (url === "/api/blocks/a.png") {
+    return new Promise((resolve) => {
+      resolveA = () => resolve(fetchResponse(blocksPayload("a.png", [{ x: 1, y: 1, width: 2, height: 2 }])));
+    });
+  }
+  throw new Error(`unexpected fetch: ${url}`);
+};
+const app = newApp({
+  currentImage: { name: "a.png", width: 100, height: 100, mime: "image/png" },
+  session: sessionPayload("a.png", []),
+  imgLoaded: true,
+  blockMode: true,
+});
+(async () => {
+  const ensuring = app._ensureBlocks();  // in-flight
+  await tick();
+  assert.equal(app.blocksLoading, true, "検出中");
+
+  // 検出中に OFF する
+  await app.toggleBlockMode();
+  assert.equal(app.blockMode, false, "検出中でも OFF にできる");
+  assert.equal(app.blocksLoading, false, "OFF でローディング表示が即消える");
+
+  // 遅れて応答が届いても blocks / blockMode に反映されない
+  resolveA();
+  await ensuring;
+  await tick();
+  assert.equal(app.blocks, null, "OFF 後に到着した応答は適用されない");
+  assert.equal(app.blockMode, false, "OFF のまま");
+})().catch((err) => { console.error(err); process.exit(1); });
 """
     )

@@ -44,18 +44,20 @@ uv run nova-parser-regional Images/ --output-dir Output --host 127.0.0.1 --port 
 
 1. **画像選択**: 左サイドバーの一覧から画像をクリック
 2. **矩形作成**: 画像上をマウスでドラッグ。閾値（5px）未満のドラッグは破棄
-3. **矩形編集**:
+3. **段組選択モード**: ズームツールバーの「段組選択」トグルを ON にすると、初回のみ Cloud Vision `document_text_detection` で段組（ブロック）を検出する（画像ごとに 1 回課金）。以降はマウスを乗せた段組が点線でハイライトされ、クリックするとその段組の矩形が `pending` 領域として作成される。検出結果は `{stem}.blocks.json` にキャッシュされ、再起動後も再課金されない（再検出したい場合はこのファイルを削除する）
+4. **矩形編集**:
    - 矩形をクリックして選択 → 四隅・四辺のハンドルでリサイズ
    - 選択中の矩形右上の `×` ボタンで削除
-4. **自動保存**: 編集後 500ms の debounce で `PUT /api/session/{name}` が走り、`Output/{stem}.regions.json` が更新される（ステータスバーに「保存中…」表示）
-5. **個別 OCR**: 右ペインの各リージョンカードの `OCR` ボタンで単発実行
-6. **バッチ OCR**: 右ペイン上部の `バッチ OCR 実行` ボタンで全画像の `pending` 領域を `draw_order` 順に処理。SSE で結果が逐次反映される
-7. **中止**: バッチ実行中の `中止` ボタンで `AbortController.abort()` を呼んでサーバ接続を切断
+5. **自動保存**: 編集後 500ms の debounce で `PUT /api/session/{name}` が走り、`Output/{stem}.regions.json` が更新される（ステータスバーに「保存中…」表示）
+6. **個別 OCR**: 右ペインの各リージョンカードの `OCR` ボタンで単発実行
+7. **バッチ OCR**: 右ペイン上部の `バッチ OCR 実行` ボタンで全画像の `pending` 領域を `draw_order` 順に処理。SSE で結果が逐次反映される
+8. **中止**: バッチ実行中の `中止` ボタンで `AbortController.abort()` を呼んでサーバ接続を切断
 
 ## 出力ファイル
 
 - `{output_dir}/{stem}.regions.json` — セッション全体（`ImageSession`）。 `pending` / `done` / `error` の状態を含む
 - `{output_dir}/{stem}.regions.md` — `done` の領域を `draw_order` 順に書き出した Markdown
+- `{output_dir}/{stem}.blocks.json` — 段組選択モードのブロック検出キャッシュ（`BlockDetectionResult`）
 
 `done` 状態の領域は、その後の `PUT /api/session/{name}` でもサーバ側でテキストを保護してマージされます（再 OCR したい場合は領域を一旦削除してから再描画）。
 
@@ -68,6 +70,7 @@ uv run nova-parser-regional Images/ --output-dir Output --host 127.0.0.1 --port 
 | GET | `/api/images` | 画像一覧と stem 衝突警告 |
 | GET | `/api/image/{name}` | 画像メタ（width / height / mime_type） |
 | GET | `/api/image/{name}/raw` | 画像バイナリ |
+| GET | `/api/blocks/{name}` | 段組ブロック検出。初回は Cloud Vision を呼び、以降は `{stem}.blocks.json` のキャッシュを返す |
 | GET | `/api/session/{name}` | セッション取得（`pending` 領域含む） |
 | PUT | `/api/session/{name}` | セッション upsert。`done` レコードは保護 |
 | POST | `/api/ocr/{name}/{rect_id}` | 単発 OCR |

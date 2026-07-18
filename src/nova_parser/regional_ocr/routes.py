@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from PIL import Image
 
+from nova_parser.regional_ocr.blocks import load_blocks, save_blocks
 from nova_parser.regional_ocr.errors import (
     OcrBackendError,
     RegionNotFoundError,
@@ -25,12 +26,13 @@ from nova_parser.regional_ocr.images import (
 from nova_parser.regional_ocr.markdown import write_markdown
 from nova_parser.regional_ocr.models import (
     BatchOcrItemResult,
+    BlockDetectionResult,
     ImageListResponse,
     ImageMetaResponse,
     ImageSession,
     RegionRecord,
 )
-from nova_parser.regional_ocr.ocr_client import ocr_rectangle
+from nova_parser.regional_ocr.ocr_client import detect_blocks, ocr_rectangle
 from nova_parser.regional_ocr.sessions import load_session, save_session, upsert_region
 from nova_parser.regional_ocr.state import AppState
 
@@ -67,6 +69,38 @@ def build_router() -> APIRouter:
         path = resolve_image(state.image_dir, name)
         mime = IMAGE_MIME_TYPES.get(path.suffix.lower(), "application/octet-stream")
         return Response(content=path.read_bytes(), media_type=mime)
+
+    @router.get("/api/blocks/{name}", response_model=BlockDetectionResult)
+    def api_get_blocks(name: str, state: AppStateDep) -> BlockDetectionResult:
+        path = resolve_image(state.image_dir, name)
+        # {stem}.blocks.json キャッシュは stem 単位のため、foo.png と foo.webp のような
+        # stem 衝突があると別画像間でキャッシュを共有し誤った段組を返す。バッチ OCR と
+        # 同様に、要求画像の stem が衝突する場合は 409 で拒否する。
+        siblings = sorted(
+            p.name
+            for p in state.image_dir.iterdir()
+            if p.is_file() and p.suffix.lower() in IMAGE_MIME_TYPES and p.stem == path.stem
+        )
+        if len(siblings) >= 2:
+            raise StemCollisionError(f"stem collision: {', '.join(siblings)}")
+        cached = load_blocks(state.output_dir, name)
+        # {stem}.blocks.json は stem 単位のため、a.png のキャッシュ生成後に a.png を削除して
+        # 同 stem・別拡張子の a.webp へ置き換えると、要求名と異なる画像のキャッシュがヒットしうる。
+        # image_name が一致する場合のみ再利用し、不一致は cache miss として再検出・上書きする。
+        if cached is not None and cached.image_name == name:
+            return cached
+        image = open_pil(path)
+        client = state.vision_client_factory()
+        blocks = detect_blocks(client, image, language_hints=state.language_hints)
+        result = BlockDetectionResult(
+            image_name=name,
+            image_width=image.width,
+            image_height=image.height,
+            blocks=blocks,
+            detected_at=datetime.datetime.now(datetime.UTC),
+        )
+        save_blocks(result, state.output_dir)
+        return result
 
     @router.get("/api/session/{name}", response_model=ImageSession)
     def api_get_session(name: str, state: AppStateDep) -> ImageSession:
