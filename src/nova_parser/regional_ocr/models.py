@@ -70,6 +70,26 @@ class ImageSession(BaseModel):
         return self
 
 
+class BlockRect(BaseModel):
+    """検出されたテキストブロックの矩形（画像自然座標）。"""
+
+    x: int = Field(ge=0)
+    y: int = Field(ge=0)
+    width: int = Field(gt=0)
+    height: int = Field(gt=0)
+
+
+class BlockDetectionResult(BaseModel):
+    """1 枚の画像に対するブロック検出結果（キャッシュ形式兼 API レスポンス）。"""
+
+    image_name: str = Field(min_length=1)
+    image_width: int = Field(gt=0)
+    image_height: int = Field(gt=0)
+    blocks: list[BlockRect]
+    detected_at: datetime.datetime
+    schema_version: int = 1
+
+
 class ImageListResponse(BaseModel):
     """画像一覧の取得結果を表すモデル。"""
 
