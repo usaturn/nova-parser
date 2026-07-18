@@ -84,7 +84,10 @@ def build_router() -> APIRouter:
         if len(siblings) >= 2:
             raise StemCollisionError(f"stem collision: {', '.join(siblings)}")
         cached = load_blocks(state.output_dir, name)
-        if cached is not None:
+        # {stem}.blocks.json は stem 単位のため、a.png のキャッシュ生成後に a.png を削除して
+        # 同 stem・別拡張子の a.webp へ置き換えると、要求名と異なる画像のキャッシュがヒットしうる。
+        # image_name が一致する場合のみ再利用し、不一致は cache miss として再検出・上書きする。
+        if cached is not None and cached.image_name == name:
             return cached
         image = open_pil(path)
         client = state.vision_client_factory()

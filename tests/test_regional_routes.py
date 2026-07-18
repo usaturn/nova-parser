@@ -942,3 +942,40 @@ def test_get_blocks_returns_409_on_stem_collision(tmp_path):
 
     assert resp.status_code == 409
     assert not (output_dir / "a.blocks.json").exists(), "衝突時は検出・キャッシュ生成しない"
+
+
+def test_get_blocks_redetects_when_cache_belongs_to_replaced_extension(tmp_path):
+    """stem 衝突解消後（a.png 削除→別寸法 a.webp 配置）、GET /api/blocks/a.webp は
+    旧 a.png キャッシュを返さず再検出し、a.webp の image_name と新寸法を返す（L-1）。"""
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "a.png", (100, 100))
+    output_dir = tmp_path / "output"
+
+    fake = FakeVisionClient(_FakeResponse(blocks=[[(10, 10), (60, 10), (60, 40), (10, 40)]]))
+    client = _make_client(image_dir, output_dir, _simple_factory(fake))
+
+    # a.png で a.blocks.json キャッシュを生成（image_name="a.png", 100x100）
+    first = client.get("/api/blocks/a.png")
+    assert first.status_code == 200
+    assert first.json()["image_name"] == "a.png"
+    assert len(fake.document_calls) == 1
+
+    # 入力を別寸法の a.webp へ置換（a.png を削除）。a.blocks.json は残る。
+    (image_dir / "a.png").unlink()
+    Image.new("RGB", (200, 150), color=(10, 20, 30)).save(image_dir / "a.webp")
+
+    resp = client.get("/api/blocks/a.webp")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["image_name"] == "a.webp", "旧 a.png キャッシュを返してはいけない"
+    assert data["image_width"] == 200
+    assert data["image_height"] == 150
+    assert len(fake.document_calls) == 2, "不一致キャッシュは再検出する"
+    # キャッシュが a.webp の内容で上書きされている
+    from nova_parser.regional_ocr.blocks import load_blocks
+
+    reloaded = load_blocks(output_dir, "a.webp")
+    assert reloaded is not None
+    assert reloaded.image_name == "a.webp"
