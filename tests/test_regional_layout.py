@@ -187,20 +187,20 @@ class TestCancelOvermerged:
 
 class TestFinalizeBlocks:
     def test_adds_padding_ratios(self):
-        # pad_x = 1000*0.004 = 4px, pad_y = 1000*0.003 = 3px
+        # pad_x = 1000*0.006 = 6px, pad_y = 1000*0.006 = 6px
         out = finalize_blocks([[_r(100, 100, 300, 200)]], W, H)
-        assert out == [_r(96, 97, 308, 206)]
+        assert out == [_r(94, 94, 312, 212)]
 
     def test_padding_stops_at_midpoint_between_neighbors(self):
         left = [_r(100, 100, 300, 200)]
         right = [_r(406, 100, 300, 200)]  # 空白 6px → 中点 x=403
         out = finalize_blocks([left, right], W, H)
-        assert out[0] == _r(96, 97, 307, 206)
-        assert out[1] == _r(403, 97, 307, 206)
+        assert out[0] == _r(94, 94, 309, 212)
+        assert out[1] == _r(403, 94, 309, 212)
 
     def test_clamps_to_image_bounds(self):
         out = finalize_blocks([[_r(2, 2, 100, 100)]], W, H)
-        assert out == [_r(0, 0, 106, 105)]
+        assert out == [_r(0, 0, 108, 108)]
 
     def test_preserves_group_order(self):
         g1 = [_r(500, 100, 100, 100)]
@@ -229,7 +229,7 @@ class TestComputeVerticalBlocks:
         page_no = _r(480, 950, 40, 30)
         out = compute_vertical_blocks(W, H, [p1, p2, q1, q2, page_no])
         # 2 列がそれぞれ 1 ブロックへ統合され、ページ番号は出力に残らない
-        assert out == [_r(96, 97, 388, 566), _r(516, 97, 388, 626)]
+        assert out == [_r(94, 94, 392, 572), _r(514, 94, 392, 632)]
 
     def test_output_order_is_band_top_down_then_left_right(self):
         upper = [_r(100, 100, 400, 200), _r(520, 100, 400, 200)]

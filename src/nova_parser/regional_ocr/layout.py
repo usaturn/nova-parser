@@ -25,7 +25,7 @@ PERIMETER_ISOLATION_GAP_RATIO = 0.02
 DUPLICATE_CONTAINMENT_RATIO = 0.90
 """重複整理: 交差面積 / 小さい方の面積 がこの値以上なら同一内容とみなす。"""
 
-BAND_GAP_MIN_RATIO = 0.012
+BAND_GAP_MIN_RATIO = 0.016
 """横方向レイアウト領域の境界とみなす、全列共通の縦空白の最小高さ（画像高さ比）。"""
 
 BAND_HEADING_SPAN_COLUMNS = 2
@@ -58,10 +58,10 @@ HEADING_WIDTH_DIFF_RATIO = 0.45
 HEADING_CENTER_DIFF_RATIO = 0.25
 """見出しと後続内容の中心位置が「大きく異なる」とみなす中心差率（最大幅比）。"""
 
-PAD_X_RATIO = 0.004
+PAD_X_RATIO = 0.006
 """出力矩形の左右余白（画像幅比）。スペック 7.5。"""
 
-PAD_Y_RATIO = 0.003
+PAD_Y_RATIO = 0.006
 """出力矩形の上下余白（画像高さ比）。スペック 7.5。"""
 
 
@@ -174,20 +174,39 @@ def drop_perimeter_rects(rects: list[BlockRect], image_width: int, image_height:
 def drop_noise_rects(rects: list[BlockRect], image_width: int, image_height: int) -> list[BlockRect]:
     """OCR 誤検出の装飾・極小ラベルを除外する。
 
-    - 画像高さの 1.5% 未満の極小矩形（例: 独立したサブタイトル断片）
+    - 画像高さの約 1.4% 未満の極小矩形（例: 独立したサブタイトル断片）
     - 本文列に属さない幅広薄型の装飾（例: 丸印グラフィックの誤認識）
-    横断帯見出し（ページ幅の 40% 以上）は装飾扱いにしない。
+    次は装飾扱いにしない:
+    - ページ幅 35% 以上の横断帯見出し
+    - 同 Y 帯に水平ピアがあるカード見出し行（幅 25% 以上）
     """
     kept: list[BlockRect] = []
     micro_h = image_height * PERIMETER_MAX_HEIGHT_RATIO * 0.35  # ≈ 1.4% of H
     deco_h = image_height * PERIMETER_MAX_HEIGHT_RATIO
     edge_tol = image_width * COLUMN_EDGE_TOLERANCE_RATIO * 3
+    y_peer_tol = image_height * 0.03
     for r in rects:
-        hr_ok_micro = r.height >= micro_h
-        aspect = r.width / max(r.height, 1)
-        if not hr_ok_micro:
+        if r.height < micro_h:
             continue
-        if r.height < deco_h and aspect >= 8.0 and r.width < image_width * NARROW_COLUMN_MAX_WIDTH_RATIO * 1.6:
+        aspect = r.width / max(r.height, 1)
+        if r.height < deco_h and aspect >= 8.0:
+            frac = r.width / image_width
+            # 横断帯見出し
+            if frac >= 0.35:
+                kept.append(r)
+                continue
+            # カード行の見出し: 同 Y に水平ピアがある
+            peers = [
+                o
+                for o in rects
+                if o is not r
+                and abs((o.top + o.bottom) / 2 - (r.top + r.bottom) / 2) <= y_peer_tol
+                and _x_overlap(r, o) <= 0
+                and o.width >= image_width * 0.12
+            ]
+            if peers and frac >= 0.25:
+                kept.append(r)
+                continue
             near_col = any(
                 o.height >= deco_h and abs(o.left - r.left) <= edge_tol and _v_gap(r, o) < image_height * 0.08
                 for o in rects
@@ -363,18 +382,35 @@ def split_columns(band: list[BlockRect], image_width: int) -> list[list[BlockRec
 # --- 7.4 縦方向統合 -----------------------------------------------------------
 
 
-def _has_shared_row_boundary(gap_top: float, gap_bottom: float, neighbors: list[BlockRect], tol: float) -> bool:
-    """隣接列にも同じ行境界があるか（スペック 7.4: カード状の行）。
+def _has_shared_row_boundary(
+    gap_top: float,
+    gap_bottom: float,
+    neighbors: list[BlockRect],
+    tol: float,
+    image_width: int,
+) -> bool:
+    """隣接の本文列にも同じ行境界があるか（スペック 7.4: カード状の行）。
 
-    隣接側に「ギャップ上端付近で終わる内容」と「ギャップ下端付近で始まる内容」の
-    両方が揃うときだけ共有行境界とみなす。片方の列にたまたま近い上端があるだけでは
-    分割しない（連続本文の誤分割を防ぐ）。
+    欄外注釈など狭い列の段落境界は偶然揃いやすいため、本文幅を超える隣接クラスタだけを
+    対象にする。隣接クラスタがギャップ区間を本文で埋めている場合も共有境界としない。
     """
     if not neighbors:
         return False
-    has_below = any(abs(n.top - gap_bottom) <= tol for n in neighbors)
-    has_above = any(abs(n.bottom - gap_top) <= tol for n in neighbors)
-    return has_below and has_above
+    clusters = _cluster_by_x(neighbors, image_width)
+    min_body = image_width * NARROW_COLUMN_MAX_WIDTH_RATIO
+    gap_h = max(gap_bottom - gap_top, 1.0)
+    for cluster in clusters:
+        cb = _bbox(cluster)
+        if cb.width <= min_body:
+            continue
+        fills = any((min(n.bottom, gap_bottom) - max(n.top, gap_top)) > gap_h * 0.25 for n in cluster)
+        if fills:
+            continue
+        has_below = any(abs(n.top - gap_bottom) <= tol for n in cluster)
+        has_above = any(abs(n.bottom - gap_top) <= tol for n in cluster)
+        if has_below and has_above:
+            return True
+    return False
 
 
 def _is_heading_break(group: list[BlockRect], cur: BlockRect) -> bool:
@@ -420,7 +456,7 @@ def split_vertical(
         gap = cur.top - group_bottom
         split = False
         if gap >= gap_min and not is_narrow:
-            if _has_shared_row_boundary(group_bottom, cur.top, neighbors, align_tol):
+            if _has_shared_row_boundary(group_bottom, cur.top, neighbors, align_tol, image_width):
                 split = True
             elif _is_heading_break(groups[-1], cur):
                 split = True
@@ -509,6 +545,92 @@ def merge_narrow_column_groups(groups: list[list[BlockRect]], image_width: int) 
     return result
 
 
+def merge_columns_across_spanning_headings(
+    groups: list[list[BlockRect]],
+    image_width: int,
+    image_height: int,
+) -> list[list[BlockRect]]:
+    """帯見出しだけを挟んで上下に分断された同一本文列を再結合する。
+
+    中間にページ幅 35% 以上・高さ 5% 以下の横断見出しがある場合のみ結合する。
+    カード行のように空ギャップだけで並ぶ本文列は結合しない（未結合優先）。
+    """
+    if len(groups) <= 1:
+        return groups
+    boxes = [_bbox(g) for g in groups]
+    body_min = image_width * NARROW_COLUMN_MAX_WIDTH_RATIO
+    edge_tol = image_width * COLUMN_EDGE_TOLERANCE_RATIO * 2
+    min_col_h = image_height * 0.08
+    parent = list(range(len(groups)))
+
+    def find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    def union(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    for i, bi in enumerate(boxes):
+        if bi.width < body_min or bi.height < min_col_h:
+            continue
+        for j in range(i + 1, len(groups)):
+            bj = boxes[j]
+            if bj.width < body_min or bj.height < min_col_h:
+                continue
+            if abs(bi.width - bj.width) / max(bi.width, bj.width) > 0.25:
+                continue
+            if abs(bi.left - bj.left) > edge_tol:
+                continue
+            ov = min(bi.right, bj.right) - max(bi.left, bj.left)
+            if ov < min(bi.width, bj.width) * 0.6:
+                continue
+            if bi.bottom <= bj.top:
+                upper, lower = bi, bj
+            elif bj.bottom <= bi.top:
+                upper, lower = bj, bi
+            else:
+                continue
+            interveners = [
+                bk
+                for k, bk in enumerate(boxes)
+                if k not in (i, j)
+                and (
+                    (bk.top < lower.top and bk.bottom > upper.bottom)
+                    or (bk.top >= upper.bottom - 2 and bk.bottom <= lower.top + 2)
+                )
+            ]
+            spans = [bk for bk in interveners if bk.width >= image_width * 0.35 and bk.height <= image_height * 0.05]
+            if not spans:
+                continue
+            blocked = False
+            for bk in interveners:
+                is_span = bk.width >= image_width * 0.35 and bk.height <= image_height * 0.05
+                if is_span:
+                    continue
+                xov = min(upper.right, bk.right) - max(upper.left, bk.left)
+                if xov > upper.width * 0.2:
+                    blocked = True
+                    break
+            if not blocked:
+                union(i, j)
+
+    buckets: dict[int, list[int]] = {}
+    for i in range(len(groups)):
+        buckets.setdefault(find(i), []).append(i)
+    result: list[list[BlockRect]] = []
+    for ids in buckets.values():
+        merged: list[BlockRect] = []
+        for i in ids:
+            merged.extend(groups[i])
+        result.append(merged)
+    result.sort(key=lambda g: (_bbox(g).top, _bbox(g).left))
+    return result
+
+
 # --- 7.5 出力整形 -------------------------------------------------------------
 
 
@@ -572,6 +694,7 @@ def compute_vertical_blocks(image_width: int, image_height: int, blocks: list[Bl
             band_groups.extend(split_vertical(column, band, image_width, image_height))
         groups.extend(cancel_overmerged(band_groups, image_width))
     groups = merge_narrow_column_groups(groups, image_width)
+    groups = merge_columns_across_spanning_headings(groups, image_width, image_height)
     if not groups:
         return body
     return finalize_blocks(groups, image_width, image_height)
