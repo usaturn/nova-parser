@@ -401,3 +401,69 @@ def cancel_overmerged(band_groups: list[list[BlockRect]], image_width: int) -> l
         else:
             result.append(group)
     return result
+
+
+# --- 7.5 出力整形 -------------------------------------------------------------
+
+
+def finalize_blocks(groups: list[list[BlockRect]], image_width: int, image_height: int) -> list[BlockRect]:
+    """各グループの外接矩形へ余白を付け、隣接との空白中点・画像境界でクランプする（スペック 7.5）。
+
+    出力順は入力グループ順のまま（並び順はパイプライン側で決定済み）。
+    """
+    boxes = [_bbox(g) for g in groups]
+    pad_x = image_width * PAD_X_RATIO
+    pad_y = image_height * PAD_Y_RATIO
+    blocks: list[BlockRect] = []
+    for i, b in enumerate(boxes):
+        left = b.left - pad_x
+        top = b.top - pad_y
+        right = b.right + pad_x
+        bottom = b.bottom + pad_y
+        for j, o in enumerate(boxes):
+            if i == j:
+                continue
+            if _y_overlap(b, o) > 0:
+                if o.right <= b.left:
+                    left = max(left, (o.right + b.left) / 2)
+                if o.left >= b.right:
+                    right = min(right, (b.right + o.left) / 2)
+            if _x_overlap(b, o) > 0:
+                if o.bottom <= b.top:
+                    top = max(top, (o.bottom + b.top) / 2)
+                if o.top >= b.bottom:
+                    bottom = min(bottom, (b.bottom + o.top) / 2)
+        x = max(0, round(left))
+        y = max(0, round(top))
+        x2 = min(image_width, round(right))
+        y2 = min(image_height, round(bottom))
+        blocks.append(BlockRect(x=x, y=y, width=max(1, x2 - x), height=max(1, y2 - y)))
+    return blocks
+
+
+# --- 公開エントリポイント -----------------------------------------------------
+
+
+def compute_vertical_blocks(image_width: int, image_height: int, blocks: list[BlockRect]) -> list[BlockRect]:
+    """段落矩形一覧から縦ブロック矩形一覧をローカル生成する（スペック 6.1）。
+
+    判定が不確実な場合は誤った巨大矩形へ結合せず、妥当な元段落を返す（スペック 8）。
+    元段落が 0 件なら 0 件を返す。想定外の例外は握り潰さず呼び出し元へ伝播する。
+    """
+    if image_width <= 0 or image_height <= 0 or not blocks:
+        return []
+    rects = normalize_rects(blocks, image_width, image_height)
+    if not rects:
+        return []
+    body = drop_perimeter_rects(rects, image_width, image_height)
+    if not body:
+        return rects
+    groups: list[list[BlockRect]] = []
+    for band in split_bands(body, image_width, image_height):
+        band_groups: list[list[BlockRect]] = []
+        for column in split_columns(band, image_width):
+            band_groups.extend(split_vertical(column, band, image_width, image_height))
+        groups.extend(cancel_overmerged(band_groups, image_width))
+    if not groups:
+        return body
+    return finalize_blocks(groups, image_width, image_height)

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from nova_parser.regional_ocr.layout import (
     cancel_overmerged,
+    compute_vertical_blocks,
     drop_perimeter_rects,
+    finalize_blocks,
     normalize_rects,
     split_bands,
     split_columns,
@@ -181,3 +183,61 @@ class TestCancelOvermerged:
         g1 = [_r(100, 100, 300, 100), _r(100, 220, 300, 100)]
         g2 = [_r(450, 100, 300, 100)]
         assert cancel_overmerged([g1, g2], W) == [g1, g2]
+
+
+class TestFinalizeBlocks:
+    def test_adds_padding_ratios(self):
+        # pad_x = 1000*0.004 = 4px, pad_y = 1000*0.003 = 3px
+        out = finalize_blocks([[_r(100, 100, 300, 200)]], W, H)
+        assert out == [_r(96, 97, 308, 206)]
+
+    def test_padding_stops_at_midpoint_between_neighbors(self):
+        left = [_r(100, 100, 300, 200)]
+        right = [_r(406, 100, 300, 200)]  # 空白 6px → 中点 x=403
+        out = finalize_blocks([left, right], W, H)
+        assert out[0] == _r(96, 97, 307, 206)
+        assert out[1] == _r(403, 97, 307, 206)
+
+    def test_clamps_to_image_bounds(self):
+        out = finalize_blocks([[_r(2, 2, 100, 100)]], W, H)
+        assert out == [_r(0, 0, 106, 105)]
+
+    def test_preserves_group_order(self):
+        g1 = [_r(500, 100, 100, 100)]
+        g2 = [_r(100, 100, 100, 100)]
+        out = finalize_blocks([g1, g2], W, H)
+        assert out[0].x > out[1].x  # 並び替えは行わない（順序はパイプラインが決める）
+
+
+class TestComputeVerticalBlocks:
+    def test_empty_input_returns_empty(self):
+        assert compute_vertical_blocks(W, H, []) == []
+
+    def test_invalid_image_size_returns_empty(self):
+        assert compute_vertical_blocks(0, H, [_r(10, 10, 20, 20)]) == []
+
+    def test_perimeter_only_page_falls_back_to_normalized_paragraphs(self):
+        # 有効な縦ブロックを生成できない場合は妥当な元段落を返す（スペック 8）
+        rect = _r(100, 10, 200, 30)
+        assert compute_vertical_blocks(W, H, [rect]) == [rect]
+
+    def test_two_column_page_with_page_number(self):
+        p1 = _r(100, 100, 380, 240)
+        p2 = _r(100, 360, 380, 300)
+        q1 = _r(520, 100, 380, 280)
+        q2 = _r(520, 400, 380, 320)
+        page_no = _r(480, 950, 40, 30)
+        out = compute_vertical_blocks(W, H, [p1, p2, q1, q2, page_no])
+        # 2 列がそれぞれ 1 ブロックへ統合され、ページ番号は出力に残らない
+        assert out == [_r(96, 97, 388, 566), _r(516, 97, 388, 626)]
+
+    def test_output_order_is_band_top_down_then_left_right(self):
+        upper = [_r(100, 100, 400, 200), _r(520, 100, 400, 200)]
+        lower = [_r(100, 340, 400, 200), _r(520, 340, 400, 200)]
+        out = compute_vertical_blocks(W, H, [upper[1], lower[0], upper[0], lower[1]])
+        assert [(b.y < 300, b.x < 300) for b in out] == [
+            (True, True),
+            (True, False),
+            (False, True),
+            (False, False),
+        ]
