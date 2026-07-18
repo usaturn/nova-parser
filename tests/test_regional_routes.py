@@ -979,3 +979,121 @@ def test_get_blocks_redetects_when_cache_belongs_to_replaced_extension(tmp_path)
     reloaded = load_blocks(output_dir, "a.webp")
     assert reloaded is not None
     assert reloaded.image_name == "a.webp"
+
+
+def test_get_blocks_returns_vertical_blocks_merged_from_paragraphs(tmp_path):
+    """レスポンスに blocks と vertical_blocks の両方が含まれ、縦に並ぶ段落は統合される。"""
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "a.png", (100, 100))
+    output_dir = tmp_path / "output"
+
+    fake = FakeVisionClient(
+        _FakeResponse(
+            blocks=[
+                [(10, 10), (60, 10), (60, 40), (10, 40)],
+                [(10, 45), (60, 45), (60, 75), (10, 75)],
+            ]
+        )
+    )
+    client = _make_client(image_dir, output_dir, _simple_factory(fake))
+    resp = client.get("/api/blocks/a.png")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    # 段落矩形は Vision 由来のまま（意味を変えない）
+    assert data["blocks"] == [
+        {"x": 10, "y": 10, "width": 50, "height": 30},
+        {"x": 10, "y": 45, "width": 50, "height": 30},
+    ]
+    # 縦ブロックは 2 段落を統合した 1 矩形 + 余白（PAD_*_RATIO=0.006 → 100px 画像で ±1px 程度）
+    assert data["vertical_blocks"] == [{"x": 9, "y": 9, "width": 52, "height": 67}]
+
+
+def test_cache_file_stores_only_paragraph_blocks(tmp_path):
+    """{stem}.blocks.json には vertical_blocks を保存しない（スペック 6.3）。"""
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "a.png", (100, 100))
+    output_dir = tmp_path / "output"
+
+    fake = FakeVisionClient(_FakeResponse(blocks=[[(10, 10), (60, 10), (60, 40), (10, 40)]]))
+    client = _make_client(image_dir, output_dir, _simple_factory(fake))
+    client.get("/api/blocks/a.png")
+
+    raw = json.loads((output_dir / "a.blocks.json").read_text(encoding="utf-8"))
+    assert "vertical_blocks" not in raw
+    assert raw["schema_version"] == 1
+
+
+def test_cache_hit_regenerates_vertical_blocks_without_vision_call(tmp_path):
+    """キャッシュヒット時も縦ブロックを生成し、Vision API は呼ばない（スペック 11.4）。"""
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "a.png", (100, 100))
+    output_dir = tmp_path / "output"
+
+    fake = FakeVisionClient(_FakeResponse(blocks=[[(10, 10), (60, 10), (60, 40), (10, 40)]]))
+    client = _make_client(image_dir, output_dir, _simple_factory(fake))
+
+    first = client.get("/api/blocks/a.png")
+    second = client.get("/api/blocks/a.png")
+
+    assert len(fake.document_calls) == 1
+    assert second.json()["vertical_blocks"] == first.json()["vertical_blocks"]
+    assert second.json()["vertical_blocks"], "キャッシュヒット時に縦ブロックが空になってはいけない"
+
+
+def test_schema_version_1_cache_without_vertical_blocks_is_served(tmp_path):
+    """既存 schema_version=1 キャッシュ（vertical_blocks キーなし）を読み込み、縦ブロックを再生成する。"""
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "a.png", (100, 100))
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    cache = {
+        "image_name": "a.png",
+        "image_width": 100,
+        "image_height": 100,
+        "blocks": [{"x": 10, "y": 10, "width": 50, "height": 30}],
+        "detected_at": "2026-01-01T00:00:00Z",
+        "schema_version": 1,
+    }
+    (output_dir / "a.blocks.json").write_text(json.dumps(cache), encoding="utf-8")
+
+    fake = FakeVisionClient(_FakeResponse(blocks=[[(0, 0), (9, 0), (9, 9), (0, 9)]]))
+    client = _make_client(image_dir, output_dir, _simple_factory(fake))
+    resp = client.get("/api/blocks/a.png")
+
+    assert resp.status_code == 200
+    assert len(fake.document_calls) == 0, "既存キャッシュで Vision を呼んではいけない"
+    assert resp.json()["blocks"] == [{"x": 10, "y": 10, "width": 50, "height": 30}]
+    # 単一段落でも finalize 余白が付く（PAD_*_RATIO=0.006 → 100px 画像で ±1px 程度）
+    assert resp.json()["vertical_blocks"] == [{"x": 9, "y": 9, "width": 52, "height": 32}]
+
+
+def test_get_blocks_paragraph_mode_matches_fixture_order(tmp_path):
+    """段落モード（blocks）は fixture の元矩形と座標・順序が一致する（スペック 11.3）。"""
+    fixture = json.loads(
+        (Path(__file__).parent / "fixtures" / "regional_layout" / "ANGEL_GEAR2_p022.json").read_text(encoding="utf-8")
+    )
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "p.png", (fixture["image_width"], fixture["image_height"]))
+    output_dir = tmp_path / "output"
+
+    vertices = [
+        [
+            (b["x"], b["y"]),
+            (b["x"] + b["width"], b["y"]),
+            (b["x"] + b["width"], b["y"] + b["height"]),
+            (b["x"], b["y"] + b["height"]),
+        ]
+        for b in fixture["paragraph_blocks"]
+    ]
+    fake = FakeVisionClient(_FakeResponse(blocks=vertices))
+    client = _make_client(image_dir, output_dir, _simple_factory(fake))
+    resp = client.get("/api/blocks/p.png")
+
+    assert resp.status_code == 200
+    assert resp.json()["blocks"] == fixture["paragraph_blocks"], "段落矩形に変換・並び替えを適用してはいけない"

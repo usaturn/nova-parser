@@ -23,9 +23,11 @@ from nova_parser.regional_ocr.images import (
     open_pil,
     resolve_image,
 )
+from nova_parser.regional_ocr.layout import compute_vertical_blocks
 from nova_parser.regional_ocr.markdown import write_markdown
 from nova_parser.regional_ocr.models import (
     BatchOcrItemResult,
+    BlockDetectionResponse,
     BlockDetectionResult,
     ImageListResponse,
     ImageMetaResponse,
@@ -42,6 +44,12 @@ def get_app_state(request: Request) -> AppState:
 
 
 AppStateDep = Annotated[AppState, Depends(get_app_state)]
+
+
+def _to_blocks_response(result: BlockDetectionResult) -> BlockDetectionResponse:
+    """キャッシュモデルへ、ローカル生成した縦ブロックを付与する（毎回再生成、スペック 6.3）。"""
+    vertical = compute_vertical_blocks(result.image_width, result.image_height, result.blocks)
+    return BlockDetectionResponse(**result.model_dump(), vertical_blocks=vertical)
 
 
 def build_router() -> APIRouter:
@@ -70,8 +78,8 @@ def build_router() -> APIRouter:
         mime = IMAGE_MIME_TYPES.get(path.suffix.lower(), "application/octet-stream")
         return Response(content=path.read_bytes(), media_type=mime)
 
-    @router.get("/api/blocks/{name}", response_model=BlockDetectionResult)
-    def api_get_blocks(name: str, state: AppStateDep) -> BlockDetectionResult:
+    @router.get("/api/blocks/{name}", response_model=BlockDetectionResponse)
+    def api_get_blocks(name: str, state: AppStateDep) -> BlockDetectionResponse:
         path = resolve_image(state.image_dir, name)
         # {stem}.blocks.json キャッシュは stem 単位のため、foo.png と foo.webp のような
         # stem 衝突があると別画像間でキャッシュを共有し誤った段組を返す。バッチ OCR と
@@ -88,7 +96,7 @@ def build_router() -> APIRouter:
         # 同 stem・別拡張子の a.webp へ置き換えると、要求名と異なる画像のキャッシュがヒットしうる。
         # image_name が一致する場合のみ再利用し、不一致は cache miss として再検出・上書きする。
         if cached is not None and cached.image_name == name:
-            return cached
+            return _to_blocks_response(cached)
         image = open_pil(path)
         client = state.vision_client_factory()
         blocks = detect_blocks(client, image, language_hints=state.language_hints)
@@ -100,7 +108,7 @@ def build_router() -> APIRouter:
             detected_at=datetime.datetime.now(datetime.UTC),
         )
         save_blocks(result, state.output_dir)
-        return result
+        return _to_blocks_response(result)
 
     @router.get("/api/session/{name}", response_model=ImageSession)
     def api_get_session(name: str, state: AppStateDep) -> ImageSession:
