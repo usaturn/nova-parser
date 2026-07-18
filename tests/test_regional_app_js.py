@@ -1418,3 +1418,269 @@ assert.deepEqual(internals.hitTestBlock([inner, outer], 25, 25), inner, "順序�
 assert.deepEqual(internals.hitTestBlock([outer, inner], 5, 5), outer, "inner の外なら outer");
 """
     )
+
+
+# ---------------------------------------------------------------------------
+# 段組選択: blockMode の状態遷移・クリック作成・ホバー
+# ---------------------------------------------------------------------------
+
+_BLOCKS_PAYLOAD = r"""
+function blocksPayload(imageName, blocks) {
+  return {
+    image_name: imageName,
+    image_width: 100,
+    image_height: 100,
+    blocks,
+    detected_at: "2026-07-18T00:00:00Z",
+    schema_version: 1,
+  };
+}
+"""
+
+
+def test_toggle_block_mode_fetches_blocks_once_and_caches() -> None:
+    _run_node_inline(
+        _BLOCKS_PAYLOAD
+        + r"""
+let calls = 0;
+global.fetch = (url) => {
+  if (url === "/api/blocks/a.png") {
+    calls += 1;
+    return Promise.resolve(
+      fetchResponse(blocksPayload("a.png", [{ x: 10, y: 10, width: 30, height: 30 }])),
+    );
+  }
+  throw new Error(`unexpected fetch: ${url}`);
+};
+const app = newApp({
+  currentImage: { name: "a.png", width: 100, height: 100, mime: "image/png" },
+  session: sessionPayload("a.png", []),
+  imgLoaded: true,
+});
+(async () => {
+  await app.toggleBlockMode();
+  assert.equal(app.blockMode, true);
+  assert.deepEqual(app.blocks, [{ x: 10, y: 10, width: 30, height: 30 }]);
+  assert.equal(calls, 1);
+
+  await app.toggleBlockMode();
+  assert.equal(app.blockMode, false, "再トグルで OFF");
+  assert.equal(app.hoverBlock, null, "OFF でホバーはクリア");
+
+  await app.toggleBlockMode();
+  assert.equal(app.blockMode, true);
+  assert.equal(calls, 1, "blocks はキャッシュされ再フェッチしない");
+})().catch((err) => { console.error(err); process.exit(1); });
+"""
+    )
+
+
+def test_toggle_block_mode_appends_warning_and_stays_on_when_zero_blocks() -> None:
+    _run_node_inline(
+        _BLOCKS_PAYLOAD
+        + r"""
+global.fetch = () => Promise.resolve(fetchResponse(blocksPayload("a.png", [])));
+const app = newApp({
+  currentImage: { name: "a.png", width: 100, height: 100, mime: "image/png" },
+  session: sessionPayload("a.png", []),
+  imgLoaded: true,
+  warnings: [],
+});
+(async () => {
+  await app.toggleBlockMode();
+  assert.equal(app.blockMode, true, "0 件は成功扱いでモードは ON のまま");
+  assert.deepEqual(app.blocks, []);
+  assert.equal(app.warnings.length, 1);
+  assert.match(app.warnings[0], /段組が検出されませんでした/);
+})().catch((err) => { console.error(err); process.exit(1); });
+"""
+    )
+
+
+def test_toggle_block_mode_reports_failure_and_turns_off() -> None:
+    _run_node_inline(
+        _BLOCKS_PAYLOAD
+        + r"""
+global.fetch = () => Promise.resolve({ ok: false, status: 502, json: async () => ({}) });
+console.error = () => {};
+const app = newApp({
+  currentImage: { name: "a.png", width: 100, height: 100, mime: "image/png" },
+  session: sessionPayload("a.png", []),
+  imgLoaded: true,
+  warnings: [],
+});
+(async () => {
+  await app.toggleBlockMode();
+  assert.equal(app.blockMode, false, "検出失敗時はモードを OFF に戻す");
+  assert.equal(app.blocks, null);
+  assert.equal(app.warnings.length, 1);
+  assert.match(app.warnings[0], /段組検出に失敗/);
+})().catch((err) => { console.error(err); process.exit(1); });
+"""
+    )
+
+
+def test_block_mode_click_creates_pending_region_from_smallest_block() -> None:
+    _run_node_inline(
+        _BLOCKS_PAYLOAD
+        + r"""
+setupCanvas({
+  imgRect: { left: 0, top: 0, width: 200, height: 200 },
+  wrapRect: { left: 0, top: 0, width: 200, height: 200 },
+});
+const app = newApp({
+  currentImage: { name: "a.png", width: 100, height: 100, mime: "image/png" },
+  session: sessionPayload("a.png", ["existing"]),
+  imgLoaded: true,
+  scaleX: 2,
+  scaleY: 2,
+  blockMode: true,
+  blocks: [
+    { x: 0, y: 0, width: 100, height: 100 },
+    { x: 10, y: 10, width: 30, height: 30 },
+  ],
+});
+app.onMouseDown({
+  target: { classList: { contains: () => false } },
+  clientX: 30,
+  clientY: 30,
+});
+assert.equal(app.dragMode, null, "blockMode 中は draft ドラッグを開始しない");
+assert.equal(app.session.regions.length, 2);
+const region = app.session.regions[1];
+assert.deepEqual(
+  {
+    x: region.rectangle.x,
+    y: region.rectangle.y,
+    width: region.rectangle.width,
+    height: region.rectangle.height,
+  },
+  { x: 10, y: 10, width: 30, height: 30 },
+  "display(30,30) → natural(15,15) を含む最小ブロックの矩形になる",
+);
+assert.equal(region.ocr_status, "pending");
+assert.equal(region.rectangle.draw_order, 1);
+assert.equal(app.selectedRectId, region.rectangle.rect_id);
+assert.equal(app.savingState, "saving", "作成後は autosave がスケジュールされる");
+dropAutosaveTimer(app);
+"""
+    )
+
+
+def test_block_mode_click_outside_any_block_is_no_op() -> None:
+    _run_node_inline(
+        _BLOCKS_PAYLOAD
+        + r"""
+setupCanvas({
+  imgRect: { left: 0, top: 0, width: 100, height: 100 },
+  wrapRect: { left: 0, top: 0, width: 100, height: 100 },
+});
+const app = newApp({
+  currentImage: { name: "a.png", width: 100, height: 100, mime: "image/png" },
+  session: sessionPayload("a.png", []),
+  imgLoaded: true,
+  scaleX: 1,
+  scaleY: 1,
+  blockMode: true,
+  blocks: [{ x: 50, y: 50, width: 20, height: 20 }],
+});
+app.onMouseDown({
+  target: { classList: { contains: () => false } },
+  clientX: 5,
+  clientY: 5,
+});
+assert.equal(app.session.regions.length, 0, "ブロック外クリックでは矩形を作らない");
+assert.equal(app.dragMode, null);
+assert.equal(app.savingState, "idle");
+"""
+    )
+
+
+def test_block_mode_mousemove_sets_and_clears_hover_block() -> None:
+    _run_node_inline(
+        _BLOCKS_PAYLOAD
+        + r"""
+setupCanvas({
+  imgRect: { left: 0, top: 0, width: 100, height: 100 },
+  wrapRect: { left: 0, top: 0, width: 100, height: 100 },
+});
+const block = { x: 10, y: 10, width: 30, height: 30 };
+const app = newApp({
+  currentImage: { name: "a.png", width: 100, height: 100, mime: "image/png" },
+  session: sessionPayload("a.png", []),
+  imgLoaded: true,
+  scaleX: 1,
+  scaleY: 1,
+  blockMode: true,
+  blocks: [block],
+});
+app.onMouseMove({ clientX: 20, clientY: 20 });
+assert.deepEqual(app.hoverBlock, block, "ブロック上でホバーがセットされる");
+
+app.onMouseMove({ clientX: 90, clientY: 90 });
+assert.equal(app.hoverBlock, null, "ブロック外でホバーはクリアされる");
+"""
+    )
+
+
+def test_select_image_resets_blocks_and_hover() -> None:
+    _run_node_inline(
+        _BLOCKS_PAYLOAD
+        + r"""
+global.fetch = (url, options = {}) => {
+  if (url === "/api/image/new.png") {
+    return Promise.resolve(fetchResponse({ image_width: 200, image_height: 200, mime_type: "image/png" }));
+  }
+  if (url === "/api/session/new.png") {
+    return Promise.resolve(fetchResponse(sessionPayload("new.png", [])));
+  }
+  throw new Error(`unexpected fetch: ${url}`);
+};
+const app = newApp({
+  currentImage: { name: "old.png", width: 100, height: 100, mime: "image/png" },
+  session: sessionPayload("old.png", []),
+  blocks: [{ x: 1, y: 1, width: 2, height: 2 }],
+  hoverBlock: { x: 1, y: 1, width: 2, height: 2 },
+  blockMode: false,
+});
+(async () => {
+  await app.selectImage("new.png");
+  assert.equal(app.blocks, null, "画像切替で blocks はリセット");
+  assert.equal(app.hoverBlock, null, "画像切替で hoverBlock はリセット");
+})().catch((err) => { console.error(err); process.exit(1); });
+"""
+    )
+
+
+def test_select_image_refetches_blocks_when_block_mode_stays_on() -> None:
+    _run_node_inline(
+        _BLOCKS_PAYLOAD
+        + r"""
+const fetches = [];
+global.fetch = (url, options = {}) => {
+  fetches.push(url);
+  if (url === "/api/image/new.png") {
+    return Promise.resolve(fetchResponse({ image_width: 200, image_height: 200, mime_type: "image/png" }));
+  }
+  if (url === "/api/session/new.png") {
+    return Promise.resolve(fetchResponse(sessionPayload("new.png", [])));
+  }
+  if (url === "/api/blocks/new.png") {
+    return Promise.resolve(fetchResponse(blocksPayload("new.png", [{ x: 5, y: 5, width: 10, height: 10 }])));
+  }
+  throw new Error(`unexpected fetch: ${url}`);
+};
+const app = newApp({
+  currentImage: { name: "old.png", width: 100, height: 100, mime: "image/png" },
+  session: sessionPayload("old.png", []),
+  blocks: [{ x: 1, y: 1, width: 2, height: 2 }],
+  blockMode: true,
+});
+(async () => {
+  await app.selectImage("new.png");
+  await tick();
+  assert.ok(fetches.includes("/api/blocks/new.png"), "モード ON のまま画像切替すると新画像の blocks を再取得する");
+  assert.deepEqual(app.blocks, [{ x: 5, y: 5, width: 10, height: 10 }]);
+})().catch((err) => { console.error(err); process.exit(1); });
+"""
+    )

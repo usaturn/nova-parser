@@ -11,6 +11,11 @@ const api = {
     if (!r.ok) throw new Error(`GET /api/image/${name} failed: ${r.status}`);
     return r.json();
   },
+  async getBlocks(name) {
+    const r = await fetch(`/api/blocks/${encodeURIComponent(name)}`);
+    if (!r.ok) throw new Error(`GET /api/blocks/${name} failed: ${r.status}`);
+    return r.json();
+  },
   async getSession(name) {
     const r = await fetch(`/api/session/${encodeURIComponent(name)}`);
     if (!r.ok) throw new Error(`GET /api/session/${name} failed: ${r.status}`);
@@ -97,6 +102,10 @@ function regionalOcrApp() {
     ocrLog: [],
     zoom: 1.0,
     zoomFit: true,
+    blockMode: false,
+    blocks: null,
+    blocksLoading: false,
+    hoverBlock: null,
 
     async init() {
       try {
@@ -168,6 +177,8 @@ function regionalOcrApp() {
       this.selectedRectId = null;
       this.imgLoaded = false;
       this.draftRect = null;
+      this.blocks = null;
+      this.hoverBlock = null;
       try {
         const meta = await api.getImageMeta(name);
         this.currentImage = {
@@ -177,6 +188,7 @@ function regionalOcrApp() {
           mime: meta.mime_type,
         };
         this.session = await api.getSession(name);
+        if (this.blockMode) this._ensureBlocks();
       } catch (err) {
         console.error(err);
         this.currentImage = null;
@@ -290,6 +302,10 @@ function regionalOcrApp() {
       if (!this.session || !this.imgLoaded) return;
       if (event.target.classList.contains("handle") || event.target.classList.contains("region")) return;
       if (event.target.classList.contains("region-delete")) return;
+      if (this.blockMode) {
+        this._addRegionFromBlockClick(event);
+        return;
+      }
       const { x, y } = this._displayCoord(event);
       this.dragMode = "create";
       this.dragStart = { x, y };
@@ -298,6 +314,10 @@ function regionalOcrApp() {
     },
 
     onMouseMove(event) {
+      if (this.blockMode && !this.dragMode) {
+        this._updateHoverBlock(event);
+        return;
+      }
       if (!this.dragMode) return;
       if (this.dragMode === "create") {
         const { x, y } = this._displayCoord(event);
@@ -349,6 +369,73 @@ function regionalOcrApp() {
       });
       this.selectedRectId = rect.rect_id;
       this.scheduleSave();
+    },
+
+    async toggleBlockMode() {
+      if (this.blockMode) {
+        this.blockMode = false;
+        this.hoverBlock = null;
+        return;
+      }
+      if (!this.currentImage) return;
+      this.blockMode = true;
+      await this._ensureBlocks();
+    },
+
+    async _ensureBlocks() {
+      if (this.blocks !== null || this.blocksLoading || !this.currentImage) return;
+      this.blocksLoading = true;
+      const imageName = this.currentImage.name;
+      try {
+        const result = await api.getBlocks(imageName);
+        // 取得中に画像が切り替わった場合、古い画像の blocks を反映しない
+        if (!this.currentImage || this.currentImage.name !== imageName) return;
+        this.blocks = result.blocks;
+        if (this.blocks.length === 0) {
+          this.warnings = [...this.warnings, `「${imageName}」から段組が検出されませんでした`];
+        }
+      } catch (err) {
+        console.error(err);
+        if (this.currentImage && this.currentImage.name === imageName) {
+          this.warnings = [...this.warnings, `「${imageName}」の段組検出に失敗しました: ${err.message}`];
+          this.blockMode = false;
+        }
+      } finally {
+        this.blocksLoading = false;
+      }
+    },
+
+    _addRegionFromBlockClick(event) {
+      if (!this.blocks || !this.blocks.length) return;
+      const { x, y } = this._displayCoord(event);
+      const block = hitTestBlock(this.blocks, x / this.scaleX, y / this.scaleY);
+      if (!block) return;
+      const rect = {
+        rect_id: generateRectId(),
+        draw_order: nextDrawOrder(this.session.regions),
+        x: block.x,
+        y: block.y,
+        width: block.width,
+        height: block.height,
+      };
+      this.session.regions.push({
+        rectangle: rect,
+        text: null,
+        ocr_status: "pending",
+        ocr_error: null,
+        ocr_completed_at: null,
+      });
+      this.selectedRectId = rect.rect_id;
+      this.scheduleSave();
+    },
+
+    _updateHoverBlock(event) {
+      if (!this.blocks || !this.blocks.length || !this.imgLoaded) {
+        this.hoverBlock = null;
+        return;
+      }
+      const { x, y } = this._displayCoord(event);
+      this.hoverBlock = hitTestBlock(this.blocks, x / this.scaleX, y / this.scaleY);
     },
 
     selectRect(rectId) {
