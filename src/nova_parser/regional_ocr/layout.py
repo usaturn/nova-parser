@@ -3,6 +3,12 @@
 Vision SDK・FastAPI・ファイル I/O へ依存しない（スペック 6.1）。
 閾値はすべて本モジュール冒頭の名前付き定数へ集約する。定数の変更は
 6 ページのゴールデンテスト（tests/test_regional_layout_golden.py）全通過を条件とする。
+
+パイプライン（compute_vertical_blocks）:
+normalize_rects → drop_perimeter_rects → drop_noise_rects
+→ split_bands → split_columns → split_vertical → cancel_overmerged
+→ merge_narrow_column_groups → merge_columns_across_spanning_headings
+→ finalize_blocks
 """
 
 from __future__ import annotations
@@ -59,10 +65,16 @@ HEADING_CENTER_DIFF_RATIO = 0.25
 """見出しと後続内容の中心位置が「大きく異なる」とみなす中心差率（最大幅比）。"""
 
 PAD_X_RATIO = 0.006
-"""出力矩形の左右余白（画像幅比）。スペック 7.5。"""
+"""出力矩形の左右余白（画像幅比）。0.6%。
+
+スペック 7.5 の初期値は 0.4% だったが、ゴールデンチューニング後に 0.006 へ更新。
+"""
 
 PAD_Y_RATIO = 0.006
-"""出力矩形の上下余白（画像高さ比）。スペック 7.5。"""
+"""出力矩形の上下余白（画像高さ比）。0.6%。
+
+スペック 7.5 の初期値は 0.3% だったが、ゴールデンチューニング後に 0.006 へ更新。
+"""
 
 # --- Task 9 判定強化用の閾値 --------------------------------------------------
 

@@ -100,7 +100,11 @@ class BlockRect(BaseModel):
 
 
 class BlockDetectionResult(BaseModel):
-    """1 枚の画像に対するブロック検出結果（キャッシュ形式兼 API レスポンス）。"""
+    """1 枚の画像に対するブロック検出結果のキャッシュ形式（`{stem}.blocks.json`）。
+
+    `blocks` は Cloud Vision が返した段落矩形のみ。縦ブロックは含まない。
+    API レスポンスは `BlockDetectionResponse`（本モデル + `vertical_blocks`）を使う。
+    """
 
     image_name: str = Field(min_length=1)
     image_width: int = Field(gt=0)
