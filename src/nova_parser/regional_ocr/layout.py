@@ -143,7 +143,10 @@ SPAN_MERGE_BLOCK_X_OVERLAP_RATIO = 0.2
 """中間の非見出しブロックが列再結合を阻害する最小 X 重なり率（上列幅比）。"""
 
 COLUMN_REJOIN_MAX_GAP_RATIO = 0.05
-"""列ブロッカー無しで上下列を再結合する最大縦ギャップ（画像高さ比）。"""
+"""列ブロッカー無し・横断見出し形状の中間物のみのとき、同一列を再結合する最大縦ギャップ（画像高さ比）。
+
+小ギャップの同一本文列再結合（p203 型）に使用。空ギャップのカード列は対象外。
+"""
 
 SPAN_MERGE_SOFT_EDGE_PX = 2
 """上列下端〜下列上端の間に入る中間矩形を拾うソフト端（ピクセル）。"""
@@ -581,6 +584,8 @@ def _spans_boxes(box: _Box, others: list[_Box]) -> int:
 def cancel_overmerged(band_groups: list[list[BlockRect]], image_width: int) -> list[list[BlockRect]]:
     """統合の結果、複数の推定列をまたぐ巨大矩形になったグループを解体する（スペック 8）。
 
+    image_width はパイプライン他段とのシグネチャ対称のため受け取るが、
+    現行実装では判定に用いない（列横断判定は相対幾何のみ）。
     解体したグループの元段落は単独ブロックとして残す（未結合を優先）。
     """
     boxes = [_bbox(g) for g in band_groups]
@@ -742,8 +747,9 @@ def merge_columns_across_spanning_headings(
 ) -> tuple[list[list[BlockRect]], list[int]]:
     """帯見出しだけを挟んで上下に分断された同一本文列を再結合する。
 
-    中間にページ幅 35% 以上・高さ 5% 以下の横断見出しが列を X 覆う場合に結合する。
-    列を X 交差しない中間物のみで縦ギャップが小さい場合も再結合する。
+    X 条件: 列ブロッカーありのときは横断見出しが上下列の X 帯を覆う場合のみ結合。
+    列ブロッカー無しで横断見出し形状の中間物のみ、かつ縦ギャップが
+    COLUMN_REJOIN_MAX_GAP_RATIO 以下のときも同一列として再結合する。
     カード行のように空ギャップだけで並ぶ本文列は結合しない（未結合優先）。
     戻り値は (統合後グループ, 各グループの band_id)。union 時は min(band_id)。
     """
@@ -859,6 +865,8 @@ def merge_columns_across_spanning_headings(
 def finalize_blocks(groups: list[list[BlockRect]], image_width: int, image_height: int) -> list[BlockRect]:
     """各グループの外接矩形へ余白を付け、隣接との空白中点・画像境界でクランプする（スペック 7.5）。
 
+    単独の小矩形には SMALL_RECT_EXTRA_PAD_RATIO による追加余白を付与するが、
+    隣接中点・画像境界の幾何的上限が優先する。
     出力順は入力グループ順のまま（並び順はパイプライン側で決定済み）。
     """
     boxes = [_bbox(g) for g in groups]
