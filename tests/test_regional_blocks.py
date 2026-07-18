@@ -8,6 +8,7 @@ import pytest
 from PIL import Image
 from pydantic import ValidationError
 
+from nova_parser.regional_ocr.blocks import blocks_path, load_blocks, save_blocks
 from nova_parser.regional_ocr.errors import OcrBackendError
 from nova_parser.regional_ocr.models import BlockDetectionResult, BlockRect
 from nova_parser.regional_ocr.ocr_client import detect_blocks
@@ -94,3 +95,50 @@ def test_detect_blocks_passes_language_hints_to_document_text_detection():
     detect_blocks(fake, _gray_image(), language_hints=("ja", "en"))
     assert len(fake.document_calls) == 1
     assert list(fake.document_calls[0]["image_context"].language_hints) == ["ja", "en"]
+
+
+# ---------------------------------------------------------------------------
+# キャッシュ（blocks.py）
+# ---------------------------------------------------------------------------
+
+
+def _sample_result(image_name: str = "a.png") -> BlockDetectionResult:
+    return BlockDetectionResult(
+        image_name=image_name,
+        image_width=100,
+        image_height=100,
+        blocks=[BlockRect(x=10, y=10, width=30, height=40)],
+        detected_at=datetime.datetime(2026, 7, 18, tzinfo=datetime.UTC),
+    )
+
+
+def test_blocks_path_uses_stem_with_blocks_json_suffix(tmp_path):
+    assert blocks_path(tmp_path, "foo.png") == tmp_path / "foo.blocks.json"
+    assert blocks_path(tmp_path, "foo") == tmp_path / "foo.blocks.json"
+
+
+def test_load_blocks_returns_none_when_file_missing(tmp_path):
+    assert load_blocks(tmp_path, "a.png") is None
+
+
+def test_save_then_load_roundtrips(tmp_path):
+    result = _sample_result()
+    save_blocks(result, tmp_path)
+    assert (tmp_path / "a.blocks.json").exists()
+    assert load_blocks(tmp_path, "a.png") == result
+
+
+def test_save_blocks_creates_output_dir(tmp_path):
+    nested = tmp_path / "out" / "deep"
+    save_blocks(_sample_result(), nested)
+    assert (nested / "a.blocks.json").exists()
+
+
+def test_load_blocks_returns_none_on_broken_json(tmp_path):
+    (tmp_path / "a.blocks.json").write_text("{{{ broken", encoding="utf-8")
+    assert load_blocks(tmp_path, "a.png") is None
+
+
+def test_load_blocks_returns_none_on_schema_mismatch(tmp_path):
+    (tmp_path / "a.blocks.json").write_text('{"image_name": "a.png"}', encoding="utf-8")
+    assert load_blocks(tmp_path, "a.png") is None
