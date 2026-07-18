@@ -66,6 +66,15 @@ function nextDrawOrder(regions) {
   return Math.max(...regions.map((r) => r.rectangle.draw_order)) + 1;
 }
 
+function hitTestBlock(blocks, x, y) {
+  let best = null;
+  for (const b of blocks) {
+    if (x < b.x || y < b.y || x >= b.x + b.width || y >= b.y + b.height) continue;
+    if (!best || b.width * b.height < best.width * best.height) best = b;
+  }
+  return best;
+}
+
 function regionalOcrApp() {
   return {
     images: [],

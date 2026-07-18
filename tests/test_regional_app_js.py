@@ -332,11 +332,11 @@ const __APP_SOURCE = fs.readFileSync(
 const __APP_FACTORY = new Function(
   "window",
   __APP_SOURCE +
-    "\n;return { clampInt, displayToNatural, generateRectId, nextDrawOrder, regionalOcrApp };",
+    "\n;return { clampInt, displayToNatural, generateRectId, nextDrawOrder, hitTestBlock, regionalOcrApp };",
 );
-const { clampInt, displayToNatural, generateRectId, nextDrawOrder, regionalOcrApp } =
+const { clampInt, displayToNatural, generateRectId, nextDrawOrder, hitTestBlock, regionalOcrApp } =
   __APP_FACTORY(global.window);
-const internals = { clampInt, displayToNatural, generateRectId, nextDrawOrder };
+const internals = { clampInt, displayToNatural, generateRectId, nextDrawOrder, hitTestBlock };
 
 function newApp(overrides = {}) {
   const app = regionalOcrApp();
@@ -1377,5 +1377,44 @@ for (let i = 0; i < 55; i++) {
 assert.equal(app.ocrLog.length, 50, "log must cap at 50");
 assert.equal(app.ocrLog[0].seq, 5, "earliest entries are evicted FIFO");
 assert.equal(app.ocrLog[49].seq, 54);
+"""
+    )
+
+
+# ---------------------------------------------------------------------------
+# 段組選択: hitTestBlock（純関数）
+# ---------------------------------------------------------------------------
+
+
+def test_hit_test_block_returns_containing_block_or_null() -> None:
+    _run_node_inline(
+        r"""
+const blocks = [{ x: 10, y: 10, width: 30, height: 30 }];
+assert.deepEqual(internals.hitTestBlock(blocks, 20, 20), blocks[0]);
+assert.equal(internals.hitTestBlock(blocks, 5, 5), null, "外側の点は null");
+assert.equal(internals.hitTestBlock([], 20, 20), null, "空配列は null");
+"""
+    )
+
+
+def test_hit_test_block_boundary_is_half_open() -> None:
+    _run_node_inline(
+        r"""
+const blocks = [{ x: 10, y: 10, width: 30, height: 30 }];
+assert.deepEqual(internals.hitTestBlock(blocks, 10, 10), blocks[0], "左上端は含む");
+assert.equal(internals.hitTestBlock(blocks, 40, 40), null, "右下端 (x+width, y+height) は含まない");
+assert.deepEqual(internals.hitTestBlock(blocks, 39.9, 39.9), blocks[0]);
+"""
+    )
+
+
+def test_hit_test_block_prefers_smallest_area_on_overlap() -> None:
+    _run_node_inline(
+        r"""
+const outer = { x: 0, y: 0, width: 100, height: 100 };
+const inner = { x: 20, y: 20, width: 30, height: 30 };
+assert.deepEqual(internals.hitTestBlock([outer, inner], 25, 25), inner, "重なりは最小面積を採用");
+assert.deepEqual(internals.hitTestBlock([inner, outer], 25, 25), inner, "順序に依存しない");
+assert.deepEqual(internals.hitTestBlock([outer, inner], 5, 5), outer, "inner の外なら outer");
 """
     )
