@@ -106,6 +106,7 @@ function regionalOcrApp() {
     blocks: null,
     blocksLoading: false,
     hoverBlock: null,
+    _blocksRequestFor: null,
 
     async init() {
       try {
@@ -383,9 +384,12 @@ function regionalOcrApp() {
     },
 
     async _ensureBlocks() {
-      if (this.blocks !== null || this.blocksLoading || !this.currentImage) return;
-      this.blocksLoading = true;
+      if (!this.currentImage || this.blocks !== null) return;
       const imageName = this.currentImage.name;
+      // 同一画像の取得が既に走っている場合のみ抑止する（別画像への切替時は新規取得を許す）
+      if (this._blocksRequestFor === imageName) return;
+      this._blocksRequestFor = imageName;
+      this.blocksLoading = true;
       try {
         const result = await api.getBlocks(imageName);
         // 取得中に画像が切り替わった場合、古い画像の blocks を反映しない
@@ -401,7 +405,12 @@ function regionalOcrApp() {
           this.blockMode = false;
         }
       } finally {
-        this.blocksLoading = false;
+        // 自分が最新のリクエストである場合だけローディング状態を解除する
+        // （古いリクエストの finally が新しいリクエストの表示を消さないように）
+        if (this._blocksRequestFor === imageName) {
+          this._blocksRequestFor = null;
+          this.blocksLoading = false;
+        }
       }
     },
 

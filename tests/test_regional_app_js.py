@@ -1684,3 +1684,55 @@ const app = newApp({
 })().catch((err) => { console.error(err); process.exit(1); });
 """
     )
+
+
+def test_rapid_image_switch_during_blocks_fetch_still_loads_new_image_blocks() -> None:
+    _run_node_inline(
+        _BLOCKS_PAYLOAD
+        + r"""
+let resolveA;
+global.fetch = (url, options = {}) => {
+  if (url === "/api/blocks/a.png") {
+    return new Promise((resolve) => {
+      resolveA = () => resolve(fetchResponse(blocksPayload("a.png", [{ x: 1, y: 1, width: 2, height: 2 }])));
+    });
+  }
+  if (url === "/api/image/b.png") {
+    return Promise.resolve(fetchResponse({ image_width: 100, image_height: 100, mime_type: "image/png" }));
+  }
+  if (url === "/api/session/b.png") {
+    return Promise.resolve(fetchResponse(sessionPayload("b.png", [])));
+  }
+  if (url === "/api/blocks/b.png") {
+    return Promise.resolve(fetchResponse(blocksPayload("b.png", [{ x: 5, y: 5, width: 10, height: 10 }])));
+  }
+  throw new Error(`unexpected fetch: ${url}`);
+};
+const app = newApp({
+  currentImage: { name: "a.png", width: 100, height: 100, mime: "image/png" },
+  session: sessionPayload("a.png", []),
+  imgLoaded: true,
+  blockMode: true,
+});
+(async () => {
+  const ensuring = app._ensureBlocks();
+  await tick();
+  assert.equal(app.blocksLoading, true, "a.png の取得が in-flight");
+
+  const selecting = app.selectImage("b.png");
+  await selecting;
+  await tick();
+
+  resolveA();
+  await ensuring;
+  await tick();
+
+  assert.deepEqual(
+    app.blocks,
+    [{ x: 5, y: 5, width: 10, height: 10 }],
+    "b.png の blocks が取得される（a.png の in-flight に飢餓させられない）",
+  );
+  assert.equal(app.blockMode, true);
+})().catch((err) => { console.error(err); process.exit(1); });
+"""
+    )
