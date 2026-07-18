@@ -107,6 +107,7 @@ function regionalOcrApp() {
     blocksLoading: false,
     hoverBlock: null,
     _blocksRequestFor: null,
+    _blocksEpoch: 0,
 
     async init() {
       try {
@@ -180,6 +181,7 @@ function regionalOcrApp() {
       this.draftRect = null;
       this.blocks = null;
       this.hoverBlock = null;
+      this._blocksEpoch += 1;
       try {
         const meta = await api.getImageMeta(name);
         this.currentImage = {
@@ -390,17 +392,25 @@ function regionalOcrApp() {
       if (this._blocksRequestFor === imageName) return;
       this._blocksRequestFor = imageName;
       this.blocksLoading = true;
+      // await 前に epoch を捕捉する。selectImage が画像を切り替えるたびに
+      // epoch を進めるので、応答が届いた時点で epoch が食い違っていれば
+      // 「画像名は一致するが実は別世代（同名へ切り戻った等）」の stale 応答だと判定できる。
+      const epoch = this._blocksEpoch;
       try {
         const result = await api.getBlocks(imageName);
         // 取得中に画像が切り替わった場合、古い画像の blocks を反映しない
-        if (!this.currentImage || this.currentImage.name !== imageName) return;
+        // （画像名一致だけでは selectImage の meta/session await 中に届いた
+        //  stale 応答をすり抜けさせてしまうため、epoch も併せて確認する）
+        if (!this.currentImage || this.currentImage.name !== imageName || epoch !== this._blocksEpoch) return;
         this.blocks = result.blocks;
         if (this.blocks.length === 0) {
-          this.warnings = [...this.warnings, `「${imageName}」から段組が検出されませんでした`];
+          const msg = `「${imageName}」から段組が検出されませんでした`;
+          // 同一画像を行き来した際に同文言の警告が重複蓄積しないようにする
+          if (!this.warnings.includes(msg)) this.warnings = [...this.warnings, msg];
         }
       } catch (err) {
         console.error(err);
-        if (this.currentImage && this.currentImage.name === imageName) {
+        if (this.currentImage && this.currentImage.name === imageName && epoch === this._blocksEpoch) {
           this.warnings = [...this.warnings, `「${imageName}」の段組検出に失敗しました: ${err.message}`];
           this.blockMode = false;
         }

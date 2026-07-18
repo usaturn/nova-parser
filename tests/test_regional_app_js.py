@@ -1736,3 +1736,125 @@ const app = newApp({
 })().catch((err) => { console.error(err); process.exit(1); });
 """
     )
+
+
+def test_stale_blocks_response_during_image_switch_meta_await_is_not_applied() -> None:
+    _run_node_inline(
+        _BLOCKS_PAYLOAD
+        + r"""
+let resolveABlocks;
+let resolveBMeta;
+global.fetch = (url) => {
+  if (url === "/api/blocks/a.png") {
+    return new Promise((resolve) => {
+      resolveABlocks = () => resolve(fetchResponse(blocksPayload("a.png", [{ x: 1, y: 1, width: 2, height: 2 }])));
+    });
+  }
+  if (url === "/api/image/b.png") {
+    return new Promise((resolve) => {
+      resolveBMeta = () => resolve(fetchResponse({ image_width: 100, image_height: 100, mime_type: "image/png" }));
+    });
+  }
+  if (url === "/api/session/b.png") {
+    return Promise.resolve(fetchResponse(sessionPayload("b.png", [])));
+  }
+  if (url === "/api/blocks/b.png") {
+    return Promise.resolve(fetchResponse(blocksPayload("b.png", [{ x: 5, y: 5, width: 10, height: 10 }])));
+  }
+  throw new Error(`unexpected fetch: ${url}`);
+};
+const app = newApp({
+  currentImage: { name: "a.png", width: 100, height: 100, mime: "image/png" },
+  session: sessionPayload("a.png", []),
+  imgLoaded: true,
+  blockMode: true,
+});
+(async () => {
+  const ensuringA = app._ensureBlocks();
+  await tick();
+  assert.equal(app.blocksLoading, true, "a.png の取得が in-flight");
+
+  const selecting = app.selectImage("b.png");
+  await tick();
+  assert.equal(
+    app.currentImage.name,
+    "a.png",
+    "selectImage は meta fetch を await 中で、currentImage はまだ a.png のまま",
+  );
+
+  // この時点で a.png の stale な blocks 応答が届く。currentImage.name はまだ
+  // "a.png" のままなので、画像名だけの stale ガードだと素通りしてしまう。
+  resolveABlocks();
+  await ensuringA;
+  await tick();
+
+  assert.equal(
+    app.blocks,
+    null,
+    "meta/session await 中に届いた a.png の stale blocks を適用してはいけない（epoch 不一致で弾く）",
+  );
+
+  resolveBMeta();
+  await selecting;
+  await tick();
+
+  assert.deepEqual(
+    app.blocks,
+    [{ x: 5, y: 5, width: 10, height: 10 }],
+    "最終的には b.png の blocks が反映される",
+  );
+})().catch((err) => { console.error(err); process.exit(1); });
+"""
+    )
+
+
+def test_zero_block_warning_does_not_duplicate_on_revisiting_same_image() -> None:
+    _run_node_inline(
+        _BLOCKS_PAYLOAD
+        + r"""
+global.fetch = (url) => {
+  if (url === "/api/blocks/a.png") {
+    return Promise.resolve(fetchResponse(blocksPayload("a.png", [])));
+  }
+  if (url === "/api/blocks/b.png") {
+    return Promise.resolve(fetchResponse(blocksPayload("b.png", [])));
+  }
+  if (url === "/api/image/b.png") {
+    return Promise.resolve(fetchResponse({ image_width: 100, image_height: 100, mime_type: "image/png" }));
+  }
+  if (url === "/api/session/b.png") {
+    return Promise.resolve(fetchResponse(sessionPayload("b.png", [])));
+  }
+  if (url === "/api/image/a.png") {
+    return Promise.resolve(fetchResponse({ image_width: 100, image_height: 100, mime_type: "image/png" }));
+  }
+  if (url === "/api/session/a.png") {
+    return Promise.resolve(fetchResponse(sessionPayload("a.png", [])));
+  }
+  throw new Error(`unexpected fetch: ${url}`);
+};
+const app = newApp({
+  currentImage: { name: "a.png", width: 100, height: 100, mime: "image/png" },
+  session: sessionPayload("a.png", []),
+  imgLoaded: true,
+  // selectImage 内の _ensureBlocks 呼び出しは blockMode 時のみ発火し、かつ
+  // await されない（fire-and-forget）。本テストは _ensureBlocks の警告重複抑止
+  // ロジック自体を検証したいので、blockMode は false のままにして selectImage
+  // 側の自動発火とは競合させず、各切替後に明示的に _ensureBlocks を await する。
+  blockMode: false,
+  warnings: [],
+});
+(async () => {
+  await app._ensureBlocks(); // a.png: 0 件 -> 警告 #1
+
+  await app.selectImage("b.png");
+  await app._ensureBlocks(); // b.png: 0 件（別文言の警告、本テストでは対象外）
+
+  await app.selectImage("a.png");
+  await app._ensureBlocks(); // a.png に再訪問: 0 件だが同文言を重複追加してはいけない
+
+  const matches = app.warnings.filter((w) => /a\.png」から段組が検出されませんでした/.test(w));
+  assert.equal(matches.length, 1, "同一画像への再訪問で同文言の警告が重複蓄積してはいけない");
+})().catch((err) => { console.error(err); process.exit(1); });
+"""
+    )
