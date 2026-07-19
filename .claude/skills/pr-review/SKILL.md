@@ -1,11 +1,12 @@
 ---
 name: pr-review
-description: GitHub の指定した PR をレビューする。PRのメタデータ、説明、差分（diff）を gh CLI を用いて取得し、検証済みの指摘を Severity・位置・根拠付きで `docs/reviews/` 配下にドキュメントを作成または更新する
+description: GitHub の指定した PR をレビューする。PRのメタデータ、説明、差分（diff）を gh CLI を用いて取得し、git worktree 上で検証した指摘を Severity・位置・根拠付きで `docs/reviews/` 配下にドキュメントとして作成または更新する
+allowed-tools: Read, Grep, Glob, Bash(gh *), Bash(git *), Edit(docs/reviews/**), Agent
 ---
 
-# GitHub PR レビュー
+# GitHub PR レビュー（Claude Code 版）
 
-GitHub 上の指定された Pull Request（PR）に対して、Codex の `/review` に近い高品質なコードレビューを行います。
+GitHub 上の指定された Pull Request（PR）に対して高品質なコードレビューを行います。Claude Code の git worktree・サブエージェント機能を活用し、ユーザの作業ブランチ・working tree に触れずにレビューします。
 
 ## 規約
 
@@ -31,15 +32,22 @@ GitHub 上の指定された Pull Request（PR）に対して、Codex の `/revi
    - 指定がない場合、`gh pr view` を実行して現在のブランチに関連付けられたPRの情報を取得する。関連付けられたPRがない場合はユーザにPR番号の指定を促す。
    - `gh pr view <PR_NUMBER> --comments` で既存のレビューコメント・議論を取得し、既出の指摘を把握する。
    - gh が未認証・API エラーの場合はエラー内容をそのまま報告し、`gh auth login` を案内する。
-2. **PRブランチのチェックアウト（必要に応じて）**:
-   - 正確なコンテキスト読解とテストの実行検証を行うため、ローカルで PR ブランチがチェックアウトされていない場合は、まず `git branch --show-current` で元のブランチ名を記録した上で `gh pr checkout <PR_NUMBER>` を実行する。レビュー完了後は記録した元のブランチに戻す。
-   - working tree が dirty な場合は checkout せず、`gh pr diff` の差分とデフォルトブランチ上のファイル読解によるレビューにフォールバックする。
+2. **worktree への展開**:
+   - ユーザの作業ブランチ・working tree に触れないため、`gh pr checkout` は使わない。
+   - worktree はプロジェクト外の一時ディレクトリ `WT = ${TMPDIR:-/tmp}/nova-parser-pr-review-<PR_NUMBER>` に作る。プロジェクト直下（`/workspaces`）は devcontainer で書き込み不可であり、かつプロジェクト内に置くと PR に同梱された `.claude/skills/` 等が Claude Code に自動読込されうる（信頼できない PR の定義がレビュー実行セッションに混入する）ため、外部の書き込み可能な一時ディレクトリを使う。
+   - まず `git worktree list` に末尾ディレクトリ名が `nova-parser-pr-review-<PR_NUMBER>` の worktree が既に存在するか確認する（完全一致で判定する。部分一致だと `-1` が `-12` などに誤ヒットする）。
+   - 存在しない場合（新規展開）: `git fetch origin pull/<PR_NUMBER>/head` を実行し、`git worktree add --detach "$WT" FETCH_HEAD` で PR head を detached HEAD として展開する。ローカルブランチ `pr-review/<PR_NUMBER>` は作らない（同名のユーザ作成ブランチを `+` refspec で強制上書きし、後片付けで削除してしまう事故を防ぐ）。
+   - 既に存在する場合（前回レビューが後片付け未完了で残っている等）: `$WT` 内で `git fetch origin pull/<PR_NUMBER>/head` の後 `git checkout -f --detach FETCH_HEAD` で、未コミットの追跡変更を破棄しつつ明示的に detached HEAD として最新 PR head に揃えて再利用する。`$WT` はスキル専用の一時 worktree のため破棄してよい。旧版手順が残した branch-attached worktree でも、`reset --hard` のようにブランチ tip を動かさず、既存ローカルブランチを保護する。
+   - worktree の管理情報が壊れている場合は `git worktree remove --force "$WT"`（または `git worktree prune`）で除去してから、新規展開のフローをやり直す。
+   - 以降のファイル読解・テスト実行は `$WT` を対象に行う。ただしレビュー成果物（`docs/reviews/<...>.md`）はメインリポジトリの `docs/reviews/` に書き、`$WT` 内には書かない（`$WT` は後片付けで削除されるため）。
 3. **差分収集**:
    - `gh pr diff <PR_NUMBER>` を実行し、PR全体の差分（diff）を取得して変更ファイル一覧と具体的な変更内容を把握する。
-4. **コンテキスト読解**:
-   - 変更ファイルは diff だけでなくファイル全体を読む。変更箇所の呼び出し元・呼び出し先、依存関係ファイル（pyproject.toml / package.json / lock ファイル等）、変更に対応する既存テストを辿る。
+4. **コンテキスト読解（並列化）**:
+   - 変更ファイル本体は、メインコンテキストで diff だけでなくファイル全体を読む。指摘の根拠となる精読をサブエージェント任せにしない。
+   - 変更箇所の呼び出し元・呼び出し先の調査、依存関係ファイル（pyproject.toml / package.json / lock ファイル等）の確認、変更に対応する既存テストの探索は、Explore サブエージェントに並列で委譲してよい。
 5. **プロジェクト固有観点の取り込み**: CLAUDE.md と過去のレビュー記録（例: `docs/reviews/`）があれば読み、そのプロジェクトの重点観点（例: XSS 多層防御、並列・増分ビルド互換性）を優先順位のチェックリストに加える。
 6. **候補洗い出し → 検証 → 報告**: 優先順位に沿って候補指摘を洗い出し、検証プロトコルを通過したものだけを指摘フォーマットで報告する。
+7. **後片付け**: レビュー完了後、`git worktree remove "$WT"` で worktree を削除する（`$WT` 内でテストを実行して `.venv` 等の未追跡ファイルが生成された場合は `git worktree remove --force "$WT"`）。detached HEAD 運用のためローカルブランチは残らず、`git branch -D` は不要。
 
 ## 検証プロトコル
 
@@ -47,7 +55,9 @@ GitHub 上の指定された Pull Request（PR）に対して、Codex の `/revi
 
 1. **精読**: 指摘に関わる実コードパスを最後まで読む（途中の早期 return・ガード・呼び出し規約を見落とさない）
 2. **反証試行**: 「この指摘が誤りだとしたらどこか」を明示的に検討する（既存のガード、テストによる固定、ドキュメント化された意図的トレードオフ等）。反証に成功したら報告しない
-3. **実行検証**: 挙動が不確かな場合、可能なら実行して確かめる（プロジェクトのテストコマンド、REPL、最小再現スクリプト）。テストコマンドが不明な場合は無理に実行しない
+3. **実行検証**: 挙動が不確かな場合、可能なら worktree 側で実行して確かめる（プロジェクトのテストコマンド、REPL、最小再現スクリプト）。テストコマンドが不明な場合は無理に実行しない
+
+反証試行で追加のコード追跡が必要な場合は、サブエージェントに調査を委譲してよい。ただし確度ラベルの最終判定は、メインコンテキストが根拠（コードパス・実行結果）を直接確認した上で行う。サブエージェントの報告のみを根拠に【検証済み】を付けない。
 
 検証結果に応じて、各指摘に確度ラベルを付ける:
 
@@ -153,3 +163,5 @@ Merge recommendation の判定基準:
 - 各指摘に反証を試みたか
 - 「コメントしないこと」に該当する指摘が紛れていないか
 - Merge recommendation が判定基準と整合しているか
+- レビュー成果物がメインリポジトリの `docs/reviews/` に書かれ、`$WT` 配下に無いか
+- worktree を削除したか（手順7）

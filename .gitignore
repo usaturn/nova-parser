@@ -140,3 +140,8 @@ uv.lock
 docs/superpowers/
 docs/reviews/
 
+# superpowers 等のスキルが git worktree を配置する作業用ディレクトリ
+# （/workspaces/ は devcontainer で root 所有・書き込み不可のため、
+#  親ディレクトリではなくリポジトリ直下にこのディレクトリを作成する）
+/.worktrees/
+
