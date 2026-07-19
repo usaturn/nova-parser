@@ -26,6 +26,11 @@ export PATH="$YARN_GLOBAL_BIN:$HOME/.local/bin:$PATH"
 curl -LsSf https://astral.sh/uv/install.sh | sh
 curl -fsSL https://bun.com/install | bash
 
+echo "Installing Starship..."
+curl -sS https://starship.rs/install.sh | sh -s -- -y
+mkdir -p "${HOME}/.config"
+cp .devcontainer/starship.toml "${HOME}/.config/starship.toml"
+
 mkdir -p "${HOME}/bin"
 cp .devcontainer/tmux-git-status.bash "${HOME}/bin/tmux-git-status.bash"
 chmod +x "${HOME}/bin/tmux-git-status.bash"
