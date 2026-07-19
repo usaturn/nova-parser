@@ -32,5 +32,13 @@ class StemCollisionError(RegionalOcrError):
     """
 
 
+class RegionGeometryChangedError(RegionalOcrError):
+    """OCR 実行中に対象リージョンの形状（座標・サイズ）が変更された場合の例外。
+
+    単発 OCR 完了時に再ロードした矩形が開始時と異なる場合に raise し、
+    stale な OCR 結果の保存を拒否する（HTTP 409）。
+    """
+
+
 class AdcNotConfiguredError(OcrBackendError):
     """Application Default Credentials が設定されていない場合の例外。"""

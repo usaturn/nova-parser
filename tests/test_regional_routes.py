@@ -1670,3 +1670,112 @@ def test_post_ocr_single_returns_404_when_region_deleted_mid_ocr(tmp_path, monke
     assert resp.status_code == 404
     session = load_session(output_dir, "img.png", image_width=100, image_height=100)
     assert session.regions == [], "削除済みリージョンを復活させてはいけない"
+
+
+# ---------------------------------------------------------------------------
+# OCR 中の同一リージョン形状変更 — stale 結果を破棄（再レビュー F2）
+# ---------------------------------------------------------------------------
+
+
+def test_post_ocr_batch_stream_skips_save_when_geometry_changed_during_ocr(tmp_path, monkeypatch):
+    """OCR 実行中に同一 rect の形状が変わったら、stale OCR を保存・SSE せず新形状を維持する。"""
+    from nova_parser.regional_ocr.models import ImageSession, Rectangle, RegionRecord
+    from nova_parser.regional_ocr.sessions import load_session, save_session
+
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "img.png")
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    original = Rectangle(rect_id="r1", draw_order=0, x=0, y=0, width=50, height=50)
+    save_session(
+        ImageSession(
+            image_name="img.png",
+            image_width=100,
+            image_height=100,
+            regions=[RegionRecord(rectangle=original, ocr_status="pending")],
+        ),
+        output_dir,
+    )
+
+    resized = Rectangle(rect_id="r1", draw_order=0, x=10, y=10, width=80, height=80)
+
+    def fake_ocr(client, image, rectangle, *, language_hints):
+        # OCR 実行中にユーザーが同一 rect をリサイズして保存した状況を注入
+        save_session(
+            ImageSession(
+                image_name="img.png",
+                image_width=100,
+                image_height=100,
+                regions=[RegionRecord(rectangle=resized, ocr_status="pending")],
+            ),
+            output_dir,
+        )
+        return "STALE_OCR_TEXT"
+
+    monkeypatch.setattr("nova_parser.regional_ocr.routes.ocr_rectangle", fake_ocr)
+    client = _make_client(image_dir, output_dir, _simple_factory(FakeVisionClient()))
+
+    with client.stream("POST", "/api/ocr/batch/stream") as resp:
+        assert resp.status_code == 200
+        lines = [line for line in resp.iter_lines() if line.startswith("data: ")]
+
+    assert lines == [], "形状変更後の stale OCR は SSE 配信しない"
+    session = load_session(output_dir, "img.png", image_width=100, image_height=100)
+    assert len(session.regions) == 1
+    r = session.regions[0]
+    assert r.rectangle.x == 10 and r.rectangle.y == 10
+    assert r.rectangle.width == 80 and r.rectangle.height == 80
+    assert r.ocr_status == "pending"
+    assert r.text is None, "旧 crop の text を新形状に載せてはいけない"
+
+
+def test_post_ocr_single_returns_409_when_geometry_changed_during_ocr(tmp_path, monkeypatch):
+    """単発 OCR 実行中に同一 rect の形状が変わったら 409 を返し、ディスクを更新しない。"""
+    from nova_parser.regional_ocr.models import ImageSession, Rectangle, RegionRecord
+    from nova_parser.regional_ocr.sessions import load_session, save_session
+
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "img.png")
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    original = Rectangle(rect_id="r1", draw_order=0, x=0, y=0, width=50, height=50)
+    save_session(
+        ImageSession(
+            image_name="img.png",
+            image_width=100,
+            image_height=100,
+            regions=[RegionRecord(rectangle=original, ocr_status="pending")],
+        ),
+        output_dir,
+    )
+
+    resized = Rectangle(rect_id="r1", draw_order=0, x=20, y=20, width=60, height=60)
+
+    def fake_ocr(client, image, rectangle, *, language_hints):
+        save_session(
+            ImageSession(
+                image_name="img.png",
+                image_width=100,
+                image_height=100,
+                regions=[RegionRecord(rectangle=resized, ocr_status="pending")],
+            ),
+            output_dir,
+        )
+        return "STALE_OCR_TEXT"
+
+    monkeypatch.setattr("nova_parser.regional_ocr.routes.ocr_rectangle", fake_ocr)
+    client = _make_client(image_dir, output_dir, _simple_factory(FakeVisionClient()))
+
+    resp = client.post("/api/ocr/img.png/r1")
+
+    assert resp.status_code == 409
+    session = load_session(output_dir, "img.png", image_width=100, image_height=100)
+    assert len(session.regions) == 1
+    r = session.regions[0]
+    assert (r.rectangle.x, r.rectangle.y, r.rectangle.width, r.rectangle.height) == (20, 20, 60, 60)
+    assert r.ocr_status == "pending"
+    assert r.text is None

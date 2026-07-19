@@ -15,6 +15,7 @@ from PIL import Image
 from nova_parser.regional_ocr.blocks import load_blocks, save_blocks
 from nova_parser.regional_ocr.errors import (
     OcrBackendError,
+    RegionGeometryChangedError,
     RegionNotFoundError,
     StemCollisionError,
 )
@@ -33,6 +34,7 @@ from nova_parser.regional_ocr.models import (
     ImageListResponse,
     ImageMetaResponse,
     ImageSession,
+    Rectangle,
     RegionRecord,
     UndoneRegionItem,
     UndoneRegionsResponse,
@@ -40,6 +42,11 @@ from nova_parser.regional_ocr.models import (
 from nova_parser.regional_ocr.ocr_client import detect_blocks, ocr_rectangle
 from nova_parser.regional_ocr.sessions import load_session, save_session, session_path, upsert_region
 from nova_parser.regional_ocr.state import AppState
+
+
+def _same_geometry(a: Rectangle, b: Rectangle) -> bool:
+    """OCR crop に影響する幾何が一致するか（draw_order は無視）。"""
+    return (a.x, a.y, a.width, a.height) == (b.x, b.y, b.width, b.height)
 
 
 def get_app_state(request: Request) -> AppState:
@@ -245,14 +252,18 @@ def build_router() -> APIRouter:
                             status="error",
                             error=str(exc),
                         )
-                    # OCR（外部 API 呼び出し）中の並行編集を失わないよう、保存直前に
-                    # 最新セッションをロック内で再ロードして反映する。rect_id が消えて
-                    # いればユーザーの削除を尊重し、保存も SSE 配信もスキップする
-                    # （クライアントは終了時の一覧再取得で整合する）
+                    # OCR（外部 API）中の並行編集を失わないよう、保存直前に最新セッションを
+                    # ロック内で再ロードする。
+                    # - rect_id が消えていればユーザーの削除を尊重（保存・SSE スキップ）
+                    # - 幾何（x/y/width/height）が開始時と異なれば stale OCR を破棄
+                    #   （旧 crop の text を新形状に載せない。クライアントは終了時の一覧再取得で整合）
                     rect_id = target.rectangle.rect_id
                     with state.session_lock:
                         session = load_session(state.output_dir, image_name, image_width=width, image_height=height)
-                        if all(r.rectangle.rect_id != rect_id for r in session.regions):
+                        existing = next((r for r in session.regions if r.rectangle.rect_id == rect_id), None)
+                        if existing is None:
+                            continue
+                        if not _same_geometry(existing.rectangle, target.rectangle):
                             continue
                         session = upsert_region(session, updated)
                         save_session(session, state.output_dir)
@@ -290,12 +301,17 @@ def build_router() -> APIRouter:
                 ocr_completed_at=datetime.datetime.now(datetime.UTC),
             )
 
-        # OCR（外部 API 呼び出し）中の並行編集を失わないよう、保存直前に最新セッションを
-        # ロック内で再ロードして反映する。rect_id が消えていればユーザーの削除を尊重し 404
+        # OCR（外部 API）中の並行編集を失わないよう、保存直前に最新セッションを
+        # ロック内で再ロードする。
+        # - rect_id が消えていれば 404
+        # - 幾何が開始時と異なれば 409（stale OCR を保存しない）
         with state.session_lock:
             session = load_session(state.output_dir, name, image_width=width, image_height=height)
-            if all(r.rectangle.rect_id != rect_id for r in session.regions):
+            existing = next((r for r in session.regions if r.rectangle.rect_id == rect_id), None)
+            if existing is None:
                 raise RegionNotFoundError(f"rect_id が見つかりません: {rect_id}")
+            if not _same_geometry(existing.rectangle, target.rectangle):
+                raise RegionGeometryChangedError(f"OCR 実行中にリージョンの形状が変更されました: {rect_id}")
             session = upsert_region(session, updated)
             save_session(session, state.output_dir)
             write_markdown(session, state.output_dir, Path(name).stem)
