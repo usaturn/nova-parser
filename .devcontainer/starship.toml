@@ -43,12 +43,13 @@ format = "[$symbol$output]($style) "
 [git_branch]
 symbol = " "
 style = "bold purple"
+format = "[$symbol$branch]($style) "
 
 [gcloud]
 # 旧 zsh プロンプトの [GCP:xxx]（アクティブ設定名）の代替
 format = "[$symbol$active]($style) "
 symbol = "☁️ "
-style = "bold magenta"
+style = "bold purple"
 
 [time]
 disabled = false
