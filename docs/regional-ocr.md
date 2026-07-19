@@ -78,8 +78,8 @@ uv run nova-parser-regional Images/ --output-dir Output --host 127.0.0.1 --port 
 | GET | `/api/regions/undone` | 全画像の未 OCR 領域（`pending` / `error`）を集計して返す。Vision は呼ばない（課金なし）。stem 衝突画像は `items` から除外し `warnings` で警告 |
 | GET | `/api/session/{name}` | セッション取得（`pending` 領域含む） |
 | PUT | `/api/session/{name}` | セッション upsert。`done` レコードは保護 |
-| POST | `/api/ocr/{name}/{rect_id}` | 単発 OCR |
-| POST | `/api/ocr/batch/stream` | 全画像 × `pending` 領域を SSE で OCR。`?include_errors=true` で `error` 領域も再試行対象に含める |
+| POST | `/api/ocr/{name}/{rect_id}` | 単発 OCR。対象リージョンが無い／OCR 中に削除された場合は 404。OCR 実行中に形状（x/y/width/height）が変わった場合は 409（結果は保存しない） |
+| POST | `/api/ocr/batch/stream` | 全画像 × `pending` 領域を SSE で OCR。`?include_errors=true` で `error` 領域も再試行対象に含める。実行中に削除または形状変更されたリージョンは結果を破棄する（SSE 配信なし、ディスク上は pending 等のまま）。クライアントは終了時の一覧再取得で整合する |
 
 `POST /api/ocr/batch/stream` のレスポンスは `text/event-stream` で、`data: <BatchOcrItemResult JSON>\n\n` の繰り返し。各行は `image_name` / `rect_id` / `status` (`done` | `error`) / `text` / `error` を含みます。
 
