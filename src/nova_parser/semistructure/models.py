@@ -6,7 +6,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Literal, Self
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from nova_parser.regional_ocr.models import Rectangle
 
@@ -166,14 +166,27 @@ class NormalizedBlock(BaseModel):
 class OutlineSection(BaseModel):
     """書籍全体から推定した章節候補。"""
 
-    section_path: list[str] = Field(min_length=1)
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1)
     start_page: int = Field(ge=1)
     end_page: int = Field(ge=1)
+    default_content_type: str = Field(min_length=1)
+    section_path: list[str] = Field(default_factory=list)
     confidence: Confidence = Confidence.MEDIUM
+
+    @model_validator(mode="after")
+    def validate_page_range(self) -> Self:
+        """終了ページが開始ページより前の章範囲を拒否する。"""
+        if self.end_page < self.start_page:
+            raise ValueError("outline section は昇順のページ範囲である必要があります")
+        return self
 
 
 class BookOutline(BaseModel):
     """書籍全体の粗い章構成。"""
+
+    model_config = ConfigDict(extra="forbid")
 
     book_id: str = Field(min_length=1)
     sections: list[OutlineSection] = Field(default_factory=list)
@@ -181,6 +194,8 @@ class BookOutline(BaseModel):
 
 class ProposalSegment(BaseModel):
     """LLMが本文生成なしで返す意味境界と分類。"""
+
+    model_config = ConfigDict(extra="forbid")
 
     block_ids: list[str] = Field(min_length=1)
     section_path: list[str] = Field(default_factory=list)
@@ -194,6 +209,8 @@ class ProposalSegment(BaseModel):
 
 class StructureProposal(BaseModel):
     """1つの処理窓に対する構造推定結果。"""
+
+    model_config = ConfigDict(extra="forbid")
 
     segments: list[ProposalSegment] = Field(default_factory=list)
 

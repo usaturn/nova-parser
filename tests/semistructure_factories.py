@@ -15,6 +15,7 @@ from nova_parser.semistructure.models import (
     NormalizedBlock,
     OcrPage,
     OcrRegion,
+    OutlineSection,
     PipelineConfig,
     ProposalSegment,
     SemanticSegment,
@@ -200,8 +201,15 @@ class FakeClassifier:
         return cls(fail_page=page)
 
     def infer_outline(self, blocks: Sequence[NormalizedBlock]) -> BookOutline:
-        """入力ブロックの書籍IDを保持した空アウトラインを返す。"""
-        return BookOutline(book_id=blocks[0].book_id)
+        """入力ブロックの範囲を覆う決定的なアウトラインを返す。"""
+        pages = [block.page for block in blocks]
+        section = OutlineSection(
+            title="テスト章",
+            start_page=min(pages),
+            end_page=max(pages),
+            default_content_type="unknown",
+        )
+        return BookOutline(book_id=blocks[0].book_id, sections=[section])
 
     def classify(self, window: StructureWindow) -> StructureProposal:
         """入力ブロックを順番どおり1セグメントとして返す。"""
