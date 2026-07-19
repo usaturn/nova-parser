@@ -1097,3 +1097,143 @@ def test_get_blocks_paragraph_mode_matches_fixture_order(tmp_path):
 
     assert resp.status_code == 200
     assert resp.json()["blocks"] == fixture["paragraph_blocks"], "段落矩形に変換・並び替えを適用してはいけない"
+
+
+# ---------------------------------------------------------------------------
+# GET /api/regions/undone — 全画像横断の未 OCR リージョン一覧
+# ---------------------------------------------------------------------------
+
+
+def test_get_regions_undone_returns_empty_items_when_no_sessions(tmp_path):
+    """セッション未作成なら items は空、warnings も空で 200 を返す。"""
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "a.png")
+    output_dir = tmp_path / "output"
+
+    client = _make_client(image_dir, output_dir, _simple_factory(FakeVisionClient()))
+    resp = client.get("/api/regions/undone")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["items"] == []
+    assert data["warnings"] == []
+
+
+def test_get_regions_undone_excludes_done_and_orders_by_image_then_draw_order(tmp_path):
+    """done を除外し、画像名順 → draw_order 昇順で列挙する。error の ocr_error も引き継ぐ。"""
+    from nova_parser.regional_ocr.models import ImageSession, Rectangle, RegionRecord
+    from nova_parser.regional_ocr.sessions import save_session
+
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "a.png")
+    _write_png(image_dir / "b.png")
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    save_session(
+        ImageSession(
+            image_name="a.png",
+            image_width=100,
+            image_height=100,
+            regions=[
+                RegionRecord(
+                    rectangle=Rectangle(rect_id="a1", draw_order=1, x=50, y=0, width=40, height=40),
+                    ocr_status="pending",
+                ),
+                RegionRecord(
+                    rectangle=Rectangle(rect_id="a0", draw_order=0, x=0, y=0, width=40, height=40),
+                    text="済み",
+                    ocr_status="done",
+                ),
+            ],
+        ),
+        output_dir,
+    )
+    save_session(
+        ImageSession(
+            image_name="b.png",
+            image_width=100,
+            image_height=100,
+            regions=[
+                RegionRecord(
+                    rectangle=Rectangle(rect_id="b1", draw_order=1, x=50, y=0, width=40, height=40),
+                    ocr_status="pending",
+                ),
+                RegionRecord(
+                    rectangle=Rectangle(rect_id="b0", draw_order=0, x=0, y=0, width=40, height=40),
+                    ocr_status="error",
+                    ocr_error="quota exceeded",
+                ),
+            ],
+        ),
+        output_dir,
+    )
+
+    client = _make_client(image_dir, output_dir, _simple_factory(FakeVisionClient()))
+    resp = client.get("/api/regions/undone")
+
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    assert [(i["image_name"], i["rect_id"], i["ocr_status"]) for i in items] == [
+        ("a.png", "a1", "pending"),
+        ("b.png", "b0", "error"),
+        ("b.png", "b1", "pending"),
+    ]
+    assert items[1]["ocr_error"] == "quota exceeded"
+
+
+def test_get_regions_undone_excludes_collided_stems_with_warning(tmp_path):
+    """stem 衝突画像は items から除外し、warnings に 'stem collision: ' を含めて 200 を返す。"""
+    from nova_parser.regional_ocr.models import ImageSession, Rectangle, RegionRecord
+    from nova_parser.regional_ocr.sessions import save_session
+
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "foo.png")
+    Image.new("RGB", (50, 50)).save(image_dir / "foo.webp")
+    _write_png(image_dir / "solo.png")
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    for name in ["foo.png", "solo.png"]:
+        save_session(
+            ImageSession(
+                image_name=name,
+                image_width=100,
+                image_height=100,
+                regions=[
+                    RegionRecord(
+                        rectangle=Rectangle(rect_id="r0", draw_order=0, x=0, y=0, width=40, height=40),
+                        ocr_status="pending",
+                    ),
+                ],
+            ),
+            output_dir,
+        )
+
+    client = _make_client(image_dir, output_dir, _simple_factory(FakeVisionClient()))
+    resp = client.get("/api/regions/undone")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert [i["image_name"] for i in data["items"]] == ["solo.png"]
+    assert any("stem collision: " in w for w in data["warnings"])
+
+
+def test_get_regions_undone_does_not_call_vision_client_factory(tmp_path):
+    """未 OCR 一覧の集計で vision_client_factory を一度も呼ばない（課金ゼロ）。"""
+    from tests.conftest import make_fake_factory
+
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "a.png")
+    output_dir = tmp_path / "output"
+
+    factory = make_fake_factory(FakeVisionClient())
+    client = _make_client(image_dir, output_dir, factory)
+    resp = client.get("/api/regions/undone")
+
+    assert resp.status_code == 200
+    assert factory.calls["calls"] == 0

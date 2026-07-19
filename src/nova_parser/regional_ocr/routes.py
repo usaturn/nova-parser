@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+from collections import Counter
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Annotated
@@ -33,6 +34,8 @@ from nova_parser.regional_ocr.models import (
     ImageMetaResponse,
     ImageSession,
     RegionRecord,
+    UndoneRegionItem,
+    UndoneRegionsResponse,
 )
 from nova_parser.regional_ocr.ocr_client import detect_blocks, ocr_rectangle
 from nova_parser.regional_ocr.sessions import load_session, save_session, upsert_region
@@ -109,6 +112,37 @@ def build_router() -> APIRouter:
         )
         save_blocks(result, state.output_dir)
         return _to_blocks_response(result)
+
+    @router.get("/api/regions/undone", response_model=UndoneRegionsResponse)
+    def api_regions_undone(state: AppStateDep) -> UndoneRegionsResponse:
+        listing = list_images(state.image_dir)
+        # stem 衝突画像はセッションファイル（{stem}.regions.json）を別画像間で共有してしまい
+        # 同一リージョンを重複列挙するため、items から除外して listing.warnings で知らせる。
+        # 読み取り専用のため batch と違い 409 にはしない。
+        stem_counts = Counter(Path(name).stem for name in listing.images)
+        items: list[UndoneRegionItem] = []
+        for image_name in listing.images:
+            if stem_counts[Path(image_name).stem] > 1:
+                continue
+            path = resolve_image(state.image_dir, image_name)
+            with Image.open(path) as img:
+                width, height = img.size
+            session = load_session(state.output_dir, image_name, image_width=width, image_height=height)
+            undone = sorted(
+                (r for r in session.regions if r.ocr_status != "done"),
+                key=lambda r: r.rectangle.draw_order,
+            )
+            items.extend(
+                UndoneRegionItem(
+                    image_name=image_name,
+                    rect_id=r.rectangle.rect_id,
+                    draw_order=r.rectangle.draw_order,
+                    ocr_status=r.ocr_status,
+                    ocr_error=r.ocr_error,
+                )
+                for r in undone
+            )
+        return UndoneRegionsResponse(items=items, warnings=listing.warnings)
 
     @router.get("/api/session/{name}", response_model=ImageSession)
     def api_get_session(name: str, state: AppStateDep) -> ImageSession:
