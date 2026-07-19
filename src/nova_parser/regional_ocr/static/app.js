@@ -541,9 +541,12 @@ function regionalOcrApp() {
           ocr_status: r.ocr_status,
           ocr_error: r.ocr_error,
         }));
-      // サーバ側の並び（画像名順 → draw_order 昇順）と揃える
+      // サーバ側の並び（画像名の codepoint 順 → draw_order 昇順）と揃える。
+      // localeCompare は大文字小文字混在で Python の sorted() と食い違うため使わない
       this.undoneItems = [...others, ...mine].sort(
-        (a, b) => a.image_name.localeCompare(b.image_name) || a.draw_order - b.draw_order,
+        (a, b) =>
+          (a.image_name < b.image_name ? -1 : a.image_name > b.image_name ? 1 : 0) ||
+          a.draw_order - b.draw_order,
       );
     },
 

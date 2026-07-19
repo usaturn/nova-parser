@@ -2802,3 +2802,46 @@ require("./src/nova_parser/regional_ocr/static/app.js");
 });
 """,
     )
+
+
+def test_sync_undone_matches_server_codepoint_order() -> None:
+    """大文字小文字混在の画像名でもサーバ（Python sorted = codepoint 順）と同じ並びになる。"""
+    _run_node(
+        r"""
+const assert = require("node:assert/strict");
+
+global.window = {};
+
+require("./src/nova_parser/regional_ocr/static/app.js");
+
+const app = window.regionalOcrApp();
+app.currentImage = { name: "a.png", width: 100, height: 100, mime: "image/png" };
+app.session = {
+  image_name: "a.png",
+  image_width: 100,
+  image_height: 100,
+  schema_version: 1,
+  regions: [
+    {
+      rectangle: { rect_id: "r1", draw_order: 0, x: 0, y: 0, width: 30, height: 30 },
+      text: null,
+      ocr_status: "pending",
+      ocr_error: null,
+      ocr_completed_at: null,
+    },
+  ],
+};
+app.undoneItems = [
+  { image_name: "B.png", rect_id: "b0", draw_order: 0, ocr_status: "pending", ocr_error: null },
+];
+
+app._syncUndoneForCurrentImage();
+
+// Python の sorted(["B.png", "a.png"]) は ["B.png", "a.png"]（codepoint 順: "B" < "a"）
+assert.deepEqual(
+  app.undoneItems.map((i) => i.image_name),
+  ["B.png", "a.png"],
+  "サーバの codepoint 順と一致させる（localeCompare は a < B になり食い違う）",
+);
+""",
+    )
