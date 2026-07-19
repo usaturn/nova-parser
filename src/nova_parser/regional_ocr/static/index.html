@@ -137,11 +137,18 @@
             <div class="actions">
               <span class="badge undone-count" x-text="undoneItems.length + ' 件'"></span>
               <button type="button" @click="refreshUndone()" :disabled="undoneLoading">更新</button>
-              <button type="button" @click="runUndoneOcr()" :disabled="batchRunning || !undoneItems.length">
+              <button
+                type="button"
+                @click="runUndoneOcr()"
+                :disabled="batchRunning || !undoneItems.length || undoneBlocked"
+              >
                 未 OCR を一括実行
               </button>
               <button type="button" @click="cancelBatch()" x-show="batchRunning">中止</button>
             </div>
+            <p class="muted" x-show="undoneBlocked">
+              stem 衝突があるため一括実行できません。警告に表示された同名（拡張子違い）の画像を解消してください
+            </p>
             <p class="muted" x-show="!undoneItems.length">未 OCR のリージョンはありません</p>
             <ul class="undone-list">
               <template x-for="item in undoneItems" :key="item.image_name + ':' + item.rect_id">

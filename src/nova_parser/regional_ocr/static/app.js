@@ -119,6 +119,7 @@ function regionalOcrApp() {
     _blocksEpoch: 0,
     undoneItems: [],
     undoneLoading: false,
+    undoneBlocked: false,
 
     async init() {
       try {
@@ -509,6 +510,8 @@ function regionalOcrApp() {
       this.undoneLoading = true;
       try {
         const data = await api.getUndoneRegions();
+        // stem 衝突がある間は一括実行が必ず 409 になるため、ボタン無効化に使う
+        this.undoneBlocked = (data.warnings || []).length > 0;
         this.undoneItems = data.items;
         // サーバ応答は未保存の編集（debounce / PUT 実行中）を含まないため、
         // 現在画像分はローカル session を真実として重ね直す
@@ -759,6 +762,9 @@ function regionalOcrApp() {
       } catch (err) {
         if (err.name !== "AbortError") {
           console.error(err);
+          // 409（stem 衝突）等の開始失敗が無言にならないよう警告帯へ通知する
+          const msg = `一括 OCR の開始に失敗: ${err.message}`;
+          if (!this.warnings.includes(msg)) this.warnings = [...this.warnings, msg];
         }
       } finally {
         this.batchRunning = false;

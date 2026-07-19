@@ -2658,3 +2658,102 @@ require("./src/nova_parser/regional_ocr/static/app.js");
 });
 """,
     )
+
+
+def test_run_batch_ocr_appends_warning_when_stream_returns_409() -> None:
+    """バッチ SSE が 409 等で開始できなかったとき、warnings に失敗メッセージを追記する。"""
+    _run_node(
+        r"""
+const assert = require("node:assert/strict");
+
+global.window = {};
+
+const calls = [];
+
+global.fetch = (url, options = {}) => {
+  if (url.startsWith("/api/ocr/batch/stream")) {
+    calls.push("POST_BATCH");
+    return Promise.resolve({ ok: false, status: 409 });
+  }
+  if (url === "/api/regions/undone") {
+    calls.push("GET_UNDONE");
+    return Promise.resolve({
+      ok: true,
+      json: async () => ({
+        items: [
+          { image_name: "a.png", rect_id: "r1", draw_order: 0, ocr_status: "pending", ocr_error: null },
+        ],
+        warnings: ["stem collision: foo.png, foo.webp"],
+      }),
+    });
+  }
+  throw new Error(`unexpected fetch: ${url}`);
+};
+
+require("./src/nova_parser/regional_ocr/static/app.js");
+
+(async () => {
+  const app = window.regionalOcrApp();
+
+  await app.runBatchOcr(true);
+
+  assert.ok(
+    app.warnings.some((w) => w.includes("一括 OCR の開始に失敗: batch stream failed: 409")),
+    `409 失敗が warnings に載る (actual: ${JSON.stringify(app.warnings)})`,
+  );
+  assert.equal(app.batchRunning, false);
+  assert.deepEqual(calls, ["POST_BATCH", "GET_UNDONE"], "終了時の一覧再取得は従来どおり行う");
+
+  // 同じ失敗を繰り返しても警告は重複しない
+  await app.runBatchOcr(true);
+  const hits = app.warnings.filter((w) => w.includes("一括 OCR の開始に失敗"));
+  assert.equal(hits.length, 1, "同文言の警告は重複追加しない");
+})().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
+""",
+    )
+
+
+def test_refresh_undone_sets_undone_blocked_flag_from_warnings() -> None:
+    """undone 応答の warnings 有無で undoneBlocked が切り替わる。"""
+    _run_node(
+        r"""
+const assert = require("node:assert/strict");
+
+global.window = {};
+
+let withWarnings = true;
+
+global.fetch = (url) => {
+  if (url === "/api/regions/undone") {
+    return Promise.resolve({
+      ok: true,
+      json: async () => ({
+        items: [],
+        warnings: withWarnings ? ["stem collision: foo.png, foo.webp"] : [],
+      }),
+    });
+  }
+  throw new Error(`unexpected fetch: ${url}`);
+};
+
+require("./src/nova_parser/regional_ocr/static/app.js");
+
+(async () => {
+  const app = window.regionalOcrApp();
+  assert.equal(app.undoneBlocked, false, "初期値は false");
+
+  await app.refreshUndone();
+  assert.equal(app.undoneBlocked, true, "stem 衝突警告があれば true");
+
+  withWarnings = false;
+  await app.refreshUndone();
+  assert.equal(app.undoneBlocked, false, "警告が解消されたら false に戻る");
+})().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
+""",
+    )
