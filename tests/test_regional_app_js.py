@@ -2333,3 +2333,121 @@ require("./src/nova_parser/regional_ocr/static/app.js");
 });
 """,
     )
+
+
+def test_run_undone_ocr_drains_saves_then_streams_with_include_errors() -> None:
+    """runUndoneOcr は保存 drain（PUT 完了）後に include_errors=true で SSE を開始し、終了時に一覧を再取得する。"""
+    _run_node(
+        r"""
+const assert = require("node:assert/strict");
+
+global.window = {};
+
+const calls = [];
+
+function sseResponse(payloads) {
+  const encoder = new TextEncoder();
+  const chunks = payloads.map((p) => encoder.encode(`data: ${JSON.stringify(p)}\n\n`));
+  let i = 0;
+  return {
+    ok: true,
+    body: {
+      getReader: () => ({
+        read: async () =>
+          i < chunks.length ? { value: chunks[i++], done: false } : { value: undefined, done: true },
+        releaseLock: () => {},
+      }),
+    },
+  };
+}
+
+global.fetch = (url, options = {}) => {
+  if (options.method === "PUT") {
+    calls.push("PUT");
+    return Promise.resolve({ ok: true, json: async () => JSON.parse(options.body) });
+  }
+  if (url.startsWith("/api/ocr/batch/stream")) {
+    calls.push(`POST ${url}`);
+    return Promise.resolve(
+      sseResponse([{ image_name: "a.png", rect_id: "r1", status: "done", text: "T" }]),
+    );
+  }
+  if (url === "/api/regions/undone") {
+    calls.push("GET_UNDONE");
+    return Promise.resolve({ ok: true, json: async () => ({ items: [], warnings: [] }) });
+  }
+  throw new Error(`unexpected fetch: ${url}`);
+};
+
+require("./src/nova_parser/regional_ocr/static/app.js");
+
+(async () => {
+  const app = window.regionalOcrApp();
+  app.currentImage = { name: "a.png", width: 100, height: 100, mime: "image/png" };
+  app.session = {
+    image_name: "a.png",
+    image_width: 100,
+    image_height: 100,
+    schema_version: 1,
+    regions: [
+      {
+        rectangle: { rect_id: "r1", draw_order: 0, x: 0, y: 0, width: 30, height: 30 },
+        text: null,
+        ocr_status: "pending",
+        ocr_error: null,
+        ocr_completed_at: null,
+      },
+    ],
+  };
+  app.undoneItems = [
+    { image_name: "a.png", rect_id: "r1", draw_order: 0, ocr_status: "pending", ocr_error: null },
+  ];
+  // debounce 中の未保存編集を再現する
+  app.scheduleSave();
+
+  await app.runUndoneOcr();
+
+  assert.equal(calls[0], "PUT", "SSE 開始前に未保存分が flush される");
+  assert.ok(
+    calls[1] === "POST /api/ocr/batch/stream?include_errors=true",
+    `include_errors=true で呼ぶこと (actual: ${calls[1]})`,
+  );
+  assert.equal(calls[2], "GET_UNDONE", "終了時に一覧を再取得する");
+  assert.deepEqual(app.undoneItems, []);
+  assert.equal(app.session.regions[0].ocr_status, "done", "現在画像の表示にも反映される");
+})().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
+""",
+    )
+
+
+def test_apply_undone_from_batch_item_removes_done_and_updates_error() -> None:
+    """SSE item の done は行削除、error はバッジとメッセージを更新する。"""
+    _run_node(
+        r"""
+const assert = require("node:assert/strict");
+
+global.window = {};
+
+require("./src/nova_parser/regional_ocr/static/app.js");
+
+const app = window.regionalOcrApp();
+app.undoneItems = [
+  { image_name: "a.png", rect_id: "r1", draw_order: 0, ocr_status: "pending", ocr_error: null },
+  { image_name: "a.png", rect_id: "r2", draw_order: 1, ocr_status: "pending", ocr_error: null },
+];
+
+app._applyUndoneFromBatchItem({ image_name: "a.png", rect_id: "r1", status: "done", text: "T" });
+assert.deepEqual(
+  app.undoneItems.map((i) => i.rect_id),
+  ["r2"],
+  "done の行は削除される",
+);
+
+app._applyUndoneFromBatchItem({ image_name: "a.png", rect_id: "r2", status: "error", error: "boom" });
+assert.equal(app.undoneItems[0].ocr_status, "error");
+assert.equal(app.undoneItems[0].ocr_error, "boom");
+""",
+    )

@@ -43,8 +43,9 @@ const api = {
     if (!r.ok) throw new Error(`POST /api/ocr/${name}/${rectId} failed: ${r.status}`);
     return r.json();
   },
-  ocrBatchStream(signal) {
-    return fetch("/api/ocr/batch/stream", { method: "POST", signal });
+  ocrBatchStream(signal, includeErrors = false) {
+    const url = includeErrors ? "/api/ocr/batch/stream?include_errors=true" : "/api/ocr/batch/stream";
+    return fetch(url, { method: "POST", signal });
   },
 };
 
@@ -137,16 +138,43 @@ function regionalOcrApp() {
       // バッチ OCR は save の await を待たず即時停止（SSE 接続を切断）
       this.cancelBatch();
 
-      // 旧画像の保存を完全に drain してから image switch に進む。
+      await this._drainSaves();
+
+      this.selectedRectId = null;
+      this.imgLoaded = false;
+      this.draftRect = null;
+      this.paragraphBlocks = null;
+      this.verticalBlocks = null;
+      this.hoverBlock = null;
+      this._blocksEpoch += 1;
+      try {
+        const meta = await api.getImageMeta(name);
+        this.currentImage = {
+          name,
+          width: meta.image_width,
+          height: meta.image_height,
+          mime: meta.mime_type,
+        };
+        this.session = await api.getSession(name);
+        if (this.blockMode) this._ensureBlocks();
+      } catch (err) {
+        console.error(err);
+        this.currentImage = null;
+        this.session = null;
+        this.warnings = [`画像のロードに失敗: ${err.message}`];
+      }
+    },
+
+    async _drainSaves() {
+      // 保存を完全に drain する（selectImage / runUndoneOcr の両方から呼ぶ）。
       //
       // ループにする理由:
       //   - await 中はマイクロタスク境界が挟まり、user の edit や既存 saveTimer の
       //     fire が走り得る。これらは新たな saveTimer / inFlightSave を発生させる。
       //   - 1 回だけ flush + await で済ませると、await 直後に発生した新 save が drain
-      //     されず、selectImage がそのまま image switch を始めてしまう（"old-image
-      //     debounce dropped" 状態）。
+      //     されず、呼び出し元がそのまま次の処理を始めてしまう。
       //   - while で saveTimer と inFlightSave が両方 null になるまで drain することで、
-      //     image switch 直前の時点で旧画像の autosave が完全に backend に反映される。
+      //     次の処理の直前の時点で autosave が完全に backend に反映される。
       //
       // pending snapshot capture を await 前に行う点も維持:
       //   - 後続の await 中に古い PUT response が _performSave 内で
@@ -186,30 +214,6 @@ function regionalOcrApp() {
         }
       }
       this.savingState = "idle";
-
-      this.selectedRectId = null;
-      this.imgLoaded = false;
-      this.draftRect = null;
-      this.paragraphBlocks = null;
-      this.verticalBlocks = null;
-      this.hoverBlock = null;
-      this._blocksEpoch += 1;
-      try {
-        const meta = await api.getImageMeta(name);
-        this.currentImage = {
-          name,
-          width: meta.image_width,
-          height: meta.image_height,
-          mime: meta.mime_type,
-        };
-        this.session = await api.getSession(name);
-        if (this.blockMode) this._ensureBlocks();
-      } catch (err) {
-        console.error(err);
-        this.currentImage = null;
-        this.session = null;
-        this.warnings = [`画像のロードに失敗: ${err.message}`];
-      }
     },
 
     onImageLoad(event) {
@@ -703,14 +707,14 @@ function regionalOcrApp() {
       }
     },
 
-    async runBatchOcr() {
+    async runBatchOcr(includeErrors = false) {
       if (this.batchRunning) return;
       this.batchRunning = true;
       this.ocrLog = [];
       const controller = new AbortController();
       this.sseController = controller;
       try {
-        const resp = await api.ocrBatchStream(controller.signal);
+        const resp = await api.ocrBatchStream(controller.signal, includeErrors);
         if (!resp.ok || !resp.body) {
           throw new Error(`batch stream failed: ${resp.status}`);
         }
@@ -752,7 +756,16 @@ function regionalOcrApp() {
       } finally {
         this.batchRunning = false;
         this.sseController = null;
+        // 正常・中止・エラーいずれもサーバの実状態へ揃える
+        await this.refreshUndone();
       }
+    },
+
+    async runUndoneOcr() {
+      if (this.batchRunning || !this.undoneItems.length) return;
+      // ブロッククリック直後の未保存 pending を確実にサーバへ反映してから実行する
+      await this._drainSaves();
+      await this.runBatchOcr(true);
     },
 
     cancelBatch() {
@@ -763,6 +776,7 @@ function regionalOcrApp() {
     },
 
     applyOcrItem(item) {
+      this._applyUndoneFromBatchItem(item);
       this.ocrLog.push(item);
       if (this.ocrLog.length > 50) this.ocrLog.shift();
       if (!this.session || !this.currentImage) return;
@@ -777,6 +791,20 @@ function regionalOcrApp() {
         ocr_error: item.error ?? null,
         ocr_completed_at: new Date().toISOString(),
       };
+    },
+
+    _applyUndoneFromBatchItem(item) {
+      if (item.status === "done") {
+        this.undoneItems = this.undoneItems.filter(
+          (i) => !(i.image_name === item.image_name && i.rect_id === item.rect_id),
+        );
+        return;
+      }
+      this.undoneItems = this.undoneItems.map((i) =>
+        i.image_name === item.image_name && i.rect_id === item.rect_id
+          ? { ...i, ocr_status: "error", ocr_error: item.error ?? null }
+          : i,
+      );
     },
   };
 }

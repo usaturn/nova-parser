@@ -385,3 +385,16 @@ def test_index_html_contains_undone_panel_markup(tmp_path):
     assert "未 OCR（全画像）" in body
     assert "refreshUndone()" in body
     assert "jumpToUndone(item)" in body
+
+
+def test_index_html_contains_undone_bulk_run_button(tmp_path):
+    """index.html に未 OCR 一括実行ボタンが含まれる。"""
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    output_dir = tmp_path / "output"
+
+    client = _make_client(image_dir, output_dir, _simple_factory(FakeVisionClient()))
+    body = client.get("/").text
+
+    assert "runUndoneOcr()" in body
+    assert "未 OCR を一括実行" in body
