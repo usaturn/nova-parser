@@ -202,9 +202,8 @@ def build_router() -> APIRouter:
         def _generate() -> Iterator[str]:
             for image_name in listing.images:
                 path = resolve_image(state.image_dir, image_name)
-                with Image.open(path) as raw:
-                    width, height = raw.size
                 image = open_pil(path)
+                width, height = image.size
                 session = load_session(state.output_dir, image_name, image_width=width, image_height=height)
                 targets = sorted(
                     [
@@ -254,15 +253,14 @@ def build_router() -> APIRouter:
     @router.post("/api/ocr/{name}/{rect_id}", response_model=RegionRecord)
     def api_ocr_single(name: str, rect_id: str, state: AppStateDep) -> RegionRecord:
         path = resolve_image(state.image_dir, name)
-        with Image.open(path) as raw:
-            width, height = raw.size
+        image = open_pil(path)
+        width, height = image.size
         session = load_session(state.output_dir, name, image_width=width, image_height=height)
         target = next((r for r in session.regions if r.rectangle.rect_id == rect_id), None)
         if target is None:
             raise RegionNotFoundError(f"rect_id が見つかりません: {rect_id}")
 
         client = state.vision_client_factory()
-        image = open_pil(path)
         try:
             text = ocr_rectangle(client, image, target.rectangle, language_hints=state.language_hints)
             updated = RegionRecord(

@@ -1399,3 +1399,94 @@ def test_get_regions_undone_skips_image_open_for_sessionless_images(tmp_path, mo
     assert all("nosess" not in p for p in opened), (
         f"セッション JSON が無い画像をオープンしてはいけない (opened: {opened})"
     )
+
+
+# ---------------------------------------------------------------------------
+# OCR 系エンドポイントの画像オープン回数（レビュー修正 gemini I-1）
+# ---------------------------------------------------------------------------
+
+
+def _count_pil_opens(monkeypatch):
+    """PIL.Image.open をラップして呼び出しパスを記録するリストを返す。"""
+    from PIL import Image as PILImage
+
+    opened: list[str] = []
+    real_open = PILImage.open
+
+    def counting_open(fp, *args, **kwargs):
+        opened.append(str(fp))
+        return real_open(fp, *args, **kwargs)
+
+    monkeypatch.setattr(PILImage, "open", counting_open)
+    return opened
+
+
+def test_post_ocr_batch_stream_opens_image_file_only_once(tmp_path, monkeypatch):
+    """バッチ OCR は 1 画像につき画像ファイルを 1 回だけオープンする。"""
+    from nova_parser.regional_ocr.models import ImageSession, Rectangle, RegionRecord
+    from nova_parser.regional_ocr.sessions import save_session
+
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "img.png")
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    save_session(
+        ImageSession(
+            image_name="img.png",
+            image_width=100,
+            image_height=100,
+            regions=[
+                RegionRecord(
+                    rectangle=Rectangle(rect_id="r1", draw_order=0, x=0, y=0, width=50, height=50),
+                    ocr_status="pending",
+                ),
+            ],
+        ),
+        output_dir,
+    )
+    client = _make_client(image_dir, output_dir, _simple_factory(FakeVisionClient(_FakeResponse(text="T"))))
+    opened = _count_pil_opens(monkeypatch)
+
+    with client.stream("POST", "/api/ocr/batch/stream") as resp:
+        assert resp.status_code == 200
+        list(resp.iter_lines())
+
+    img_opens = [p for p in opened if p.endswith("img.png")]
+    assert len(img_opens) == 1, f"画像ファイルは 1 回だけオープンする (actual: {len(img_opens)})"
+
+
+def test_post_ocr_single_opens_image_file_only_once(tmp_path, monkeypatch):
+    """単発 OCR も画像ファイルを 1 回だけオープンする。"""
+    from nova_parser.regional_ocr.models import ImageSession, Rectangle, RegionRecord
+    from nova_parser.regional_ocr.sessions import save_session
+
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "img.png")
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    save_session(
+        ImageSession(
+            image_name="img.png",
+            image_width=100,
+            image_height=100,
+            regions=[
+                RegionRecord(
+                    rectangle=Rectangle(rect_id="r1", draw_order=0, x=0, y=0, width=50, height=50),
+                    ocr_status="pending",
+                ),
+            ],
+        ),
+        output_dir,
+    )
+    client = _make_client(image_dir, output_dir, _simple_factory(FakeVisionClient(_FakeResponse(text="T"))))
+    opened = _count_pil_opens(monkeypatch)
+
+    resp = client.post("/api/ocr/img.png/r1")
+
+    assert resp.status_code == 200
+    img_opens = [p for p in opened if p.endswith("img.png")]
+    assert len(img_opens) == 1, f"画像ファイルは 1 回だけオープンする (actual: {len(img_opens)})"
