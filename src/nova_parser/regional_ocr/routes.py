@@ -160,35 +160,37 @@ def build_router() -> APIRouter:
         resolve_image(state.image_dir, name)
         if session.image_name != name:
             raise ValueError(f"URL の name ({name}) と body の image_name ({session.image_name}) が一致しません")
-        existing = load_session(
-            state.output_dir,
-            name,
-            image_width=session.image_width,
-            image_height=session.image_height,
-        )
-        existing_by_id = {r.rectangle.rect_id: r for r in existing.regions}
-        merged_regions: list[RegionRecord] = []
-        for incoming in session.regions:
-            prev = existing_by_id.get(incoming.rectangle.rect_id)
-            if prev is not None and prev.ocr_status == "done":
-                merged_regions.append(
-                    RegionRecord(
-                        rectangle=incoming.rectangle,
-                        text=prev.text,
-                        ocr_status="done",
-                        ocr_error=None,
-                        ocr_completed_at=prev.ocr_completed_at,
+        # バッチ／単発 OCR の保存と競合しないよう load→merge→save をロックで直列化
+        with state.session_lock:
+            existing = load_session(
+                state.output_dir,
+                name,
+                image_width=session.image_width,
+                image_height=session.image_height,
+            )
+            existing_by_id = {r.rectangle.rect_id: r for r in existing.regions}
+            merged_regions: list[RegionRecord] = []
+            for incoming in session.regions:
+                prev = existing_by_id.get(incoming.rectangle.rect_id)
+                if prev is not None and prev.ocr_status == "done":
+                    merged_regions.append(
+                        RegionRecord(
+                            rectangle=incoming.rectangle,
+                            text=prev.text,
+                            ocr_status="done",
+                            ocr_error=None,
+                            ocr_completed_at=prev.ocr_completed_at,
+                        )
                     )
-                )
-            else:
-                merged_regions.append(incoming)
-        merged = ImageSession(
-            image_name=session.image_name,
-            image_width=session.image_width,
-            image_height=session.image_height,
-            regions=merged_regions,
-        )
-        save_session(merged, state.output_dir)
+                else:
+                    merged_regions.append(incoming)
+            merged = ImageSession(
+                image_name=session.image_name,
+                image_width=session.image_width,
+                image_height=session.image_height,
+                regions=merged_regions,
+            )
+            save_session(merged, state.output_dir)
         return merged
 
     @router.post("/api/ocr/batch/stream")
@@ -243,9 +245,18 @@ def build_router() -> APIRouter:
                             status="error",
                             error=str(exc),
                         )
-                    session = upsert_region(session, updated)
-                    save_session(session, state.output_dir)
-                    write_markdown(session, state.output_dir, Path(image_name).stem)
+                    # OCR（外部 API 呼び出し）中の並行編集を失わないよう、保存直前に
+                    # 最新セッションをロック内で再ロードして反映する。rect_id が消えて
+                    # いればユーザーの削除を尊重し、保存も SSE 配信もスキップする
+                    # （クライアントは終了時の一覧再取得で整合する）
+                    rect_id = target.rectangle.rect_id
+                    with state.session_lock:
+                        session = load_session(state.output_dir, image_name, image_width=width, image_height=height)
+                        if all(r.rectangle.rect_id != rect_id for r in session.regions):
+                            continue
+                        session = upsert_region(session, updated)
+                        save_session(session, state.output_dir)
+                        write_markdown(session, state.output_dir, Path(image_name).stem)
                     yield f"data: {item.model_dump_json()}\n\n"
 
         return StreamingResponse(_generate(), media_type="text/event-stream")
