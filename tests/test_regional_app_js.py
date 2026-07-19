@@ -2519,3 +2519,142 @@ require("./src/nova_parser/regional_ocr/static/app.js");
 });
 """,
     )
+
+
+def test_refresh_undone_keeps_unsaved_pending_rows_of_current_image() -> None:
+    """debounce 中に「更新」しても現在画像の pending 行が消えず、保存成功後も残る。"""
+    _run_node(
+        r"""
+const assert = require("node:assert/strict");
+
+global.window = {};
+
+global.fetch = (url, options = {}) => {
+  if (options.method === "PUT") {
+    return Promise.resolve({ ok: true, json: async () => JSON.parse(options.body) });
+  }
+  if (url === "/api/regions/undone") {
+    // サーバはまだ現在画像の新規 pending を知らない
+    return Promise.resolve({
+      ok: true,
+      json: async () => ({
+        items: [
+          { image_name: "b.png", rect_id: "b0", draw_order: 0, ocr_status: "pending", ocr_error: null },
+        ],
+        warnings: [],
+      }),
+    });
+  }
+  throw new Error(`unexpected fetch: ${url}`);
+};
+
+require("./src/nova_parser/regional_ocr/static/app.js");
+
+(async () => {
+  const app = window.regionalOcrApp();
+  app.currentImage = { name: "a.png", width: 100, height: 100, mime: "image/png" };
+  app.session = {
+    image_name: "a.png",
+    image_width: 100,
+    image_height: 100,
+    schema_version: 1,
+    regions: [
+      {
+        rectangle: { rect_id: "r1", draw_order: 0, x: 0, y: 0, width: 30, height: 30 },
+        text: null,
+        ocr_status: "pending",
+        ocr_error: null,
+        ocr_completed_at: null,
+      },
+    ],
+  };
+  app.scheduleSave(); // debounce 中（サーバ未反映の編集がある状態）
+
+  await app.refreshUndone();
+
+  assert.deepEqual(
+    app.undoneItems.map((i) => `${i.image_name}:${i.rect_id}`),
+    ["a.png:r1", "b.png:b0"],
+    "サーバ未反映の現在画像 pending 行を失わない",
+  );
+
+  await app._drainSaves(); // その後の保存成功
+
+  assert.ok(
+    app.undoneItems.some((i) => i.image_name === "a.png" && i.rect_id === "r1"),
+    "保存成功後も現在画像の行が残る",
+  );
+})().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
+""",
+    )
+
+
+def test_refresh_undone_during_inflight_put_keeps_row_after_save_completes() -> None:
+    """PUT 実行中に「更新」しても現在画像の pending 行が消えず、保存完了後も残る。"""
+    _run_node(
+        r"""
+const assert = require("node:assert/strict");
+
+global.window = {};
+
+const putResolvers = [];
+
+global.fetch = (url, options = {}) => {
+  if (options.method === "PUT") {
+    return new Promise((resolve) => {
+      putResolvers.push(() => resolve({ ok: true, json: async () => JSON.parse(options.body) }));
+    });
+  }
+  if (url === "/api/regions/undone") {
+    // サーバはまだ保存中の pending を知らない
+    return Promise.resolve({ ok: true, json: async () => ({ items: [], warnings: [] }) });
+  }
+  throw new Error(`unexpected fetch: ${url}`);
+};
+
+require("./src/nova_parser/regional_ocr/static/app.js");
+
+(async () => {
+  const app = window.regionalOcrApp();
+  app.currentImage = { name: "a.png", width: 100, height: 100, mime: "image/png" };
+  app.session = {
+    image_name: "a.png",
+    image_width: 100,
+    image_height: 100,
+    schema_version: 1,
+    regions: [
+      {
+        rectangle: { rect_id: "r1", draw_order: 0, x: 0, y: 0, width: 30, height: 30 },
+        text: null,
+        ocr_status: "pending",
+        ocr_error: null,
+        ocr_completed_at: null,
+      },
+    ],
+  };
+  app.saveVersion = 1;
+  app._launchSave("a.png", JSON.parse(JSON.stringify(app.session)), 1); // PUT 実行中の状態を作る
+
+  await app.refreshUndone();
+
+  assert.ok(
+    app.undoneItems.some((i) => i.image_name === "a.png" && i.rect_id === "r1"),
+    "PUT 実行中の更新でも現在画像の行を失わない",
+  );
+
+  putResolvers.shift()(); // PUT 完了（保存成功）
+  await app._drainSaves();
+
+  assert.ok(
+    app.undoneItems.some((i) => i.image_name === "a.png" && i.rect_id === "r1"),
+    "保存成功後も行が残る",
+  );
+})().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
+""",
+    )

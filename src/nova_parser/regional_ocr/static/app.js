@@ -510,6 +510,9 @@ function regionalOcrApp() {
       try {
         const data = await api.getUndoneRegions();
         this.undoneItems = data.items;
+        // サーバ応答は未保存の編集（debounce / PUT 実行中）を含まないため、
+        // 現在画像分はローカル session を真実として重ね直す
+        this._syncUndoneForCurrentImage();
         for (const w of data.warnings || []) {
           if (!this.warnings.includes(w)) this.warnings = [...this.warnings, w];
         }
