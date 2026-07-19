@@ -1152,6 +1152,7 @@ const app = newApp({
 
 
 def test_run_single_ocr_swallows_error_and_keeps_session_intact() -> None:
+    """単発 OCR 失敗時は session を触らず、warnings に失敗を追記する。"""
     _run_node_inline(
         r"""
 global.fetch = () => Promise.resolve({ ok: false, status: 500, json: async () => ({}) });
@@ -1159,10 +1160,47 @@ console.error = () => {};
 const app = newApp({
   currentImage: { name: "a.png", width: 100, height: 100 },
   session: sessionPayload("a.png", ["r0"]),
+  warnings: [],
 });
 (async () => {
   await app.runSingleOcr("r0");
   assert.equal(app.session.regions[0].ocr_status, "pending", "session must remain untouched on failure");
+  assert.ok(
+    app.warnings.some((w) => w.includes("a.png") && w.includes("OCR に失敗")),
+    `warnings に失敗が載る (actual: ${JSON.stringify(app.warnings)})`,
+  );
+  assert.match(app.warnings[0], /failed: 500/);
+})().catch((err) => { console.error(err); process.exit(1); });
+"""
+    )
+
+
+def test_run_single_ocr_appends_warning_on_409_geometry_changed() -> None:
+    """OCR 中の形状変更で 409 が返ったとき、warnings に通知しリージョンは pending のまま。"""
+    _run_node_inline(
+        r"""
+global.fetch = () => Promise.resolve({ ok: false, status: 409, json: async () => ({}) });
+console.error = () => {};
+const app = newApp({
+  currentImage: { name: "a.png", width: 100, height: 100 },
+  session: sessionPayload("a.png", ["r0"]),
+  warnings: [],
+});
+(async () => {
+  await app.runSingleOcr("r0");
+  assert.equal(app.session.regions[0].ocr_status, "pending");
+  assert.equal(app.session.regions[0].text, null);
+  assert.ok(
+    app.warnings.some((w) =>
+      w.includes("「a.png」の OCR に失敗しました") && w.includes("failed: 409"),
+    ),
+    `409 が warnings に載る (actual: ${JSON.stringify(app.warnings)})`,
+  );
+
+  // 同文言の重複追加をしない
+  await app.runSingleOcr("r0");
+  const hits = app.warnings.filter((w) => w.includes("OCR に失敗"));
+  assert.equal(hits.length, 1, "同文言の警告は重複追加しない");
 })().catch((err) => { console.error(err); process.exit(1); });
 """
     )

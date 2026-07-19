@@ -723,6 +723,12 @@ function regionalOcrApp() {
         this._syncUndoneForCurrentImage();
       } catch (err) {
         console.error(err);
+        if (!this.currentImage) return;
+        const message = err?.message ?? String(err);
+        const msg = `「${this.currentImage.name}」の OCR に失敗しました: ${message}`;
+        if (!this.warnings.includes(msg)) {
+          this.warnings = [...this.warnings, msg];
+        }
       }
     },
 
