@@ -2451,3 +2451,71 @@ assert.equal(app.undoneItems[0].ocr_status, "error");
 assert.equal(app.undoneItems[0].ocr_error, "boom");
 """,
     )
+
+
+def test_run_undone_ocr_does_not_start_batch_when_save_fails() -> None:
+    """保存 drain が失敗したら一括 OCR を開始せず、error 状態と一覧の行を維持する。"""
+    _run_node(
+        r"""
+const assert = require("node:assert/strict");
+
+global.window = {};
+
+const calls = [];
+
+global.fetch = (url, options = {}) => {
+  if (options.method === "PUT") {
+    calls.push("PUT");
+    return Promise.resolve({ ok: false, status: 500 });
+  }
+  if (url.startsWith("/api/ocr/batch/stream")) {
+    calls.push("POST_BATCH");
+    throw new Error("保存失敗時にバッチを開始してはいけない");
+  }
+  if (url === "/api/regions/undone") {
+    calls.push("GET_UNDONE");
+    return Promise.resolve({ ok: true, json: async () => ({ items: [], warnings: [] }) });
+  }
+  throw new Error(`unexpected fetch: ${url}`);
+};
+
+require("./src/nova_parser/regional_ocr/static/app.js");
+
+(async () => {
+  const app = window.regionalOcrApp();
+  app.currentImage = { name: "a.png", width: 100, height: 100, mime: "image/png" };
+  app.session = {
+    image_name: "a.png",
+    image_width: 100,
+    image_height: 100,
+    schema_version: 1,
+    regions: [
+      {
+        rectangle: { rect_id: "r1", draw_order: 0, x: 0, y: 0, width: 30, height: 30 },
+        text: null,
+        ocr_status: "pending",
+        ocr_error: null,
+        ocr_completed_at: null,
+      },
+    ],
+  };
+  app.undoneItems = [
+    { image_name: "a.png", rect_id: "r1", draw_order: 0, ocr_status: "pending", ocr_error: null },
+  ];
+  app.scheduleSave();
+
+  await app.runUndoneOcr();
+
+  assert.deepEqual(calls, ["PUT"], "PUT 失敗後はバッチ SSE も一覧再取得も行わない");
+  assert.equal(app.savingState, "error", "保存失敗の error 表示を維持する");
+  assert.equal(app.undoneItems.length, 1, "未 OCR 行を消さない");
+  assert.ok(
+    app.warnings.some((w) => w.includes("保存に失敗したため一括 OCR を中止しました")),
+    `中止理由の警告が追加される (actual: ${JSON.stringify(app.warnings)})`,
+  );
+})().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
+""",
+    )

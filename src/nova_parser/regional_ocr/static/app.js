@@ -180,6 +180,7 @@ function regionalOcrApp() {
       //   - 後続の await 中に古い PUT response が _performSave 内で
       //     this.session = saved を実行しても、capture 済み snapshot は影響を受けない。
       //   - saveVersion を進めることで、自分が "最新世代の save" として扱われる。
+      let allOk = true;
       while (this.saveTimer || this.inFlightSave) {
         let pendingFlush = null;
         if (this.saveTimer && this.session && this.currentImage) {
@@ -210,10 +211,13 @@ function regionalOcrApp() {
           : this.inFlightSave;
 
         if (waitFor) {
-          await waitFor;
+          const result = await waitFor;
+          if (result && !result.ok) allOk = false;
         }
       }
-      this.savingState = "idle";
+      // 失敗があった場合は error 表示を維持する（無条件の idle 化は失敗を隠す）
+      this.savingState = allOk ? "idle" : "error";
+      return allOk;
     },
 
     onImageLoad(event) {
@@ -763,8 +767,15 @@ function regionalOcrApp() {
 
     async runUndoneOcr() {
       if (this.batchRunning || !this.undoneItems.length) return;
-      // ブロッククリック直後の未保存 pending を確実にサーバへ反映してから実行する
-      await this._drainSaves();
+      // ブロッククリック直後の未保存 pending を確実にサーバへ反映してから実行する。
+      // 保存に失敗したままバッチを開始すると、未保存リージョンが対象から漏れた上に
+      // 終了時の一覧再取得で行ごと消えるため、失敗時は開始しない
+      const saved = await this._drainSaves();
+      if (!saved) {
+        const msg = "保存に失敗したため一括 OCR を中止しました";
+        if (!this.warnings.includes(msg)) this.warnings = [...this.warnings, msg];
+        return;
+      }
       await this.runBatchOcr(true);
     },
 
