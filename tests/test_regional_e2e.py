@@ -398,3 +398,88 @@ def test_index_html_contains_undone_bulk_run_button(tmp_path):
 
     assert "runUndoneOcr()" in body
     assert "未 OCR を一括実行" in body
+
+
+# ---------------------------------------------------------------------------
+# 未 OCR 一覧 → include_errors=true 一括実行 のフルパス
+# ---------------------------------------------------------------------------
+
+
+def test_undone_list_then_bulk_run_completes_all_regions(tmp_path):
+    """複数画像に pending + error を配置 → 一覧列挙 → include_errors=true で一括実行 → 全件 done → 一覧空。"""
+    from nova_parser.regional_ocr.models import ImageSession, Rectangle, RegionRecord
+    from nova_parser.regional_ocr.sessions import save_session
+
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "a.png")
+    _write_png(image_dir / "b.png")
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    save_session(
+        ImageSession(
+            image_name="a.png",
+            image_width=100,
+            image_height=100,
+            regions=[
+                RegionRecord(
+                    rectangle=Rectangle(rect_id="a0", draw_order=0, x=0, y=0, width=40, height=40),
+                    ocr_status="pending",
+                ),
+                RegionRecord(
+                    rectangle=Rectangle(rect_id="a1", draw_order=1, x=50, y=0, width=40, height=40),
+                    ocr_status="error",
+                    ocr_error="quota exceeded",
+                ),
+            ],
+        ),
+        output_dir,
+    )
+    save_session(
+        ImageSession(
+            image_name="b.png",
+            image_width=100,
+            image_height=100,
+            regions=[
+                RegionRecord(
+                    rectangle=Rectangle(rect_id="b0", draw_order=0, x=0, y=0, width=40, height=40),
+                    ocr_status="pending",
+                ),
+                RegionRecord(
+                    rectangle=Rectangle(rect_id="b1", draw_order=1, x=50, y=0, width=40, height=40),
+                    text="済み",
+                    ocr_status="done",
+                ),
+            ],
+        ),
+        output_dir,
+    )
+
+    fake = FakeVisionClient([_FakeResponse(text="A0"), _FakeResponse(text="A1"), _FakeResponse(text="B0")])
+    client = _make_client(image_dir, output_dir, _simple_factory(fake))
+
+    # 1. 未 OCR 一覧: done (b1) を除く 3 件が画像名順 → draw_order 順で返る
+    resp = client.get("/api/regions/undone")
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    assert [(i["image_name"], i["rect_id"], i["ocr_status"]) for i in items] == [
+        ("a.png", "a0", "pending"),
+        ("a.png", "a1", "error"),
+        ("b.png", "b0", "pending"),
+    ]
+
+    # 2. include_errors=true で一括実行: error の a1 も再試行され全 3 件 done
+    with client.stream("POST", "/api/ocr/batch/stream?include_errors=true") as sresp:
+        assert sresp.status_code == 200
+        lines = [line for line in sresp.iter_lines() if line.startswith("data: ")]
+    events = [json.loads(line[len("data: ") :]) for line in lines]
+    assert len(events) == 3
+    assert all(e["status"] == "done" for e in events)
+
+    # 3. 一覧が空になり、done テキストは保持される
+    resp = client.get("/api/regions/undone")
+    assert resp.json()["items"] == []
+    session_resp = client.get("/api/session/b.png")
+    by_id = {r["rectangle"]["rect_id"]: r for r in session_resp.json()["regions"]}
+    assert by_id["b1"]["text"] == "済み"
