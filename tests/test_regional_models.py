@@ -23,6 +23,8 @@ from nova_parser.regional_ocr.models import (
     ImageSession,
     Rectangle,
     RegionRecord,
+    UndoneRegionItem,
+    UndoneRegionsResponse,
 )
 
 # ---------------------------------------------------------------------------
@@ -241,3 +243,35 @@ def test_block_detection_response_extends_cache_model_with_vertical_blocks():
     assert resp.schema_version == 1
     # キャッシュモデル側には vertical_blocks が存在しない（保存対象外の保証）
     assert "vertical_blocks" not in BlockDetectionResult.model_fields
+
+
+# ---------------------------------------------------------------------------
+# UndoneRegionItem / UndoneRegionsResponse（未 OCR 一覧）
+# ---------------------------------------------------------------------------
+
+
+def test_undone_region_item_accepts_pending_status():
+    """UndoneRegionItem は ocr_status='pending' を受け付け、ocr_error は既定 None。"""
+    item = UndoneRegionItem(image_name="a.png", rect_id="r1", draw_order=0, ocr_status="pending")
+    assert item.ocr_status == "pending"
+    assert item.ocr_error is None
+
+
+def test_undone_region_item_accepts_error_status_with_message():
+    """UndoneRegionItem は ocr_status='error' と ocr_error メッセージを保持できる。"""
+    item = UndoneRegionItem(image_name="a.png", rect_id="r1", draw_order=1, ocr_status="error", ocr_error="boom")
+    assert item.ocr_status == "error"
+    assert item.ocr_error == "boom"
+
+
+def test_undone_region_item_rejects_done_status():
+    """UndoneRegionItem は ocr_status='done' を拒否する（未 OCR 専用モデル）。"""
+    with pytest.raises(ValidationError):
+        UndoneRegionItem(image_name="a.png", rect_id="r1", draw_order=0, ocr_status="done")
+
+
+def test_undone_regions_response_defaults_to_empty_warnings():
+    """UndoneRegionsResponse の warnings は既定で空リスト。"""
+    resp = UndoneRegionsResponse(items=[])
+    assert resp.items == []
+    assert resp.warnings == []

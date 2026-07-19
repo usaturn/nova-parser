@@ -146,3 +146,20 @@ class BatchOcrItemResult(BaseModel):
     status: Literal["done", "error"]
     text: str | None = None
     error: str | None = None
+
+
+class UndoneRegionItem(BaseModel):
+    """未 OCR リージョン一覧（GET /api/regions/undone）の 1 件分。"""
+
+    image_name: str = Field(min_length=1)
+    rect_id: str = Field(min_length=1)
+    draw_order: int = Field(ge=0)
+    ocr_status: Literal["pending", "error"]
+    ocr_error: str | None = None
+
+
+class UndoneRegionsResponse(BaseModel):
+    """GET /api/regions/undone のレスポンス。"""
+
+    items: list[UndoneRegionItem]
+    warnings: list[str] = Field(default_factory=list)
