@@ -2165,6 +2165,7 @@ require("./src/nova_parser/regional_ocr/static/app.js");
 """
     )
 
+
 def test_init_refreshes_undone_list_and_failure_appends_warning() -> None:
     """init() が未 OCR 一覧を取得して undoneItems を埋め、取得失敗時は warnings に追記して前回一覧を維持する。"""
     _run_node(
@@ -2751,6 +2752,50 @@ require("./src/nova_parser/regional_ocr/static/app.js");
   withWarnings = false;
   await app.refreshUndone();
   assert.equal(app.undoneBlocked, false, "警告が解消されたら false に戻る");
+})().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
+""",
+    )
+
+
+def test_jump_to_undone_ignores_other_image_rows_while_batch_running() -> None:
+    """一括実行中の別画像行クリックは画像切替も SSE 中止もしない。同一画像の行選択は機能する。"""
+    _run_node(
+        r"""
+const assert = require("node:assert/strict");
+
+global.window = {};
+
+global.fetch = () => {
+  throw new Error("一括実行中の行クリックで fetch してはいけない");
+};
+
+require("./src/nova_parser/regional_ocr/static/app.js");
+
+(async () => {
+  const app = window.regionalOcrApp();
+  app.currentImage = { name: "a.png", width: 100, height: 100, mime: "image/png" };
+  app.session = { image_name: "a.png", image_width: 100, image_height: 100, schema_version: 1, regions: [] };
+  app.batchRunning = true;
+  let aborted = false;
+  app.sseController = { abort: () => { aborted = true; } };
+
+  await app.jumpToUndone({
+    image_name: "b.png", rect_id: "b0", draw_order: 0, ocr_status: "pending", ocr_error: null,
+  });
+
+  assert.equal(aborted, false, "SSE を中止してはいけない");
+  assert.equal(app.currentImage.name, "a.png", "画像を切り替えてはいけない");
+  assert.equal(app.selectedRectId, null, "別画像の rect を選択状態にしない");
+
+  await app.jumpToUndone({
+    image_name: "a.png", rect_id: "r1", draw_order: 0, ocr_status: "pending", ocr_error: null,
+  });
+
+  assert.equal(app.selectedRectId, "r1", "同一画像の行選択は実行中も機能する");
+  assert.equal(aborted, false);
 })().catch((err) => {
   console.error(err);
   process.exit(1);

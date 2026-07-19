@@ -548,7 +548,11 @@ function regionalOcrApp() {
     },
 
     async jumpToUndone(item) {
-      if (!this.currentImage || this.currentImage.name !== item.image_name) {
+      // 一括実行中の誤クリックで SSE を中止しないよう、別画像への切替は抑止する。
+      // 中止したい場合は「中止」ボタンか左の画像一覧から明示的に行う
+      const isOtherImage = !this.currentImage || this.currentImage.name !== item.image_name;
+      if (this.batchRunning && isOtherImage) return;
+      if (isOtherImage) {
         await this.selectImage(item.image_name);
       }
       this.selectedRectId = item.rect_id;

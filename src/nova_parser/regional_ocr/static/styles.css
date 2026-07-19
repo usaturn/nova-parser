@@ -438,3 +438,12 @@ button:disabled {
   margin: 0.2rem 0 0;
   font-size: 0.8rem;
 }
+
+.undone-list li.undone-disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.undone-list li.undone-disabled:hover {
+  background: transparent;
+}

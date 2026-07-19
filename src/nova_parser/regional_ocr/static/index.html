@@ -152,7 +152,10 @@
             <p class="muted" x-show="!undoneItems.length">未 OCR のリージョンはありません</p>
             <ul class="undone-list">
               <template x-for="item in undoneItems" :key="item.image_name + ':' + item.rect_id">
-                <li @click="jumpToUndone(item)">
+                <li
+                  @click="jumpToUndone(item)"
+                  :class="{ 'undone-disabled': batchRunning && (!currentImage || currentImage.name !== item.image_name) }"
+                >
                   <span class="undone-image" x-text="item.image_name"></span>
                   <span class="order">#<span x-text="item.draw_order"></span></span>
                   <span class="badge" :class="item.ocr_status" x-text="item.ocr_status"></span>
