@@ -38,7 +38,7 @@ from nova_parser.regional_ocr.models import (
     UndoneRegionsResponse,
 )
 from nova_parser.regional_ocr.ocr_client import detect_blocks, ocr_rectangle
-from nova_parser.regional_ocr.sessions import load_session, save_session, upsert_region
+from nova_parser.regional_ocr.sessions import load_session, save_session, session_path, upsert_region
 from nova_parser.regional_ocr.state import AppState
 
 
@@ -123,6 +123,10 @@ def build_router() -> APIRouter:
         items: list[UndoneRegionItem] = []
         for image_name in listing.images:
             if stem_counts[Path(image_name).stem] > 1:
+                continue
+            # セッション JSON が無い画像は未 OCR リージョンも存在し得ないため、
+            # 画像オープン（サイズ取得）まで進まずスキップして IO を抑える
+            if not session_path(state.output_dir, image_name).exists():
                 continue
             path = resolve_image(state.image_dir, image_name)
             with Image.open(path) as img:

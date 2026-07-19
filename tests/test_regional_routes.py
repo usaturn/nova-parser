@@ -1345,3 +1345,57 @@ def test_post_ocr_batch_stream_include_errors_keeps_error_on_retry_failure(tmp_p
     by_id = {r.rectangle.rect_id: r for r in session.regions}
     assert by_id["r_err"].ocr_status == "error"
     assert "still broken" in (by_id["r_err"].ocr_error or "")
+
+
+# ---------------------------------------------------------------------------
+# GET /api/regions/undone — セッション未作成画像の画像オープン省略（レビュー修正 gemini L-1）
+# ---------------------------------------------------------------------------
+
+
+def test_get_regions_undone_skips_image_open_for_sessionless_images(tmp_path, monkeypatch):
+    """セッション JSON が無い画像では PIL.Image.open を呼ばない（IO 削減）。応答は従来と同一。"""
+    from PIL import Image as PILImage
+
+    from nova_parser.regional_ocr.models import ImageSession, Rectangle, RegionRecord
+    from nova_parser.regional_ocr.sessions import save_session
+
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "nosess.png")
+    _write_png(image_dir / "withsess.png")
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    save_session(
+        ImageSession(
+            image_name="withsess.png",
+            image_width=100,
+            image_height=100,
+            regions=[
+                RegionRecord(
+                    rectangle=Rectangle(rect_id="r0", draw_order=0, x=0, y=0, width=40, height=40),
+                    ocr_status="pending",
+                ),
+            ],
+        ),
+        output_dir,
+    )
+
+    client = _make_client(image_dir, output_dir, _simple_factory(FakeVisionClient()))
+
+    opened: list[str] = []
+    real_open = PILImage.open
+
+    def counting_open(fp, *args, **kwargs):
+        opened.append(str(fp))
+        return real_open(fp, *args, **kwargs)
+
+    monkeypatch.setattr(PILImage, "open", counting_open)
+
+    resp = client.get("/api/regions/undone")
+
+    assert resp.status_code == 200
+    assert [i["image_name"] for i in resp.json()["items"]] == ["withsess.png"]
+    assert all("nosess" not in p for p in opened), (
+        f"セッション JSON が無い画像をオープンしてはいけない (opened: {opened})"
+    )
