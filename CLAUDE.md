@@ -47,6 +47,7 @@ devcontainer の postCreate 時に自動セットアップされる。
 - 配置場所を指定せずにドキュメントを書けと言われた際は、 @docs_draft/ 配下にドキュメントを作成すること。 @docs_draft/ 配下のドキュメントはレビューした上で手動で @docs/ 配下に正式ドキュメントとして配置する
 - @docs_draft/ 配下のドキュメントは下書きレベルであり、誤りがある場合もあるので、あまり参考にしない。
 - スキル superpowers で Spec や Plan を作成した際に絶対 commit しない
+- スキル superpowers 使用中に commit する場合は remote origin の HEAD からフォークし、worktree で作業し、PR せよ
 
 ## 環境
 
