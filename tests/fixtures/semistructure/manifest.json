@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "book_id": "eg-test",
+  "title": "テスト書籍",
+  "input_glob": "p*.regions.json",
+  "page_pattern": "p(?P<page>[0-9]{3})\\.regions\\.json$",
+  "default_document_type": "rulebook",
+  "default_audience": "shared",
+  "audience_overrides": [
+    {
+      "start_page": 170,
+      "end_page": 259,
+      "audience": "gm"
+    }
+  ],
+  "document_type_overrides": []
+}

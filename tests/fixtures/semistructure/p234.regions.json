@@ -1,0 +1,32 @@
+{
+  "image_name": "book_p234.png",
+  "image_width": 1000,
+  "image_height": 1400,
+  "regions": [
+    {
+      "rectangle": {
+        "rect_id": "r2",
+        "draw_order": 1,
+        "x": 200,
+        "y": 20,
+        "width": 100,
+        "height": 80
+      },
+      "text": "後",
+      "ocr_status": "done"
+    },
+    {
+      "rectangle": {
+        "rect_id": "r1",
+        "draw_order": 0,
+        "x": 10,
+        "y": 20,
+        "width": 100,
+        "height": 80
+      },
+      "text": "先",
+      "ocr_status": "done"
+    }
+  ],
+  "schema_version": 1
+}

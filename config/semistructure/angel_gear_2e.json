@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "book_id": "angel_gear_2e",
+  "title": "エンゼルギア 天使大戦TRPG The 2nd Edition",
+  "input_glob": "*.regions.json",
+  "page_pattern": "_p(?P<page>[0-9]{3})\\.regions\\.json$",
+  "default_document_type": "rulebook",
+  "default_audience": "shared",
+  "audience_overrides": [
+    {
+      "start_page": 170,
+      "end_page": 259,
+      "audience": "gm"
+    }
+  ],
+  "document_type_overrides": [
+    {
+      "start_page": 233,
+      "end_page": 259,
+      "document_type": "scenario"
+    }
+  ]
+}
