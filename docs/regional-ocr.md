@@ -54,7 +54,8 @@ uv run nova-parser-regional Images/ --output-dir Output --host 127.0.0.1 --port 
 6. **自動保存**: 編集後 500ms の debounce で `PUT /api/session/{name}` が走り、`Output/{stem}.regions.json` が更新される（ステータスバーに「保存中…」表示）
 7. **個別 OCR**: 右ペインの各リージョンカードの `OCR` ボタンで単発実行
 8. **バッチ OCR**: 右ペイン上部の `バッチ OCR 実行` ボタンで全画像の `pending` 領域を `draw_order` 順に処理。SSE で結果が逐次反映される
-9. **中止**: バッチ実行中の `中止` ボタンで `AbortController.abort()` を呼んでサーバ接続を切断
+9. **未 OCR 一覧（全画像）**: 右ペイン上部の「未 OCR（全画像）」セクションに、全画像の `done` になっていない領域（`pending` / `error`）が一覧表示される。行クリックで該当画像・該当領域へジャンプできる。「未 OCR を一括実行」ボタンは実行前に未保存の編集をサーバへ反映した上で、`error` の領域も含めて全件を OCR する（`error` は再試行）
+10. **中止**: バッチ実行・一括実行中の `中止` ボタンで `AbortController.abort()` を呼んでサーバ接続を切断
 
 ## 出力ファイル
 
@@ -74,10 +75,11 @@ uv run nova-parser-regional Images/ --output-dir Output --host 127.0.0.1 --port 
 | GET | `/api/image/{name}` | 画像メタ（width / height / mime_type） |
 | GET | `/api/image/{name}/raw` | 画像バイナリ |
 | GET | `/api/blocks/{name}` | ブロック検出。`blocks`（段落）と `vertical_blocks`（リクエストごとにローカル再生成）を返す。段落は初回のみ Cloud Vision を呼び `{stem}.blocks.json` にキャッシュ |
+| GET | `/api/regions/undone` | 全画像の未 OCR 領域（`pending` / `error`）を集計して返す。Vision は呼ばない（課金なし）。stem 衝突画像は `items` から除外し `warnings` で警告 |
 | GET | `/api/session/{name}` | セッション取得（`pending` 領域含む） |
 | PUT | `/api/session/{name}` | セッション upsert。`done` レコードは保護 |
 | POST | `/api/ocr/{name}/{rect_id}` | 単発 OCR |
-| POST | `/api/ocr/batch/stream` | 全画像 × `pending` 領域を SSE で OCR |
+| POST | `/api/ocr/batch/stream` | 全画像 × `pending` 領域を SSE で OCR。`?include_errors=true` で `error` 領域も再試行対象に含める |
 
 `POST /api/ocr/batch/stream` のレスポンスは `text/event-stream` で、`data: <BatchOcrItemResult JSON>\n\n` の繰り返し。各行は `image_name` / `rect_id` / `status` (`done` | `error`) / `text` / `error` を含みます。
 
