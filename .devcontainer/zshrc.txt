@@ -20,48 +20,11 @@ setopt no_beep
 # プロンプトが表示されるたびにプロンプト文字列を評価、置換する
 setopt prompt_subst
 
-function prompt_repo_name(){
-    emulate -L zsh
-    local repo_root
-    repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || {
-        print -r -- "Dev Container"
-        return 0
-    }
-    repo_root="${repo_root:A}"
-    print -r -- "${repo_root:t}"
-}
-repo_name=$(prompt_repo_name)
-#
 # for Google Cloud
 function genv(){
         GOOGLE_CLOUD_SDK_CONFIG=$(gcloud config configurations list  --format="value(name)" | fzf)
         gcloud config configurations activate ${GOOGLE_CLOUD_SDK_CONFIG}
 }
-load_current_gcp_config() {
-  local config_path="$HOME/.config/gcloud/active_config"
-  if [ -f $config_path ]; then
-    GCP_PROFILE=$(cat $config_path)
-  fi
-}
-precmd() {
-    psvar=()
-    load_current_gcp_config
-    psvar[1]=$GCP_PROFILE
-}
-
-# プロンプト変数
-local p_time="%{$fg_bold[cyan]%}[%T]%{${reset_color}%}"
-local p_host='%{$fg_bold[blue]%}${repo_name}%{${reset_color}%}'
-local p_user="%{$fg_bold[green]%}[%n]%{${reset_color}%}"
-local p_gcp="%{$fg_bold[magenta]%}[GCP:%1v]%{${reset_color}%}"
-local p_cwd="%{${fg[yellow]}%}%~%{${reset_color}%}"
-local p_mark="%(?.%{$fg[green]%}.%{$fg[blue]%})%(?!(*'-') <!(*;-;%)? <)%{${reset_color}%}"
-
-# プロンプト指定
-PROMPT="
-${p_time} ${p_host} ${p_user} ${p_gcp} ${p_cwd}
-${p_mark} "
-
 # プロンプト指定(コマンドの続き)
 PROMPT2='[%n]> '
 
@@ -122,5 +85,8 @@ function update(){
     yarn global add @openai/codex@latest
     grok update
 }
+
+# Starship プロンプト
+eval "$(starship init zsh)"
 
 tmuxstart
