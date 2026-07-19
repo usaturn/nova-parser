@@ -1237,3 +1237,111 @@ def test_get_regions_undone_does_not_call_vision_client_factory(tmp_path):
 
     assert resp.status_code == 200
     assert factory.calls["calls"] == 0
+
+
+# ---------------------------------------------------------------------------
+# POST /api/ocr/batch/stream — include_errors パラメータ
+# ---------------------------------------------------------------------------
+
+
+def _seed_pending_and_error_session(image_dir, output_dir):
+    """error(draw_order=0) + pending(draw_order=1) を持つ 1 画像セッションを配置する。"""
+    from nova_parser.regional_ocr.models import ImageSession, Rectangle, RegionRecord
+    from nova_parser.regional_ocr.sessions import save_session
+
+    _write_png(image_dir / "img1.png")
+    save_session(
+        ImageSession(
+            image_name="img1.png",
+            image_width=100,
+            image_height=100,
+            regions=[
+                RegionRecord(
+                    rectangle=Rectangle(rect_id="r_err", draw_order=0, x=0, y=0, width=40, height=40),
+                    ocr_status="error",
+                    ocr_error="quota exceeded",
+                ),
+                RegionRecord(
+                    rectangle=Rectangle(rect_id="r_pend", draw_order=1, x=50, y=0, width=40, height=40),
+                    ocr_status="pending",
+                ),
+            ],
+        ),
+        output_dir,
+    )
+
+
+def test_post_ocr_batch_stream_with_include_errors_retries_error_regions(tmp_path):
+    """include_errors=true で error リージョンも draw_order 順に再試行され done になる。"""
+    from nova_parser.regional_ocr.sessions import load_session
+
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    _seed_pending_and_error_session(image_dir, output_dir)
+
+    fake = FakeVisionClient([_FakeResponse(text="RETRY_OK"), _FakeResponse(text="PEND_OK")])
+    client = _make_client(image_dir, output_dir, _simple_factory(fake))
+
+    with client.stream("POST", "/api/ocr/batch/stream?include_errors=true") as resp:
+        assert resp.status_code == 200
+        lines = [line for line in resp.iter_lines() if line.startswith("data: ")]
+
+    items = [json.loads(line[len("data: ") :]) for line in lines]
+    assert [(i["rect_id"], i["status"]) for i in items] == [("r_err", "done"), ("r_pend", "done")]
+
+    session = load_session(output_dir, "img1.png", image_width=100, image_height=100)
+    assert all(r.ocr_status == "done" for r in session.regions)
+
+
+def test_post_ocr_batch_stream_default_still_skips_error_regions(tmp_path):
+    """パラメータ省略時は現行どおり pending のみ処理し、error は残る（回帰）。"""
+    from nova_parser.regional_ocr.sessions import load_session
+
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    _seed_pending_and_error_session(image_dir, output_dir)
+
+    fake = FakeVisionClient([_FakeResponse(text="PEND_OK")])
+    client = _make_client(image_dir, output_dir, _simple_factory(fake))
+
+    with client.stream("POST", "/api/ocr/batch/stream") as resp:
+        assert resp.status_code == 200
+        lines = [line for line in resp.iter_lines() if line.startswith("data: ")]
+
+    items = [json.loads(line[len("data: ") :]) for line in lines]
+    assert [(i["rect_id"], i["status"]) for i in items] == [("r_pend", "done")]
+
+    session = load_session(output_dir, "img1.png", image_width=100, image_height=100)
+    by_id = {r.rectangle.rect_id: r for r in session.regions}
+    assert by_id["r_err"].ocr_status == "error"
+    assert by_id["r_pend"].ocr_status == "done"
+
+
+def test_post_ocr_batch_stream_include_errors_keeps_error_on_retry_failure(tmp_path):
+    """include_errors=true の再試行が再度失敗したら error のまま ocr_error を更新する。"""
+    from nova_parser.regional_ocr.sessions import load_session
+
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    _seed_pending_and_error_session(image_dir, output_dir)
+
+    fake = FakeVisionClient([_FakeResponse(error_message="still broken"), _FakeResponse(text="PEND_OK")])
+    client = _make_client(image_dir, output_dir, _simple_factory(fake))
+
+    with client.stream("POST", "/api/ocr/batch/stream?include_errors=true") as resp:
+        assert resp.status_code == 200
+        lines = [line for line in resp.iter_lines() if line.startswith("data: ")]
+
+    items = [json.loads(line[len("data: ") :]) for line in lines]
+    assert [(i["rect_id"], i["status"]) for i in items] == [("r_err", "error"), ("r_pend", "done")]
+
+    session = load_session(output_dir, "img1.png", image_width=100, image_height=100)
+    by_id = {r.rectangle.rect_id: r for r in session.regions}
+    assert by_id["r_err"].ocr_status == "error"
+    assert "still broken" in (by_id["r_err"].ocr_error or "")

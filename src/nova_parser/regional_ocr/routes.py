@@ -188,7 +188,7 @@ def build_router() -> APIRouter:
         return merged
 
     @router.post("/api/ocr/batch/stream")
-    def api_ocr_batch_stream(state: AppStateDep) -> StreamingResponse:
+    def api_ocr_batch_stream(state: AppStateDep, include_errors: bool = False) -> StreamingResponse:
         listing = list_images(state.image_dir)
         if listing.warnings:
             raise StemCollisionError("; ".join(listing.warnings))
@@ -202,11 +202,15 @@ def build_router() -> APIRouter:
                     width, height = raw.size
                 image = open_pil(path)
                 session = load_session(state.output_dir, image_name, image_width=width, image_height=height)
-                pending = sorted(
-                    [r for r in session.regions if r.ocr_status == "pending"],
+                targets = sorted(
+                    [
+                        r
+                        for r in session.regions
+                        if r.ocr_status == "pending" or (include_errors and r.ocr_status == "error")
+                    ],
                     key=lambda r: r.rectangle.draw_order,
                 )
-                for target in pending:
+                for target in targets:
                     try:
                         text = ocr_rectangle(client, image, target.rectangle, language_hints=state.language_hints)
                         updated = RegionRecord(
