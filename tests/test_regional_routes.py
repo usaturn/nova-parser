@@ -1583,3 +1583,90 @@ def test_post_ocr_batch_stream_respects_deletion_during_ocr(tmp_path, monkeypatc
     assert lines == [], "削除済みリージョンの SSE item は配信しない"
     session = load_session(output_dir, "img.png", image_width=100, image_height=100)
     assert session.regions == [], "削除済みリージョンを復活させてはいけない"
+
+
+# ---------------------------------------------------------------------------
+# 単発 OCR — 並行編集の lost-update 防止（gemini M-1 の水平展開）
+# ---------------------------------------------------------------------------
+
+
+def test_post_ocr_single_preserves_concurrent_put_edits(tmp_path, monkeypatch):
+    """単発 OCR 実行中に保存された別リージョンの追加が、OCR 結果の保存で失われない。"""
+    from nova_parser.regional_ocr.models import ImageSession, Rectangle, RegionRecord
+    from nova_parser.regional_ocr.sessions import load_session, save_session, upsert_region
+
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "img.png")
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    rect = Rectangle(rect_id="r1", draw_order=0, x=0, y=0, width=50, height=50)
+    save_session(
+        ImageSession(
+            image_name="img.png",
+            image_width=100,
+            image_height=100,
+            regions=[RegionRecord(rectangle=rect, ocr_status="pending")],
+        ),
+        output_dir,
+    )
+
+    def fake_ocr(client, image, rectangle, *, language_hints):
+        current = load_session(output_dir, "img.png", image_width=100, image_height=100)
+        added = RegionRecord(
+            rectangle=Rectangle(rect_id="r_new", draw_order=1, x=50, y=0, width=40, height=40),
+            ocr_status="pending",
+        )
+        save_session(upsert_region(current, added), output_dir)
+        return "OCR結果"
+
+    monkeypatch.setattr("nova_parser.regional_ocr.routes.ocr_rectangle", fake_ocr)
+    client = _make_client(image_dir, output_dir, _simple_factory(FakeVisionClient()))
+
+    resp = client.post("/api/ocr/img.png/r1")
+
+    assert resp.status_code == 200
+    session = load_session(output_dir, "img.png", image_width=100, image_height=100)
+    by_id = {r.rectangle.rect_id: r for r in session.regions}
+    assert by_id["r1"].ocr_status == "done"
+    assert "r_new" in by_id, "OCR 中に追加された並行編集リージョンが失われてはいけない"
+
+
+def test_post_ocr_single_returns_404_when_region_deleted_mid_ocr(tmp_path, monkeypatch):
+    """単発 OCR 実行中に対象リージョンが削除されたら 404 を返し、復活させない。"""
+    from nova_parser.regional_ocr.models import ImageSession, Rectangle, RegionRecord
+    from nova_parser.regional_ocr.sessions import load_session, save_session
+
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "img.png")
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    rect = Rectangle(rect_id="r1", draw_order=0, x=0, y=0, width=50, height=50)
+    save_session(
+        ImageSession(
+            image_name="img.png",
+            image_width=100,
+            image_height=100,
+            regions=[RegionRecord(rectangle=rect, ocr_status="pending")],
+        ),
+        output_dir,
+    )
+
+    def fake_ocr(client, image, rectangle, *, language_hints):
+        save_session(
+            ImageSession(image_name="img.png", image_width=100, image_height=100, regions=[]),
+            output_dir,
+        )
+        return "OCR結果"
+
+    monkeypatch.setattr("nova_parser.regional_ocr.routes.ocr_rectangle", fake_ocr)
+    client = _make_client(image_dir, output_dir, _simple_factory(FakeVisionClient()))
+
+    resp = client.post("/api/ocr/img.png/r1")
+
+    assert resp.status_code == 404
+    session = load_session(output_dir, "img.png", image_width=100, image_height=100)
+    assert session.regions == [], "削除済みリージョンを復活させてはいけない"

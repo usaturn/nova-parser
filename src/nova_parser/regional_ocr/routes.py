@@ -290,9 +290,15 @@ def build_router() -> APIRouter:
                 ocr_completed_at=datetime.datetime.now(datetime.UTC),
             )
 
-        session = upsert_region(session, updated)
-        save_session(session, state.output_dir)
-        write_markdown(session, state.output_dir, Path(name).stem)
+        # OCR（外部 API 呼び出し）中の並行編集を失わないよう、保存直前に最新セッションを
+        # ロック内で再ロードして反映する。rect_id が消えていればユーザーの削除を尊重し 404
+        with state.session_lock:
+            session = load_session(state.output_dir, name, image_width=width, image_height=height)
+            if all(r.rectangle.rect_id != rect_id for r in session.regions):
+                raise RegionNotFoundError(f"rect_id が見つかりません: {rect_id}")
+            session = upsert_region(session, updated)
+            save_session(session, state.output_dir)
+            write_markdown(session, state.output_dir, Path(name).stem)
         return updated
 
     return router
