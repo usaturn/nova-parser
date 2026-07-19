@@ -1,0 +1,58 @@
+# Starship プロンプト設定
+# リポジトリ管理の原本。postCreate で ~/.config/starship.toml へコピーされる。
+# 1段目: フルパス → uv Python → Node → git ブランチ → GCP プロファイル
+# 2段目: HH:MM:SS 時刻 → 入力マーク
+format = """
+$directory${custom.uv_python}${custom.node_version}$git_branch$gcloud
+$time$character"""
+
+[directory]
+# カレントディレクトリを常にフルパスで表示する
+truncation_length = 0
+truncate_to_repo = false
+style = "bold yellow"
+
+# venv 未アクティベート時にシステム Python (3.12) を誤表示するため無効化。
+# uv 管理の実バージョンは custom.uv_python が表示する。
+[python]
+disabled = true
+
+# package.json 検出時のみ表示の仕様が「Node 常時表示」要件と合わないため無効化。
+# custom.node_version が常時表示する。
+[nodejs]
+disabled = true
+
+[custom.uv_python]
+description = "uv 管理の Python バージョン（.venv/pyvenv.cfg の version_info）"
+command = "awk -F' = ' '/^version_info/ {print $2}' \"$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.venv/pyvenv.cfg\""
+when = "test -f \"$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.venv/pyvenv.cfg\""
+shell = ["bash", "--noprofile", "--norc"]
+symbol = " "
+style = "bold yellow"
+format = "[$symbol$output]($style) "
+
+[custom.node_version]
+description = "Node.js のバージョン（node コマンドがあれば常時表示）"
+command = "node --version"
+when = "command -v node"
+shell = ["bash", "--noprofile", "--norc"]
+symbol = " "
+style = "bold green"
+format = "[$symbol$output]($style) "
+
+[git_branch]
+symbol = " "
+style = "bold purple"
+format = "[$symbol$branch]($style) "
+
+[gcloud]
+# 旧 zsh プロンプトの [GCP:xxx]（アクティブ設定名）の代替
+format = "[$symbol$active]($style) "
+symbol = "☁️ "
+style = "bold purple"
+
+[time]
+disabled = false
+time_format = "%H:%M:%S"
+format = "[$time]($style) "
+style = "bold cyan"
