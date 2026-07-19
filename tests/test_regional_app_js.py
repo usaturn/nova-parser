@@ -2522,6 +2522,82 @@ require("./src/nova_parser/regional_ocr/static/app.js");
     )
 
 
+def test_run_undone_ocr_blocks_when_prior_save_already_failed() -> None:
+    """PUT 失敗が settle 済み（saveTimer/inFlightSave とも null）でも一括 OCR を開始しない。"""
+    _run_node(
+        r"""
+const assert = require("node:assert/strict");
+
+global.window = {};
+
+const calls = [];
+
+global.fetch = (url, options = {}) => {
+  if (options.method === "PUT") {
+    calls.push("PUT");
+    return Promise.resolve({ ok: false, status: 500 });
+  }
+  if (url.startsWith("/api/ocr/batch/stream")) {
+    calls.push("POST_BATCH");
+    throw new Error("保存失敗 settle 後にバッチを開始してはいけない");
+  }
+  if (url === "/api/regions/undone") {
+    calls.push("GET_UNDONE");
+    return Promise.resolve({ ok: true, json: async () => ({ items: [], warnings: [] }) });
+  }
+  throw new Error(`unexpected fetch: ${url}`);
+};
+
+require("./src/nova_parser/regional_ocr/static/app.js");
+
+(async () => {
+  const app = window.regionalOcrApp();
+  app.currentImage = { name: "a.png", width: 100, height: 100, mime: "image/png" };
+  app.session = {
+    image_name: "a.png",
+    image_width: 100,
+    image_height: 100,
+    schema_version: 1,
+    regions: [
+      {
+        rectangle: { rect_id: "r1", draw_order: 0, x: 0, y: 0, width: 30, height: 30 },
+        text: null,
+        ocr_status: "pending",
+        ocr_error: null,
+        ocr_completed_at: null,
+      },
+    ],
+  };
+  app.undoneItems = [
+    { image_name: "a.png", rect_id: "r1", draw_order: 0, ocr_status: "pending", ocr_error: null },
+  ];
+
+  app.scheduleSave();
+  // SAVE_DEBOUNCE_MS(500) + PUT settle を待つ
+  await new Promise((r) => setTimeout(r, 700));
+  if (app.inFlightSave) await app.inFlightSave;
+
+  assert.equal(app.saveTimer, null, "debounce 完了後は saveTimer が null");
+  assert.equal(app.inFlightSave, null, "PUT settle 後は inFlightSave が null");
+  assert.equal(app.savingState, "error", "失敗が確定している");
+  assert.deepEqual(calls, ["PUT"]);
+
+  await app.runUndoneOcr();
+
+  assert.deepEqual(calls, ["PUT"], "settle 後の失敗を検知しバッチを開始しない");
+  assert.equal(app.savingState, "error", "error 表示を idle に上書きしない");
+  assert.ok(
+    app.warnings.some((w) => w.includes("保存に失敗したため一括 OCR を中止しました")),
+    `中止理由の警告が追加される (actual: ${JSON.stringify(app.warnings)})`,
+  );
+})().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
+""",
+    )
+
+
 def test_refresh_undone_keeps_unsaved_pending_rows_of_current_image() -> None:
     """debounce 中に「更新」しても現在画像の pending 行が消えず、保存成功後も残る。"""
     _run_node(

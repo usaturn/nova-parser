@@ -181,7 +181,9 @@ function regionalOcrApp() {
       //   - 後続の await 中に古い PUT response が _performSave 内で
       //     this.session = saved を実行しても、capture 済み snapshot は影響を受けない。
       //   - saveVersion を進めることで、自分が "最新世代の save" として扱われる。
-      let allOk = true;
+      // 呼び出し前に既に保存失敗が確定している場合も検出する（drain 対象が無くても
+      // savingState==="error" なら false。runUndoneOcr のガードと docs の記述を満たす）
+      let allOk = this.savingState !== "error";
       while (this.saveTimer || this.inFlightSave) {
         let pendingFlush = null;
         if (this.saveTimer && this.session && this.currentImage) {
