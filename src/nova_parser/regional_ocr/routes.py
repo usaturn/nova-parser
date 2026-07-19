@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+from collections import Counter
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Annotated
@@ -14,6 +15,7 @@ from PIL import Image
 from nova_parser.regional_ocr.blocks import load_blocks, save_blocks
 from nova_parser.regional_ocr.errors import (
     OcrBackendError,
+    RegionGeometryChangedError,
     RegionNotFoundError,
     StemCollisionError,
 )
@@ -32,11 +34,19 @@ from nova_parser.regional_ocr.models import (
     ImageListResponse,
     ImageMetaResponse,
     ImageSession,
+    Rectangle,
     RegionRecord,
+    UndoneRegionItem,
+    UndoneRegionsResponse,
 )
 from nova_parser.regional_ocr.ocr_client import detect_blocks, ocr_rectangle
-from nova_parser.regional_ocr.sessions import load_session, save_session, upsert_region
+from nova_parser.regional_ocr.sessions import load_session, save_session, session_path, upsert_region
 from nova_parser.regional_ocr.state import AppState
+
+
+def _same_geometry(a: Rectangle, b: Rectangle) -> bool:
+    """OCR crop に影響する幾何が一致するか（draw_order は無視）。"""
+    return (a.x, a.y, a.width, a.height) == (b.x, b.y, b.width, b.height)
 
 
 def get_app_state(request: Request) -> AppState:
@@ -110,6 +120,41 @@ def build_router() -> APIRouter:
         save_blocks(result, state.output_dir)
         return _to_blocks_response(result)
 
+    @router.get("/api/regions/undone", response_model=UndoneRegionsResponse)
+    def api_regions_undone(state: AppStateDep) -> UndoneRegionsResponse:
+        listing = list_images(state.image_dir)
+        # stem 衝突画像はセッションファイル（{stem}.regions.json）を別画像間で共有してしまい
+        # 同一リージョンを重複列挙するため、items から除外して listing.warnings で知らせる。
+        # 読み取り専用のため batch と違い 409 にはしない。
+        stem_counts = Counter(Path(name).stem for name in listing.images)
+        items: list[UndoneRegionItem] = []
+        for image_name in listing.images:
+            if stem_counts[Path(image_name).stem] > 1:
+                continue
+            # セッション JSON が無い画像は未 OCR リージョンも存在し得ないため、
+            # 画像オープン（サイズ取得）まで進まずスキップして IO を抑える
+            if not session_path(state.output_dir, image_name).exists():
+                continue
+            path = resolve_image(state.image_dir, image_name)
+            with Image.open(path) as img:
+                width, height = img.size
+            session = load_session(state.output_dir, image_name, image_width=width, image_height=height)
+            undone = sorted(
+                (r for r in session.regions if r.ocr_status != "done"),
+                key=lambda r: r.rectangle.draw_order,
+            )
+            items.extend(
+                UndoneRegionItem(
+                    image_name=image_name,
+                    rect_id=r.rectangle.rect_id,
+                    draw_order=r.rectangle.draw_order,
+                    ocr_status=r.ocr_status,
+                    ocr_error=r.ocr_error,
+                )
+                for r in undone
+            )
+        return UndoneRegionsResponse(items=items, warnings=listing.warnings)
+
     @router.get("/api/session/{name}", response_model=ImageSession)
     def api_get_session(name: str, state: AppStateDep) -> ImageSession:
         path = resolve_image(state.image_dir, name)
@@ -122,39 +167,41 @@ def build_router() -> APIRouter:
         resolve_image(state.image_dir, name)
         if session.image_name != name:
             raise ValueError(f"URL の name ({name}) と body の image_name ({session.image_name}) が一致しません")
-        existing = load_session(
-            state.output_dir,
-            name,
-            image_width=session.image_width,
-            image_height=session.image_height,
-        )
-        existing_by_id = {r.rectangle.rect_id: r for r in existing.regions}
-        merged_regions: list[RegionRecord] = []
-        for incoming in session.regions:
-            prev = existing_by_id.get(incoming.rectangle.rect_id)
-            if prev is not None and prev.ocr_status == "done":
-                merged_regions.append(
-                    RegionRecord(
-                        rectangle=incoming.rectangle,
-                        text=prev.text,
-                        ocr_status="done",
-                        ocr_error=None,
-                        ocr_completed_at=prev.ocr_completed_at,
+        # バッチ／単発 OCR の保存と競合しないよう load→merge→save をロックで直列化
+        with state.session_lock:
+            existing = load_session(
+                state.output_dir,
+                name,
+                image_width=session.image_width,
+                image_height=session.image_height,
+            )
+            existing_by_id = {r.rectangle.rect_id: r for r in existing.regions}
+            merged_regions: list[RegionRecord] = []
+            for incoming in session.regions:
+                prev = existing_by_id.get(incoming.rectangle.rect_id)
+                if prev is not None and prev.ocr_status == "done":
+                    merged_regions.append(
+                        RegionRecord(
+                            rectangle=incoming.rectangle,
+                            text=prev.text,
+                            ocr_status="done",
+                            ocr_error=None,
+                            ocr_completed_at=prev.ocr_completed_at,
+                        )
                     )
-                )
-            else:
-                merged_regions.append(incoming)
-        merged = ImageSession(
-            image_name=session.image_name,
-            image_width=session.image_width,
-            image_height=session.image_height,
-            regions=merged_regions,
-        )
-        save_session(merged, state.output_dir)
+                else:
+                    merged_regions.append(incoming)
+            merged = ImageSession(
+                image_name=session.image_name,
+                image_width=session.image_width,
+                image_height=session.image_height,
+                regions=merged_regions,
+            )
+            save_session(merged, state.output_dir)
         return merged
 
     @router.post("/api/ocr/batch/stream")
-    def api_ocr_batch_stream(state: AppStateDep) -> StreamingResponse:
+    def api_ocr_batch_stream(state: AppStateDep, include_errors: bool = False) -> StreamingResponse:
         listing = list_images(state.image_dir)
         if listing.warnings:
             raise StemCollisionError("; ".join(listing.warnings))
@@ -164,15 +211,18 @@ def build_router() -> APIRouter:
         def _generate() -> Iterator[str]:
             for image_name in listing.images:
                 path = resolve_image(state.image_dir, image_name)
-                with Image.open(path) as raw:
-                    width, height = raw.size
                 image = open_pil(path)
+                width, height = image.size
                 session = load_session(state.output_dir, image_name, image_width=width, image_height=height)
-                pending = sorted(
-                    [r for r in session.regions if r.ocr_status == "pending"],
+                targets = sorted(
+                    [
+                        r
+                        for r in session.regions
+                        if r.ocr_status == "pending" or (include_errors and r.ocr_status == "error")
+                    ],
                     key=lambda r: r.rectangle.draw_order,
                 )
-                for target in pending:
+                for target in targets:
                     try:
                         text = ocr_rectangle(client, image, target.rectangle, language_hints=state.language_hints)
                         updated = RegionRecord(
@@ -202,9 +252,22 @@ def build_router() -> APIRouter:
                             status="error",
                             error=str(exc),
                         )
-                    session = upsert_region(session, updated)
-                    save_session(session, state.output_dir)
-                    write_markdown(session, state.output_dir, Path(image_name).stem)
+                    # OCR（外部 API）中の並行編集を失わないよう、保存直前に最新セッションを
+                    # ロック内で再ロードする。
+                    # - rect_id が消えていればユーザーの削除を尊重（保存・SSE スキップ）
+                    # - 幾何（x/y/width/height）が開始時と異なれば stale OCR を破棄
+                    #   （旧 crop の text を新形状に載せない。クライアントは終了時の一覧再取得で整合）
+                    rect_id = target.rectangle.rect_id
+                    with state.session_lock:
+                        session = load_session(state.output_dir, image_name, image_width=width, image_height=height)
+                        existing = next((r for r in session.regions if r.rectangle.rect_id == rect_id), None)
+                        if existing is None:
+                            continue
+                        if not _same_geometry(existing.rectangle, target.rectangle):
+                            continue
+                        session = upsert_region(session, updated)
+                        save_session(session, state.output_dir)
+                        write_markdown(session, state.output_dir, Path(image_name).stem)
                     yield f"data: {item.model_dump_json()}\n\n"
 
         return StreamingResponse(_generate(), media_type="text/event-stream")
@@ -212,15 +275,14 @@ def build_router() -> APIRouter:
     @router.post("/api/ocr/{name}/{rect_id}", response_model=RegionRecord)
     def api_ocr_single(name: str, rect_id: str, state: AppStateDep) -> RegionRecord:
         path = resolve_image(state.image_dir, name)
-        with Image.open(path) as raw:
-            width, height = raw.size
+        image = open_pil(path)
+        width, height = image.size
         session = load_session(state.output_dir, name, image_width=width, image_height=height)
         target = next((r for r in session.regions if r.rectangle.rect_id == rect_id), None)
         if target is None:
             raise RegionNotFoundError(f"rect_id が見つかりません: {rect_id}")
 
         client = state.vision_client_factory()
-        image = open_pil(path)
         try:
             text = ocr_rectangle(client, image, target.rectangle, language_hints=state.language_hints)
             updated = RegionRecord(
@@ -239,9 +301,20 @@ def build_router() -> APIRouter:
                 ocr_completed_at=datetime.datetime.now(datetime.UTC),
             )
 
-        session = upsert_region(session, updated)
-        save_session(session, state.output_dir)
-        write_markdown(session, state.output_dir, Path(name).stem)
+        # OCR（外部 API）中の並行編集を失わないよう、保存直前に最新セッションを
+        # ロック内で再ロードする。
+        # - rect_id が消えていれば 404
+        # - 幾何が開始時と異なれば 409（stale OCR を保存しない）
+        with state.session_lock:
+            session = load_session(state.output_dir, name, image_width=width, image_height=height)
+            existing = next((r for r in session.regions if r.rectangle.rect_id == rect_id), None)
+            if existing is None:
+                raise RegionNotFoundError(f"rect_id が見つかりません: {rect_id}")
+            if not _same_geometry(existing.rectangle, target.rectangle):
+                raise RegionGeometryChangedError(f"OCR 実行中にリージョンの形状が変更されました: {rect_id}")
+            session = upsert_region(session, updated)
+            save_session(session, state.output_dir)
+            write_markdown(session, state.output_dir, Path(name).stem)
         return updated
 
     return router

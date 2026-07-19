@@ -391,3 +391,59 @@ button:disabled {
   border-color: var(--selected);
   background: rgba(235, 203, 139, 0.15);
 }
+
+/* 未 OCR（全画像）パネル */
+.undone-panel {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.undone-panel .actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.5rem;
+}
+
+.undone-count {
+  background: var(--panel-2);
+  color: var(--fg);
+}
+
+.undone-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.undone-list li {
+  padding: 0.4rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.undone-list li:hover {
+  background: var(--panel-2);
+}
+
+.undone-list .undone-image {
+  font-weight: 600;
+  margin-right: 0.4rem;
+  word-break: break-all;
+}
+
+.undone-list .error {
+  color: var(--error);
+  margin: 0.2rem 0 0;
+  font-size: 0.8rem;
+}
+
+.undone-list li.undone-disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.undone-list li.undone-disabled:hover {
+  background: transparent;
+}

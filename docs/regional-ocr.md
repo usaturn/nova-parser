@@ -54,7 +54,8 @@ uv run nova-parser-regional Images/ --output-dir Output --host 127.0.0.1 --port 
 6. **自動保存**: 編集後 500ms の debounce で `PUT /api/session/{name}` が走り、`Output/{stem}.regions.json` が更新される（ステータスバーに「保存中…」表示）
 7. **個別 OCR**: 右ペインの各リージョンカードの `OCR` ボタンで単発実行
 8. **バッチ OCR**: 右ペイン上部の `バッチ OCR 実行` ボタンで全画像の `pending` 領域を `draw_order` 順に処理。SSE で結果が逐次反映される
-9. **中止**: バッチ実行中の `中止` ボタンで `AbortController.abort()` を呼んでサーバ接続を切断
+9. **未 OCR 一覧（全画像）**: 右ペイン上部の「未 OCR（全画像）」セクションに、全画像の `done` になっていない領域（`pending` / `error`）が一覧表示される。行クリックで該当画像・該当領域へジャンプできる。「未 OCR を一括実行」ボタンは実行前に未保存の編集をサーバへ反映した上で、`error` の領域も含めて全件を OCR する（`error` は再試行）。未保存の編集の保存に失敗した場合は警告を表示して一括実行を開始しない。一括実行中は一覧から別画像へのジャンプは無効化され（行が半透明表示）、中止は `中止` ボタンか左の画像一覧から行う。stem 衝突警告がある間は「未 OCR を一括実行」ボタンは無効になり、同名（拡張子違い）の画像を解消すると再び有効になる
+10. **中止**: バッチ実行・一括実行中の `中止` ボタンで `AbortController.abort()` を呼んでサーバ接続を切断
 
 ## 出力ファイル
 
@@ -74,10 +75,11 @@ uv run nova-parser-regional Images/ --output-dir Output --host 127.0.0.1 --port 
 | GET | `/api/image/{name}` | 画像メタ（width / height / mime_type） |
 | GET | `/api/image/{name}/raw` | 画像バイナリ |
 | GET | `/api/blocks/{name}` | ブロック検出。`blocks`（段落）と `vertical_blocks`（リクエストごとにローカル再生成）を返す。段落は初回のみ Cloud Vision を呼び `{stem}.blocks.json` にキャッシュ |
+| GET | `/api/regions/undone` | 全画像の未 OCR 領域（`pending` / `error`）を集計して返す。Vision は呼ばない（課金なし）。stem 衝突画像は `items` から除外し `warnings` で警告 |
 | GET | `/api/session/{name}` | セッション取得（`pending` 領域含む） |
 | PUT | `/api/session/{name}` | セッション upsert。`done` レコードは保護 |
-| POST | `/api/ocr/{name}/{rect_id}` | 単発 OCR |
-| POST | `/api/ocr/batch/stream` | 全画像 × `pending` 領域を SSE で OCR |
+| POST | `/api/ocr/{name}/{rect_id}` | 単発 OCR。対象リージョンが無い／OCR 中に削除された場合は 404。OCR 実行中に形状（x/y/width/height）が変わった場合は 409（結果は保存しない） |
+| POST | `/api/ocr/batch/stream` | 全画像 × `pending` 領域を SSE で OCR。`?include_errors=true` で `error` 領域も再試行対象に含める。実行中に削除または形状変更されたリージョンは結果を破棄する（SSE 配信なし、ディスク上は pending 等のまま）。クライアントは終了時の一覧再取得で整合する |
 
 `POST /api/ocr/batch/stream` のレスポンスは `text/event-stream` で、`data: <BatchOcrItemResult JSON>\n\n` の繰り返し。各行は `image_name` / `rect_id` / `status` (`done` | `error`) / `text` / `error` を含みます。
 

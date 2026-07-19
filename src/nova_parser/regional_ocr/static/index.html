@@ -132,6 +132,38 @@
         </main>
 
         <aside class="results">
+          <section class="undone-panel">
+            <h2>未 OCR（全画像）</h2>
+            <div class="actions">
+              <span class="badge undone-count" x-text="undoneItems.length + ' 件'"></span>
+              <button type="button" @click="refreshUndone()" :disabled="undoneLoading">更新</button>
+              <button
+                type="button"
+                @click="runUndoneOcr()"
+                :disabled="batchRunning || !undoneItems.length || undoneBlocked"
+              >
+                未 OCR を一括実行
+              </button>
+              <button type="button" @click="cancelBatch()" x-show="batchRunning">中止</button>
+            </div>
+            <p class="muted" x-show="undoneBlocked">
+              stem 衝突があるため一括実行できません。警告に表示された同名（拡張子違い）の画像を解消してください
+            </p>
+            <p class="muted" x-show="!undoneItems.length">未 OCR のリージョンはありません</p>
+            <ul class="undone-list">
+              <template x-for="item in undoneItems" :key="item.image_name + ':' + item.rect_id">
+                <li
+                  @click="jumpToUndone(item)"
+                  :class="{ 'undone-disabled': batchRunning && (!currentImage || currentImage.name !== item.image_name) }"
+                >
+                  <span class="undone-image" x-text="item.image_name"></span>
+                  <span class="order">#<span x-text="item.draw_order"></span></span>
+                  <span class="badge" :class="item.ocr_status" x-text="item.ocr_status"></span>
+                  <p class="error" x-show="item.ocr_error" x-text="item.ocr_error"></p>
+                </li>
+              </template>
+            </ul>
+          </section>
           <h2>OCR 結果</h2>
           <div class="actions" x-show="currentImage">
             <button type="button" @click="runBatchOcr()" :disabled="batchRunning">

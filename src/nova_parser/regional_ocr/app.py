@@ -13,6 +13,7 @@ from nova_parser.regional_ocr.errors import (
     ImageNotFoundError,
     ImagePathTraversalError,
     OcrBackendError,
+    RegionGeometryChangedError,
     RegionNotFoundError,
     StemCollisionError,
 )
@@ -39,6 +40,10 @@ def create_app(state: AppState) -> FastAPI:
 
     @app.exception_handler(StemCollisionError)
     async def _stem_collision(_request: Request, exc: StemCollisionError) -> JSONResponse:
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+    @app.exception_handler(RegionGeometryChangedError)
+    async def _region_geometry_changed(_request: Request, exc: RegionGeometryChangedError) -> JSONResponse:
         return JSONResponse(status_code=409, content={"detail": str(exc)})
 
     @app.exception_handler(AdcNotConfiguredError)
