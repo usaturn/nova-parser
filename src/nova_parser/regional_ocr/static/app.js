@@ -16,6 +16,11 @@ const api = {
     if (!r.ok) throw new Error(`GET /api/blocks/${name} failed: ${r.status}`);
     return r.json();
   },
+  async getUndoneRegions() {
+    const r = await fetch("/api/regions/undone");
+    if (!r.ok) throw new Error(`GET /api/regions/undone failed: ${r.status}`);
+    return r.json();
+  },
   async getSession(name) {
     const r = await fetch(`/api/session/${encodeURIComponent(name)}`);
     if (!r.ok) throw new Error(`GET /api/session/${name} failed: ${r.status}`);
@@ -111,6 +116,8 @@ function regionalOcrApp() {
     _blocksRequestFor: null,
     _blocksRequestEpoch: null,
     _blocksEpoch: 0,
+    undoneItems: [],
+    undoneLoading: false,
 
     async init() {
       try {
@@ -121,6 +128,7 @@ function regionalOcrApp() {
         console.error(err);
         this.warnings = [`画像一覧の取得に失敗: ${err.message}`];
       }
+      await this.refreshUndone();
       window.addEventListener("resize", () => this.recomputeScale());
       window.addEventListener("beforeunload", () => this.cancelBatch());
     },
@@ -489,6 +497,49 @@ function regionalOcrApp() {
       this.hoverBlock = hitTestBlock(blocks, x / this.scaleX, y / this.scaleY);
     },
 
+    async refreshUndone() {
+      this.undoneLoading = true;
+      try {
+        const data = await api.getUndoneRegions();
+        this.undoneItems = data.items;
+        for (const w of data.warnings || []) {
+          if (!this.warnings.includes(w)) this.warnings = [...this.warnings, w];
+        }
+      } catch (err) {
+        console.error(err);
+        const msg = `未 OCR 一覧の取得に失敗: ${err.message}`;
+        if (!this.warnings.includes(msg)) this.warnings = [...this.warnings, msg];
+      } finally {
+        this.undoneLoading = false;
+      }
+    },
+
+    _syncUndoneForCurrentImage() {
+      if (!this.session || !this.currentImage) return;
+      const name = this.currentImage.name;
+      const others = this.undoneItems.filter((i) => i.image_name !== name);
+      const mine = this.session.regions
+        .filter((r) => r.ocr_status !== "done")
+        .map((r) => ({
+          image_name: name,
+          rect_id: r.rectangle.rect_id,
+          draw_order: r.rectangle.draw_order,
+          ocr_status: r.ocr_status,
+          ocr_error: r.ocr_error,
+        }));
+      // サーバ側の並び（画像名順 → draw_order 昇順）と揃える
+      this.undoneItems = [...others, ...mine].sort(
+        (a, b) => a.image_name.localeCompare(b.image_name) || a.draw_order - b.draw_order,
+      );
+    },
+
+    async jumpToUndone(item) {
+      if (!this.currentImage || this.currentImage.name !== item.image_name) {
+        await this.selectImage(item.image_name);
+      }
+      this.selectedRectId = item.rect_id;
+    },
+
     selectRect(rectId) {
       this.selectedRectId = rectId;
     },
@@ -561,6 +612,7 @@ function regionalOcrApp() {
 
     scheduleSave() {
       if (!this.session || !this.currentImage) return;
+      this._syncUndoneForCurrentImage();
       this.savingState = "saving";
       if (this.saveTimer) clearTimeout(this.saveTimer);
       this.saveVersion += 1;
@@ -645,6 +697,7 @@ function regionalOcrApp() {
         const updated = await api.ocrSingle(this.currentImage.name, rectId);
         const idx = this.session.regions.findIndex((r) => r.rectangle.rect_id === rectId);
         if (idx >= 0) this.session.regions[idx] = updated;
+        this._syncUndoneForCurrentImage();
       } catch (err) {
         console.error(err);
       }

@@ -2164,3 +2164,172 @@ require("./src/nova_parser/regional_ocr/static/app.js");
 })();
 """
     )
+
+def test_init_refreshes_undone_list_and_failure_appends_warning() -> None:
+    """init() が未 OCR 一覧を取得して undoneItems を埋め、取得失敗時は warnings に追記して前回一覧を維持する。"""
+    _run_node(
+        r"""
+const assert = require("node:assert/strict");
+
+global.window = { addEventListener: () => {} };
+
+let failNext = false;
+global.fetch = (url) => {
+  if (url === "/api/images") {
+    return Promise.resolve({ ok: true, json: async () => ({ images: [], warnings: [] }) });
+  }
+  if (url === "/api/regions/undone") {
+    if (failNext) return Promise.resolve({ ok: false, status: 500 });
+    return Promise.resolve({
+      ok: true,
+      json: async () => ({
+        items: [
+          { image_name: "a.png", rect_id: "r1", draw_order: 0, ocr_status: "pending", ocr_error: null },
+        ],
+        warnings: ["stem collision: x.png, x.webp"],
+      }),
+    });
+  }
+  throw new Error(`unexpected fetch: ${url}`);
+};
+
+require("./src/nova_parser/regional_ocr/static/app.js");
+
+(async () => {
+  const app = window.regionalOcrApp();
+  await app.init();
+  assert.equal(app.undoneItems.length, 1);
+  assert.equal(app.undoneItems[0].rect_id, "r1");
+  assert.ok(app.warnings.some((w) => w.includes("stem collision")), "サーバ warnings を表示に反映する");
+
+  failNext = true;
+  await app.refreshUndone();
+  assert.equal(app.undoneItems.length, 1, "取得失敗時は前回の一覧を維持する");
+  assert.ok(app.warnings.some((w) => w.includes("未 OCR 一覧の取得に失敗")));
+})().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
+""",
+    )
+
+
+def test_sync_undone_replaces_only_current_image_rows() -> None:
+    """_syncUndoneForCurrentImage は現在画像の行だけを session.regions から再構成し、他画像の行は保持する。"""
+    _run_node(
+        r"""
+const assert = require("node:assert/strict");
+
+global.window = {};
+
+require("./src/nova_parser/regional_ocr/static/app.js");
+
+const app = window.regionalOcrApp();
+app.currentImage = { name: "b.png", width: 100, height: 100, mime: "image/png" };
+app.session = {
+  image_name: "b.png",
+  image_width: 100,
+  image_height: 100,
+  schema_version: 1,
+  regions: [
+    {
+      rectangle: { rect_id: "b0", draw_order: 0, x: 0, y: 0, width: 30, height: 30 },
+      text: "済み",
+      ocr_status: "done",
+      ocr_error: null,
+      ocr_completed_at: null,
+    },
+    {
+      rectangle: { rect_id: "b1", draw_order: 1, x: 40, y: 0, width: 30, height: 30 },
+      text: null,
+      ocr_status: "pending",
+      ocr_error: null,
+      ocr_completed_at: null,
+    },
+  ],
+};
+app.undoneItems = [
+  { image_name: "a.png", rect_id: "a9", draw_order: 0, ocr_status: "pending", ocr_error: null },
+  { image_name: "b.png", rect_id: "b0", draw_order: 0, ocr_status: "pending", ocr_error: null },
+];
+
+app._syncUndoneForCurrentImage();
+
+assert.deepEqual(
+  app.undoneItems.map((i) => [i.image_name, i.rect_id, i.ocr_status]),
+  [["a.png", "a9", "pending"], ["b.png", "b1", "pending"]],
+  "done になった b0 は消え、b1 が入り、a.png の行は保持される",
+);
+
+// scheduleSave 経由でも即時に同期される（500ms タイマは後始末する）
+app.session.regions = app.session.regions.filter((r) => r.rectangle.rect_id !== "b1");
+app.scheduleSave();
+assert.deepEqual(
+  app.undoneItems.map((i) => [i.image_name, i.rect_id]),
+  [["a.png", "a9"]],
+  "リージョン削除が scheduleSave 時点で一覧へ反映される",
+);
+clearTimeout(app.saveTimer);
+app.saveTimer = null;
+""",
+    )
+
+
+def test_run_single_ocr_success_removes_row_from_undone_list() -> None:
+    """runSingleOcr 成功で該当行が未 OCR 一覧から消える。"""
+    _run_node(
+        r"""
+const assert = require("node:assert/strict");
+
+global.window = {};
+
+global.fetch = (url, options = {}) => {
+  if (options.method === "POST" && url === "/api/ocr/c.png/c0") {
+    return Promise.resolve({
+      ok: true,
+      json: async () => ({
+        rectangle: { rect_id: "c0", draw_order: 0, x: 0, y: 0, width: 30, height: 30 },
+        text: "OK",
+        ocr_status: "done",
+        ocr_error: null,
+        ocr_completed_at: "2026-07-19T00:00:00Z",
+      }),
+    });
+  }
+  throw new Error(`unexpected fetch: ${url}`);
+};
+
+require("./src/nova_parser/regional_ocr/static/app.js");
+
+(async () => {
+  const app = window.regionalOcrApp();
+  app.currentImage = { name: "c.png", width: 100, height: 100, mime: "image/png" };
+  app.session = {
+    image_name: "c.png",
+    image_width: 100,
+    image_height: 100,
+    schema_version: 1,
+    regions: [
+      {
+        rectangle: { rect_id: "c0", draw_order: 0, x: 0, y: 0, width: 30, height: 30 },
+        text: null,
+        ocr_status: "pending",
+        ocr_error: null,
+        ocr_completed_at: null,
+      },
+    ],
+  };
+  app.undoneItems = [
+    { image_name: "c.png", rect_id: "c0", draw_order: 0, ocr_status: "pending", ocr_error: null },
+  ];
+
+  await app.runSingleOcr("c0");
+
+  assert.equal(app.session.regions[0].ocr_status, "done");
+  assert.deepEqual(app.undoneItems, [], "done になった行は一覧から消える");
+})().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
+""",
+    )

@@ -371,3 +371,17 @@ def test_block_select_workflow_detect_cache_put_ocr(tmp_path):
     ocr_v = client.post("/api/ocr/img1.png/vblk-r0")
     assert ocr_v.status_code == 200
     assert ocr_v.json()["ocr_status"] == "done"
+
+
+def test_index_html_contains_undone_panel_markup(tmp_path):
+    """index.html に未 OCR 一覧パネル（見出し・更新ハンドラ）が含まれる。"""
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    output_dir = tmp_path / "output"
+
+    client = _make_client(image_dir, output_dir, _simple_factory(FakeVisionClient()))
+    body = client.get("/").text
+
+    assert "未 OCR（全画像）" in body
+    assert "refreshUndone()" in body
+    assert "jumpToUndone(item)" in body
