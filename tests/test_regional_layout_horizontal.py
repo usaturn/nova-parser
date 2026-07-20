@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from nova_parser.regional_ocr.layout_horizontal import absorb_narrow_fragments
+from nova_parser.regional_ocr.layout_horizontal import absorb_narrow_fragments, merge_by_y_profile
 from nova_parser.regional_ocr.models import BlockRect
 
 W, H = 1000, 1000
@@ -61,3 +61,36 @@ class TestAbsorbNarrowFragments:
 
     def test_empty_input_returns_empty(self):
         assert absorb_narrow_fragments([], W, H) == []
+
+
+class TestMergeByYProfile:
+    def test_merges_adjacent_same_profile(self):
+        a = [_r(100, 100, 200, 700)]
+        b = [_r(350, 110, 200, 695)]
+        assert _boxes(merge_by_y_profile([a, b], W, H)) == {(100, 100, 550, 805)}
+
+    def test_keeps_shorter_neighbor(self):
+        # 図版上の短列群: 下端が大きく異なる隣は統合しない
+        a = [_r(100, 100, 200, 700)]
+        b = [_r(350, 105, 200, 400)]
+        assert len(merge_by_y_profile([a, b], W, H)) == 2
+
+    def test_keeps_lower_top_neighbor(self):
+        # 欄外注釈: 上端が大きく異なる隣は統合しない
+        a = [_r(100, 100, 200, 700)]
+        b = [_r(350, 300, 200, 500)]
+        assert len(merge_by_y_profile([a, b], W, H)) == 2
+
+    def test_chain_merges_across_middle_cluster(self):
+        a = [_r(100, 100, 150, 700)]
+        b = [_r(300, 100, 150, 700)]
+        c = [_r(500, 100, 150, 700)]
+        assert _boxes(merge_by_y_profile([a, b, c], W, H)) == {(100, 100, 650, 800)}
+
+    def test_no_merge_beyond_max_gap(self):
+        a = [_r(0, 100, 100, 700)]
+        b = [_r(400, 100, 100, 700)]
+        assert len(merge_by_y_profile([a, b], W, H)) == 2
+
+    def test_empty_input_returns_empty(self):
+        assert merge_by_y_profile([], W, H) == []

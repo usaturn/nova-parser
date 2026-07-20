@@ -87,3 +87,40 @@ def absorb_narrow_fragments(
                 changed = True
                 break
     return result
+
+
+# --- 7.5 Y プロファイル統合 ---------------------------------------------------
+
+
+def merge_by_y_profile(
+    clusters: list[list[BlockRect]],
+    image_width: int,
+    image_height: int,
+) -> list[list[BlockRect]]:
+    """上端・下端が共に揃う X 隣接クラスタを横方向へ統合する（スペック 7.5）。
+
+    統合は連鎖する（統合後の外接矩形で次の隣と比較する）。図版上の短列群・
+    欄外注釈は端が揃わないため統合されない。X 間隔が H_MERGE_MAX_GAP_RATIO を
+    超える統合は安全弁として行わない。
+    """
+    edge_tol = image_height * H_PROFILE_EDGE_TOL_RATIO
+    gap_max = image_width * H_MERGE_MAX_GAP_RATIO
+    result = [list(c) for c in clusters if c]
+    changed = True
+    while changed:
+        changed = False
+        boxes = [_bbox(c) for c in result]
+        for i in range(len(result)):
+            for j in range(i + 1, len(result)):
+                bi, bj = boxes[i], boxes[j]
+                if _x_gap(bi, bj) > gap_max:
+                    continue
+                if abs(bi.top - bj.top) > edge_tol or abs(bi.bottom - bj.bottom) > edge_tol:
+                    continue
+                result[i].extend(result[j])
+                del result[j]
+                changed = True
+                break
+            if changed:
+                break
+    return result
