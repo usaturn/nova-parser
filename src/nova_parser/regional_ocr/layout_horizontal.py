@@ -13,7 +13,15 @@ normalize_rects → drop_perimeter_rects → drop_noise_rects
 
 from __future__ import annotations
 
-from nova_parser.regional_ocr.layout import _bbox
+from nova_parser.regional_ocr.layout import (
+    _bbox,
+    _cluster_by_x,
+    _segment_by_y_gaps,
+    drop_noise_rects,
+    drop_perimeter_rects,
+    finalize_blocks,
+    normalize_rects,
+)
 from nova_parser.regional_ocr.models import BlockRect
 
 # --- 名前付き閾値定数 ---------------------------------------------------------
@@ -124,3 +132,35 @@ def merge_by_y_profile(
             if changed:
                 break
     return result
+
+
+# --- 公開エントリポイント -----------------------------------------------------
+
+
+def compute_horizontal_blocks(image_width: int, image_height: int, blocks: list[BlockRect]) -> list[BlockRect]:
+    """段落矩形一覧から横ブロック矩形一覧をローカル生成する（スペック 6.1）。
+
+    出力順は (バンド上→下, バンド内右→左) の縦書き読み順。判定が不確実な場合は
+    誤結合より未結合を優先し、余剰候補として残す（スペック 8）。
+    本文矩形が 0 件なら正規化済み矩形を返し、入力 0 件・画像サイズ不正は 0 件を返す。
+    想定外の例外は握り潰さず呼び出し元へ伝播する。
+    """
+    if image_width <= 0 or image_height <= 0 or not blocks:
+        return []
+    rects = normalize_rects(blocks, image_width, image_height)
+    if not rects:
+        return []
+    body = drop_perimeter_rects(rects, image_width, image_height)
+    body = drop_noise_rects(body, image_width, image_height)
+    if not body:
+        return rects
+    gap_min = image_height * H_BAND_GAP_MIN_RATIO
+    ordered: list[list[BlockRect]] = []
+    for band in _segment_by_y_gaps(body, gap_min):
+        clusters = _cluster_by_x(band, image_width)
+        clusters = absorb_narrow_fragments(clusters, image_width, image_height)
+        clusters = merge_by_y_profile(clusters, image_width, image_height)
+        # バンド内は右→左（縦書き読み順）
+        clusters.sort(key=lambda c: -_bbox(c).right)
+        ordered.extend(clusters)
+    return finalize_blocks(ordered, image_width, image_height)

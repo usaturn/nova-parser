@@ -5,7 +5,11 @@
 
 from __future__ import annotations
 
-from nova_parser.regional_ocr.layout_horizontal import absorb_narrow_fragments, merge_by_y_profile
+from nova_parser.regional_ocr.layout_horizontal import (
+    absorb_narrow_fragments,
+    compute_horizontal_blocks,
+    merge_by_y_profile,
+)
 from nova_parser.regional_ocr.models import BlockRect
 
 W, H = 1000, 1000
@@ -94,3 +98,41 @@ class TestMergeByYProfile:
 
     def test_empty_input_returns_empty(self):
         assert merge_by_y_profile([], W, H) == []
+
+
+class TestComputeHorizontalBlocks:
+    def test_empty_input_returns_empty(self):
+        assert compute_horizontal_blocks(W, H, []) == []
+        assert compute_horizontal_blocks(0, 0, [_r(10, 10, 100, 100)]) == []
+
+    def test_splits_bands_at_common_horizontal_gap(self):
+        # p006 型: 全列共通の縦空白で上下バンドへ分割し、バンド内は 1 ブロックへ統合
+        top = [_r(100, 100, 300, 250), _r(450, 110, 300, 240)]
+        bottom = [_r(100, 500, 300, 300), _r(450, 505, 300, 295)]
+        blocks = compute_horizontal_blocks(W, H, top + bottom)
+        assert len(blocks) == 2
+        assert blocks[0].y < blocks[1].y
+
+    def test_orders_blocks_right_to_left_within_band(self):
+        # 縦書き読み順: 右領域 → 図版上の短列群 → 欄外注釈
+        main = _r(600, 100, 300, 700)
+        short = _r(300, 100, 250, 400)  # 下端が異なる → 別ブロック
+        note = _r(50, 300, 100, 500)  # 上端が異なる → 別ブロック
+        blocks = compute_horizontal_blocks(W, H, [note, short, main])
+        assert len(blocks) == 3
+        assert blocks[0].x > blocks[1].x > blocks[2].x
+
+    def test_merges_same_profile_columns_into_one_block(self):
+        a = _r(100, 100, 250, 700)
+        b = _r(400, 105, 250, 700)
+        c = _r(700, 100, 200, 705)
+        blocks = compute_horizontal_blocks(W, H, [a, b, c])
+        assert len(blocks) == 1
+        blk = blocks[0]
+        assert blk.left <= 100 and blk.right >= 900
+        assert blk.top <= 100 and blk.bottom >= 805
+
+    def test_returns_normalized_rects_when_body_empty(self):
+        # 下端外周帯の孤立ノンブルのみ → 本文 0 件 → 正規化済み矩形を返す
+        page_no = _r(480, 960, 40, 25)
+        assert compute_horizontal_blocks(W, H, [page_no]) == [page_no]
