@@ -1,6 +1,7 @@
 """layout_horizontal.py 純粋関数のユニットテスト。座標は 1000x1000 画像を前提とする。
 
-閾値（W=H=1000 のとき）: 断片幅 80 / 吸収間隔 80 / 上端揃え 30 / プロファイル端 30 / 統合間隔 250
+閾値（W=H=1000 のとき）: 断片幅 100 / 吸収間隔 80 / 上端揃え 30 / 断片高さ比 0.50
+/ プロファイル端 30 / 統合間隔 250 / 高さ類似比 0.88 / 類似統合間隔 80
 """
 
 from __future__ import annotations
@@ -63,6 +64,21 @@ class TestAbsorbNarrowFragments:
     def test_lone_narrow_cluster_stays(self):
         assert _boxes(absorb_narrow_fragments([[_r(50, 300, 60, 400)]], W, H)) == {(50, 300, 110, 700)}
 
+    def test_keeps_medium_height_fragment_from_full_height_host(self):
+        # 図版上の中高列: 宿主の 50% を超える高さの断片は吸収しない（p035 型）
+        full = [_r(300, 100, 80, 700)]
+        mid = [_r(200, 105, 50, 400)]  # 400 > 700 * 0.50
+        assert len(absorb_narrow_fragments([full, mid], W, H)) == 2
+
+    def test_prefers_taller_host_on_equal_gap(self):
+        # gap 同点ならより高い宿主へ吸収する
+        left = [_r(100, 100, 150, 300)]  # right=250, h=300
+        right = [_r(400, 100, 150, 700)]  # left=400, h=700
+        frag = [_r(310, 105, 30, 120)]  # gap left=60, gap right=60
+        out = _boxes(absorb_narrow_fragments([left, right, frag], W, H))
+        assert (100, 100, 250, 400) in out  # 低い left は単独
+        assert (310, 100, 550, 800) in out  # 高い right が frag を吸収
+
     def test_empty_input_returns_empty(self):
         assert absorb_narrow_fragments([], W, H) == []
 
@@ -94,6 +110,18 @@ class TestMergeByYProfile:
     def test_no_merge_beyond_max_gap(self):
         a = [_r(0, 100, 100, 700)]
         b = [_r(400, 100, 100, 700)]
+        assert len(merge_by_y_profile([a, b], W, H)) == 2
+
+    def test_merges_similar_height_top_aligned_within_sim_gap(self):
+        # 下端はずれるが高さ比 ≥ 0.88 かつ近接 → 類似統合（p067 型）
+        a = [_r(100, 100, 150, 700)]
+        b = [_r(280, 105, 150, 650)]  # 高さ比 650/700≈0.93、gap=30 ≤ 80
+        assert _boxes(merge_by_y_profile([a, b], W, H)) == {(100, 100, 430, 800)}
+
+    def test_keeps_similar_height_beyond_sim_gap(self):
+        # 高さは類似でも間隔が類似統合上限超かつ下端不一致 → 統合しない
+        a = [_r(100, 100, 100, 700)]
+        b = [_r(300, 105, 100, 650)]  # gap=100 > 80, bottom 差あり
         assert len(merge_by_y_profile([a, b], W, H)) == 2
 
     def test_empty_input_returns_empty(self):

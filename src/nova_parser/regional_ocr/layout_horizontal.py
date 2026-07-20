@@ -29,7 +29,7 @@ from nova_parser.regional_ocr.models import BlockRect
 H_BAND_GAP_MIN_RATIO = 0.02
 """上下バンドの境界とみなす、全矩形共通の縦空白の最小高さ（画像高さ比）。スペック 7.2。"""
 
-H_FRAG_MAX_WIDTH_RATIO = 0.08
+H_FRAG_MAX_WIDTH_RATIO = 0.10
 """見出し断片とみなす最大クラスタ幅（画像幅比 ≈ 本文 1〜2 列分）。スペック 7.4。"""
 
 H_FRAG_GAP_RATIO = 0.08
@@ -38,11 +38,23 @@ H_FRAG_GAP_RATIO = 0.08
 H_TOP_ALIGN_TOL_RATIO = 0.03
 """断片吸収で「上端が揃う」とみなす Y 差の許容（画像高さ比）。欄外注釈の誤吸収を防ぐ。"""
 
+H_FRAG_HOST_HEIGHT_RATIO = 0.50
+"""断片の高さが宿主のこの比率以下のときのみ吸収する。図版上の中高列が全高列へ
+誤吸収されるのを防ぎつつ、見出し級の短列は取り込む。"""
+
 H_PROFILE_EDGE_TOL_RATIO = 0.03
 """Y プロファイル統合で上端・下端が「揃う」とみなす Y 差の許容（画像高さ比）。スペック 7.5。"""
 
 H_MERGE_MAX_GAP_RATIO = 0.25
-"""Y プロファイル統合を許す X 間隔の上限（画像幅比）。安全弁。"""
+"""Y プロファイル統合（上下端一致）を許す X 間隔の上限（画像幅比）。安全弁。"""
+
+H_PROFILE_HEIGHT_SIM_RATIO = 0.88
+"""上端が揃い、高さ比がこの値以上の隣接クラスタを統合する（下端不一致でも可）。
+Vision が列ごとに下端をわずかにずらすケース向け。誤結合を避けるため間隔は
+H_PROFILE_SIM_MAX_GAP_RATIO で厳しく制限する。"""
+
+H_PROFILE_SIM_MAX_GAP_RATIO = 0.08
+"""高さ類似統合を許す X 間隔の上限（画像幅比）。広めの間隔での横断結合を防ぐ。"""
 
 
 # --- 内部ヘルパー -------------------------------------------------------------
@@ -63,12 +75,19 @@ def absorb_narrow_fragments(
 ) -> list[list[BlockRect]]:
     """狭い見出し断片クラスタを、上端が揃う X 隣接クラスタへ吸収する（スペック 7.4）。
 
-    吸収候補が複数ある場合は X 間隔が最小の隣を選ぶ。欄外注釈は上端が本文より
-    大きく低いため吸収されない。吸収で幅が閾値を超えたクラスタは断片扱いを外れる。
+    吸収条件:
+    - 断片幅 ≤ H_FRAG_MAX_WIDTH_RATIO
+    - X 間隔 ≤ H_FRAG_GAP_RATIO
+    - 上端差 ≤ H_TOP_ALIGN_TOL_RATIO
+    - 断片高さ ≤ 宿主高さ × H_FRAG_HOST_HEIGHT_RATIO（真の見出し断片のみ）
+
+    候補が複数ある場合は X 間隔が最小の隣を選び、同間隔ならより高い宿主を優先する。
+    欄外注釈は上端が本文より大きく低いため吸収されない。
     """
     max_w = image_width * H_FRAG_MAX_WIDTH_RATIO
     gap_max = image_width * H_FRAG_GAP_RATIO
     top_tol = image_height * H_TOP_ALIGN_TOL_RATIO
+    edge_tol = image_height * H_PROFILE_EDGE_TOL_RATIO
     result = [list(c) for c in clusters if c]
     changed = True
     while changed:
@@ -79,6 +98,7 @@ def absorb_narrow_fragments(
                 continue
             best: int | None = None
             best_gap = 0.0
+            best_host_h = -1.0
             for j, bj in enumerate(boxes):
                 if i == j:
                     continue
@@ -87,8 +107,14 @@ def absorb_narrow_fragments(
                     continue
                 if abs(bi.top - bj.top) > top_tol:
                     continue
-                if best is None or gap < best_gap:
-                    best, best_gap = j, gap
+                # 宿主より実質的に高い断片は吸収しない
+                if bi.height > bj.height + edge_tol:
+                    continue
+                # 見出し級の短列のみ（中高の図版列が全高列へ混ざるのを防ぐ）
+                if bi.height > bj.height * H_FRAG_HOST_HEIGHT_RATIO:
+                    continue
+                if best is None or gap < best_gap - 1e-6 or (abs(gap - best_gap) <= 1e-6 and bj.height > best_host_h):
+                    best, best_gap, best_host_h = j, gap, bj.height
             if best is not None:
                 result[best].extend(result[i])
                 del result[i]
@@ -107,12 +133,16 @@ def merge_by_y_profile(
 ) -> list[list[BlockRect]]:
     """上端・下端が共に揃う X 隣接クラスタを横方向へ統合する（スペック 7.5）。
 
-    統合は連鎖する（統合後の外接矩形で次の隣と比較する）。図版上の短列群・
-    欄外注釈は端が揃わないため統合されない。X 間隔が H_MERGE_MAX_GAP_RATIO を
-    超える統合は安全弁として行わない。
+    加えて、上端が揃い高さが十分類似（H_PROFILE_HEIGHT_SIM_RATIO 以上）で
+    X 間隔が H_PROFILE_SIM_MAX_GAP_RATIO 以下の隣接クラスタも統合する。
+    これは Vision が列下端をわずかにずらすケース向けの緩和であり、
+    広い間隔での横断結合は行わない（未結合優先、スペック 8）。
+
+    統合は連鎖する。図版上の短列群・欄外注釈は端も高さも揃わないため統合されない。
     """
     edge_tol = image_height * H_PROFILE_EDGE_TOL_RATIO
     gap_max = image_width * H_MERGE_MAX_GAP_RATIO
+    sim_gap_max = image_width * H_PROFILE_SIM_MAX_GAP_RATIO
     result = [list(c) for c in clusters if c]
     changed = True
     while changed:
@@ -121,9 +151,19 @@ def merge_by_y_profile(
         for i in range(len(result)):
             for j in range(i + 1, len(result)):
                 bi, bj = boxes[i], boxes[j]
-                if _x_gap(bi, bj) > gap_max:
+                gap = _x_gap(bi, bj)
+                if abs(bi.top - bj.top) > edge_tol:
                     continue
-                if abs(bi.top - bj.top) > edge_tol or abs(bi.bottom - bj.bottom) > edge_tol:
+                bot_ok = abs(bi.bottom - bj.bottom) <= edge_tol
+                if bot_ok and gap <= gap_max:
+                    ok = True
+                elif gap <= sim_gap_max:
+                    shorter = min(bi.height, bj.height)
+                    taller = max(bi.height, bj.height)
+                    ok = taller > 0 and shorter / taller >= H_PROFILE_HEIGHT_SIM_RATIO
+                else:
+                    ok = False
+                if not ok:
                     continue
                 result[i].extend(result[j])
                 del result[j]
