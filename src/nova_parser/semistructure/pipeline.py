@@ -13,7 +13,6 @@ from nova_parser.semistructure.manifest import load_manifest
 from nova_parser.semistructure.models import (
     EmbeddingInput,
     NormalizedBlock,
-    OcrPage,
     PipelineConfig,
     ReviewItem,
     ReviewStatus,
@@ -101,7 +100,6 @@ def run_pipeline(
     report.llm_calls += 1
 
     windows = build_structure_windows(blocks, outline=outline)
-    page_by_number: dict[int, OcrPage] = {page.page_number: page for page in pages}
     blocks_by_page: dict[int, list[NormalizedBlock]] = {}
     for block in blocks:
         blocks_by_page.setdefault(block.page, []).append(block)
@@ -113,9 +111,8 @@ def run_pipeline(
         page_blocks = blocks_by_page.get(window.center_page, [])
         if not page_blocks:
             continue
-        page = page_by_number.get(window.center_page)
         cache_key = _cache_key(
-            page_source_sha=page.source_sha256 if page is not None else "",
+            context_digest=_context_digest(window),
             manifest_sha=manifest_sha,
             model_id=classifier.classifier_id,
             schema_version=manifest.schema_version,
@@ -232,9 +229,19 @@ def _load_or_classify(
     return proposal, False
 
 
+def _context_digest(window: StructureWindow) -> str:
+    """窓の全文脈ブロックとアウトラインから決定的ダイジェストを算出する。"""
+    parts: list[str] = []
+    for block in window.context_blocks:
+        parts.append(f"{block.block_id}|{block.normalized_text}|{block.inherited_audience}")
+    if window.outline is not None:
+        parts.append(window.outline.model_dump_json())
+    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
+
+
 def _cache_key(
     *,
-    page_source_sha: str,
+    context_digest: str,
     manifest_sha: str,
     model_id: str,
     schema_version: int,
@@ -242,7 +249,7 @@ def _cache_key(
     """ページ単位キャッシュキーを SHA-256 で算出する。"""
     payload = "|".join(
         [
-            page_source_sha,
+            context_digest,
             f"sha256:{manifest_sha}" if not manifest_sha.startswith("sha256:") else manifest_sha,
             NORMALIZE_RULE_VERSION,
             PROMPT_CONTRACT_VERSION,

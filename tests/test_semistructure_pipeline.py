@@ -193,3 +193,47 @@ def test_pipeline_keeps_approved_gm_on_rerun(tmp_path: Path) -> None:
 
     retrieval = (tmp_path / "out/derived/retrieval-inputs.jsonl").read_text(encoding="utf-8")
     assert approved.segment_id not in retrieval
+
+
+def _setup_three_page_workspace(tmp_path: Path, *, p21_text: str = "ページ21の本文") -> Path:
+    """manifest + 3ページの regions.json を用意する。"""
+    manifest = make_manifest()
+    (tmp_path / "manifest.json").write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
+    input_dir = tmp_path / "input"
+    write_region_fixture(input_dir / "p021.regions.json", image_name="p021.png", text=p21_text)
+    write_region_fixture(input_dir / "p022.regions.json", image_name="p022.png", text="ページ22の本文")
+    write_region_fixture(input_dir / "p023.regions.json", image_name="p023.png", text="ページ23の本文")
+    return tmp_path
+
+
+class _TrackingClassifier(FakeClassifier):
+    """classify 呼び出しを記録する分類器。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.classified_pages: list[int] = []
+
+    def classify(self, window: StructureWindow) -> StructureProposal:
+        self.classified_pages.append(window.center_page)
+        return super().classify(window)
+
+
+def test_cache_invalidates_when_adjacent_page_changes(tmp_path: Path) -> None:
+    """隣接ページの本文を変更すると中心ページのキャッシュが無効化される。"""
+    _setup_three_page_workspace(tmp_path)
+    classifier1 = _TrackingClassifier()
+    run_pipeline(make_config(tmp_path), classifier=classifier1)
+    assert sorted(classifier1.classified_pages) == [21, 22, 23]
+
+    # p21 の本文を変更して再実行
+    write_region_fixture(
+        tmp_path / "input" / "p021.regions.json",
+        image_name="p021.png",
+        text="変更されたページ21",
+    )
+    classifier2 = _TrackingClassifier()
+    run_pipeline(make_config(tmp_path), classifier=classifier2)
+    # p21 自身 + p22 (p21 が文脈に含まれる) が再分類される。p23 はキャッシュヒット。
+    assert 21 in classifier2.classified_pages
+    assert 22 in classifier2.classified_pages
+    assert 23 not in classifier2.classified_pages
