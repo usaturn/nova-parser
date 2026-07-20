@@ -1010,6 +1010,30 @@ def test_get_blocks_returns_vertical_blocks_merged_from_paragraphs(tmp_path):
     assert data["vertical_blocks"] == [{"x": 9, "y": 9, "width": 52, "height": 67}]
 
 
+def test_get_blocks_returns_horizontal_blocks_merged_from_paragraphs(tmp_path):
+    """レスポンスに horizontal_blocks が含まれ、Y プロファイルが揃う横並び段落は統合される。"""
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "a.png", (100, 100))
+    output_dir = tmp_path / "output"
+
+    fake = FakeVisionClient(
+        _FakeResponse(
+            blocks=[
+                [(10, 10), (40, 10), (40, 80), (10, 80)],
+                [(50, 10), (80, 10), (80, 80), (50, 80)],
+            ]
+        )
+    )
+    client = _make_client(image_dir, output_dir, _simple_factory(fake))
+    resp = client.get("/api/blocks/a.png")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    # 横ブロックは横並び 2 段落を統合した 1 矩形 + 余白（PAD_*_RATIO=0.006 → 100px 画像で ±1px 程度）
+    assert data["horizontal_blocks"] == [{"x": 9, "y": 9, "width": 72, "height": 72}]
+
+
 def test_cache_file_stores_only_paragraph_blocks(tmp_path):
     """{stem}.blocks.json には vertical_blocks を保存しない（スペック 6.3）。"""
     image_dir = tmp_path / "images"
@@ -1023,6 +1047,7 @@ def test_cache_file_stores_only_paragraph_blocks(tmp_path):
 
     raw = json.loads((output_dir / "a.blocks.json").read_text(encoding="utf-8"))
     assert "vertical_blocks" not in raw
+    assert "horizontal_blocks" not in raw
     assert raw["schema_version"] == 1
 
 
@@ -1042,6 +1067,8 @@ def test_cache_hit_regenerates_vertical_blocks_without_vision_call(tmp_path):
     assert len(fake.document_calls) == 1
     assert second.json()["vertical_blocks"] == first.json()["vertical_blocks"]
     assert second.json()["vertical_blocks"], "キャッシュヒット時に縦ブロックが空になってはいけない"
+    assert second.json()["horizontal_blocks"] == first.json()["horizontal_blocks"]
+    assert second.json()["horizontal_blocks"], "キャッシュヒット時に横ブロックが空になってはいけない"
 
 
 def test_schema_version_1_cache_without_vertical_blocks_is_served(tmp_path):
