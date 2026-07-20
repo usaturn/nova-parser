@@ -192,8 +192,6 @@ def _severity(reasons: Sequence[str]) -> str:
     """理由集合から危険度ラベルを決める。"""
     if any(reason in _HIGH_SEVERITY_REASONS for reason in reasons):
         return "high"
-    if reasons == [_DEFAULT_REASON]:
-        return "medium"
     return "medium"
 
 
