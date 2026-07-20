@@ -69,6 +69,15 @@ def validate_corpus(
         key: [0] * len(region.raw_text) for key, region in region_index.items()
     }
 
+    # (page, rect_id) → その領域を最初に参照したセグメントID。
+    # gap/overlap エラーを、該当領域に部分被覆するセグメントへ紐づけるために使う。
+    segment_by_region: dict[tuple[int, str], str | None] = {}
+    for segment in segments:
+        for span in segment.source_spans:
+            key = (span.page, span.rect_id)
+            if key not in segment_by_region:
+                segment_by_region[key] = segment.segment_id
+
     for segment in segments:
         errors.extend(_check_source_order(segment))
         for span in segment.source_spans:
@@ -120,6 +129,7 @@ def validate_corpus(
                 ValidationError(
                     code="source_gap",
                     message=f"原文が被覆されていません: [{gap_start}, {gap_end})",
+                    segment_id=segment_by_region.get(key),
                     page=key[0],
                     rect_id=key[1],
                 )
@@ -131,6 +141,7 @@ def validate_corpus(
                 ValidationError(
                     code="source_overlap",
                     message=f"source_spans が重複しています: [{overlap_start}, {overlap_end})",
+                    segment_id=segment_by_region.get(key),
                     page=key[0],
                     rect_id=key[1],
                 )

@@ -155,3 +155,47 @@ def test_validate_player_visibility_allows_player_and_shared() -> None:
         ]
     )
     assert report.errors == []
+
+
+def test_validate_corpus_gap_has_segment_id() -> None:
+    """source_gap エラーにはその領域に部分被覆するセグメントの segment_id が紐づく。"""
+    report = validate_corpus(
+        pages=[make_page(text="ABCDE")],
+        segments=[make_segment("s1", spans=[SourceSpan(page=22, rect_id="r1", start=0, end=3)])],
+    )
+    gap_errors = [error for error in report.errors if error.code == "source_gap"]
+    assert gap_errors
+    assert gap_errors[0].segment_id == "s1"
+
+
+def test_validate_corpus_overlap_has_segment_id() -> None:
+    """source_overlap エラーにはその領域に被覆するセグメントの segment_id が紐づく。"""
+    report = validate_corpus(
+        pages=[make_page(text="ABCDE")],
+        segments=[
+            make_segment("s1", spans=[SourceSpan(page=22, rect_id="r1", start=0, end=4)]),
+            make_segment("s2", spans=[SourceSpan(page=22, rect_id="r1", start=2, end=5)]),
+        ],
+    )
+    overlap_errors = [error for error in report.errors if error.code == "source_overlap"]
+    assert overlap_errors
+    assert overlap_errors[0].segment_id is not None
+
+
+def test_validate_corpus_total_gap_has_no_segment_id() -> None:
+    """どのセグメントにも被覆されない完全ギャップは segment_id=None のまま。"""
+    report = validate_corpus(
+        pages=[
+            make_page(
+                regions=[
+                    make_region("r1", "AB"),
+                    make_region("r2", "CD"),
+                ],
+            ),
+        ],
+        segments=[make_segment("s1", spans=[SourceSpan(page=22, rect_id="r1", start=0, end=2)])],
+    )
+    gap_errors = [error for error in report.errors if error.code == "source_gap"]
+    assert gap_errors
+    r2_gap = next(error for error in gap_errors if error.rect_id == "r2")
+    assert r2_gap.segment_id is None
