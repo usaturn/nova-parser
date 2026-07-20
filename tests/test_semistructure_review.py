@@ -1,12 +1,25 @@
-"""レビューキューと Markdown 生成のテスト。"""
+"""レビューキューと Markdown 生成・判断適用のテスト。"""
 
 from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 
-from nova_parser.semistructure.models import Audience, ReviewStatus, SourceSpan
+from nova_parser.semistructure.models import (
+    Audience,
+    ReviewDecision,
+    ReviewStatus,
+    SemanticSegment,
+    SourceSpan,
+)
 from nova_parser.semistructure.review import build_review_items, render_review_markdown
+from nova_parser.semistructure.storage import (
+    apply_review_decisions,
+    load_review_decisions,
+    read_jsonl,
+    write_jsonl_atomic,
+)
 from tests.semistructure_factories import make_page, make_segment
 
 
@@ -143,3 +156,123 @@ def test_render_review_markdown_json_examples_are_parseable() -> None:
         assert "input_hash" in payload
         assert "processing_version" in payload
         assert "decided_by" in payload
+
+
+def test_write_and_read_jsonl_atomic_roundtrip(tmp_path: Path) -> None:
+    """同一ディレクトリ一時ファイル経由の原子書き込みと往復読み出し。"""
+    path = tmp_path / "out" / "segments.jsonl"
+    segments = [
+        make_segment("s1", normalized_text="一"),
+        make_segment("s2", normalized_text="二"),
+    ]
+
+    write_jsonl_atomic(path, segments)
+
+    assert path.is_file()
+    # 一時ファイルが残っていないこと
+    assert list(path.parent.glob("*.tmp")) == []
+    loaded = read_jsonl(path, SemanticSegment)
+    assert [segment.segment_id for segment in loaded] == ["s1", "s2"]
+    assert loaded[0].normalized_text == "一"
+    # ensure_ascii=False で日本語がエスケープされない
+    raw = path.read_text(encoding="utf-8")
+    assert "一" in raw
+    assert "\\u" not in raw
+
+
+def test_load_review_decisions_keyed_by_review_id(tmp_path: Path) -> None:
+    """decisions JSONL を review_id キーの辞書として読み込む。"""
+    path = tmp_path / "decisions.jsonl"
+    decision = ReviewDecision(
+        review_id="eg-test:s1",
+        segment_id="s1",
+        status=ReviewStatus.APPROVED,
+        input_hash="sha256:" + "a" * 64,
+        processing_version="test-v1",
+        decided_by="reviewer-1",
+        comment="ok",
+    )
+    write_jsonl_atomic(path, [decision])
+
+    loaded = load_review_decisions(path)
+
+    assert set(loaded) == {"eg-test:s1"}
+    assert loaded["eg-test:s1"].status == ReviewStatus.APPROVED
+    assert loaded["eg-test:s1"].comment == "ok"
+
+
+def test_apply_review_decisions_when_hash_matches() -> None:
+    """review_id と input_hash が一致する判断だけ status を適用する。"""
+    input_hash = "sha256:" + "b" * 64
+    segment = make_segment(
+        "s1",
+        review_status=ReviewStatus.REQUIRED,
+        processing={
+            "input_hash": input_hash,
+            "review_reasons": "low_confidence",
+        },
+    )
+    decisions = {
+        "eg-test:s1": ReviewDecision(
+            review_id="eg-test:s1",
+            segment_id="s1",
+            status=ReviewStatus.APPROVED,
+            input_hash=input_hash,
+            processing_version="test-v1",
+            decided_by="reviewer-1",
+        ),
+    }
+
+    applied = apply_review_decisions([segment], decisions)
+
+    assert len(applied) == 1
+    assert applied[0].review_status == ReviewStatus.APPROVED
+
+
+def test_apply_review_decisions_stale_when_hash_mismatches() -> None:
+    """入力ハッシュが変わった判断は stale_review_decision として再レビューへ戻す。"""
+    segment = make_segment(
+        "s1",
+        review_status=ReviewStatus.NOT_REQUIRED,
+        processing={"input_hash": "sha256:" + "c" * 64},
+    )
+    decisions = {
+        "eg-test:s1": ReviewDecision(
+            review_id="eg-test:s1",
+            segment_id="s1",
+            status=ReviewStatus.APPROVED,
+            input_hash="sha256:" + "d" * 64,
+            processing_version="test-v1",
+            decided_by="reviewer-1",
+        ),
+    }
+
+    applied = apply_review_decisions([segment], decisions)
+
+    assert applied[0].review_status == ReviewStatus.REQUIRED
+    reasons = applied[0].processing.get("review_reasons", "")
+    assert "stale_review_decision" in reasons.split(",")
+
+
+def test_apply_review_decisions_matches_input_sha256_fallback() -> None:
+    """processing.input_hash が無くても input_sha256 と照合できる。"""
+    digest = "sha256:" + "e" * 64
+    segment = make_segment(
+        "s1",
+        review_status=ReviewStatus.REQUIRED,
+        processing={"input_sha256": digest},
+    )
+    decisions = {
+        "eg-test:s1": ReviewDecision(
+            review_id="eg-test:s1",
+            segment_id="s1",
+            status=ReviewStatus.REJECTED,
+            input_hash=digest,
+            processing_version="test-v1",
+            decided_by="reviewer-1",
+        ),
+    }
+
+    applied = apply_review_decisions([segment], decisions)
+
+    assert applied[0].review_status == ReviewStatus.REJECTED
