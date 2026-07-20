@@ -1,0 +1,75 @@
+{
+  "image_name": "AG2_SILVER_WINGED_SAVIOR_p019_00.png",
+  "image_width": 1698,
+  "image_height": 2492,
+  "paragraph_blocks": [
+    {
+      "x": 180,
+      "y": 207,
+      "width": 604,
+      "height": 30
+    },
+    {
+      "x": 1380,
+      "y": 369,
+      "width": 154,
+      "height": 541
+    },
+    {
+      "x": 923,
+      "y": 365,
+      "width": 450,
+      "height": 1807
+    },
+    {
+      "x": 807,
+      "y": 369,
+      "width": 38,
+      "height": 666
+    },
+    {
+      "x": 691,
+      "y": 368,
+      "width": 96,
+      "height": 1804
+    },
+    {
+      "x": 521,
+      "y": 368,
+      "width": 148,
+      "height": 1236
+    },
+    {
+      "x": 406,
+      "y": 404,
+      "width": 34,
+      "height": 1358
+    },
+    {
+      "x": 164,
+      "y": 558,
+      "width": 30,
+      "height": 1017
+    },
+    {
+      "x": 125,
+      "y": 2337,
+      "width": 43,
+      "height": 44
+    }
+  ],
+  "expected_horizontal_blocks": [
+    {
+      "x": 370,
+      "y": 349,
+      "width": 1195,
+      "height": 1848
+    },
+    {
+      "x": 136,
+      "y": 538,
+      "width": 88,
+      "height": 1071
+    }
+  ]
+}
