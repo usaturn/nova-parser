@@ -220,12 +220,15 @@ def _load_or_classify(
 ) -> tuple[StructureProposal, bool]:
     """キャッシュがあれば読み、なければ classify して保存する。"""
     if not no_cache and cache_path.is_file():
-        proposal = StructureProposal.model_validate_json(cache_path.read_text(encoding="utf-8"))
-        return proposal, True
+        try:
+            proposal = StructureProposal.model_validate_json(cache_path.read_text(encoding="utf-8"))
+            return proposal, True
+        except Exception:
+            cache_path.unlink(missing_ok=True)
 
     proposal = classifier.classify(window)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
-    cache_path.write_text(proposal.model_dump_json(ensure_ascii=False), encoding="utf-8")
+    write_text_atomic(cache_path, proposal.model_dump_json(ensure_ascii=False))
     return proposal, False
 
 

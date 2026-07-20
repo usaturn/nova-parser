@@ -237,3 +237,20 @@ def test_cache_invalidates_when_adjacent_page_changes(tmp_path: Path) -> None:
     assert 21 in classifier2.classified_pages
     assert 22 in classifier2.classified_pages
     assert 23 not in classifier2.classified_pages
+
+
+def test_corrupted_cache_triggers_reclassification(tmp_path: Path) -> None:
+    """破損したキャッシュファイルがあっても自動復旧して再分類する。"""
+    _setup_two_page_workspace(tmp_path)
+    run_pipeline(make_config(tmp_path), classifier=FakeClassifier.valid())
+
+    cache_dir = tmp_path / "out" / ".cache"
+    cache_files = list(cache_dir.glob("*.json"))
+    assert cache_files, "1回目の実行でキャッシュファイルが生成されるはず"
+    for cache_file in cache_files:
+        cache_file.write_text("{invalid json", encoding="utf-8")
+
+    classifier2 = _TrackingClassifier()
+    report = run_pipeline(make_config(tmp_path), classifier=classifier2)
+    assert report.failed_pages == []
+    assert len(classifier2.classified_pages) >= 2
