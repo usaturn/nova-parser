@@ -2084,7 +2084,7 @@ const app = newApp({
 
 
 # ---------------------------------------------------------------------------
-# ブロック選択: 粒度 (vertical / paragraph)
+# ブロック選択: 粒度 (vertical / horizontal / paragraph)
 # ---------------------------------------------------------------------------
 
 
@@ -2125,6 +2125,7 @@ require("./src/nova_parser/regional_ocr/static/app.js");
   assert.equal(app.blockGranularity, "paragraph", "画像切替で粒度を維持する");
   assert.equal(app.paragraphBlocks, null, "画像切替で矩形一覧はリセットされる");
   assert.equal(app.verticalBlocks, null);
+  assert.equal(app.horizontalBlocks, null);
 })();
 """
     )
@@ -2146,6 +2147,7 @@ Object.assign(app, {
   blockMode: true,
   paragraphBlocks: [{ x: 0, y: 0, width: 10, height: 10 }],
   verticalBlocks: [{ x: 0, y: 0, width: 20, height: 20 }],
+  horizontalBlocks: [{ x: 0, y: 0, width: 30, height: 30 }],
   hoverBlock: { x: 0, y: 0, width: 20, height: 20 },
 });
 app.setGranularity("paragraph");
@@ -2155,6 +2157,8 @@ assert.equal(fetchCount, 0, "粒度変更で fetch してはいけない");
 assert.deepEqual(app.activeBlocks(), [{ x: 0, y: 0, width: 10, height: 10 }]);
 app.setGranularity("vertical");
 assert.deepEqual(app.activeBlocks(), [{ x: 0, y: 0, width: 20, height: 20 }]);
+app.setGranularity("horizontal");
+assert.deepEqual(app.activeBlocks(), [{ x: 0, y: 0, width: 30, height: 30 }]);
 """
     )
 
@@ -2176,13 +2180,43 @@ assert.deepEqual(app.activeBlocks(), [{ x: 1, y: 1, width: 5, height: 5 }]);
     )
 
 
+def test_active_blocks_horizontal_falls_back_to_paragraphs_when_empty() -> None:
+    """横ブロック 0 件・段落ありなら段落矩形へフォールバックする（スペック 9）。不正粒度は拒否する。"""
+    _run_node(
+        r"""
+const assert = require("node:assert/strict");
+global.window = {};
+require("./src/nova_parser/regional_ocr/static/app.js");
+
+const app = window.regionalOcrApp();
+app.paragraphBlocks = [{ x: 1, y: 1, width: 5, height: 5 }];
+app.horizontalBlocks = [];
+app.setGranularity("horizontal");
+assert.equal(app.blockGranularity, "horizontal");
+assert.deepEqual(app.activeBlocks(), [{ x: 1, y: 1, width: 5, height: 5 }]);
+app.setGranularity("bogus");
+assert.equal(app.blockGranularity, "horizontal", "不正値は無視する");
+"""
+    )
+
+
+def test_index_html_offers_three_granularity_options() -> None:
+    """粒度セレクトは 縦ブロック / 横ブロック / 段落 の 3 択（スペック 9）。"""
+    html = (Path(__file__).resolve().parents[1] / "src/nova_parser/regional_ocr/static/index.html").read_text(
+        encoding="utf-8"
+    )
+    assert '<option value="vertical">縦ブロック</option>' in html
+    assert '<option value="horizontal">横ブロック</option>' in html
+    assert '<option value="paragraph">段落</option>' in html
+
+
 def test_ensure_blocks_stores_both_lists_and_warns_only_when_both_empty() -> None:
     """_ensureBlocks は両矩形を保持し、両方 0 件のときだけ警告する（スペック 10）。"""
     _run_node(
         r"""
 const assert = require("node:assert/strict");
 global.window = {};
-let payload = { blocks: [{ x: 0, y: 0, width: 10, height: 10 }], vertical_blocks: [] };
+let payload = { blocks: [{ x: 0, y: 0, width: 10, height: 10 }], vertical_blocks: [], horizontal_blocks: [] };
 global.fetch = () => Promise.resolve({ ok: true, json: async () => payload });
 require("./src/nova_parser/regional_ocr/static/app.js");
 
@@ -2192,11 +2226,12 @@ require("./src/nova_parser/regional_ocr/static/app.js");
   await app._ensureBlocks();
   assert.deepEqual(app.paragraphBlocks, [{ x: 0, y: 0, width: 10, height: 10 }]);
   assert.deepEqual(app.verticalBlocks, []);
+  assert.deepEqual(app.horizontalBlocks, []);
   assert.deepEqual(app.warnings, [], "段落があれば警告しない");
 
   const app2 = window.regionalOcrApp();
   app2.currentImage = { name: "b.png", width: 100, height: 100, mime: "image/png" };
-  payload = { blocks: [], vertical_blocks: [] };
+  payload = { blocks: [], vertical_blocks: [], horizontal_blocks: [] };
   await app2._ensureBlocks();
   assert.deepEqual(app2.warnings, ["「b.png」からテキストブロックが検出されませんでした"]);
 })();
