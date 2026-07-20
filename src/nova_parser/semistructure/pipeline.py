@@ -101,6 +101,7 @@ def run_pipeline(
     report.llm_calls += 1
 
     windows = build_structure_windows(blocks, outline=outline)
+    page_by_number: dict[int, OcrPage] = {page.page_number: page for page in pages}
     blocks_by_page: dict[int, list[NormalizedBlock]] = {}
     for block in blocks:
         blocks_by_page.setdefault(block.page, []).append(block)
@@ -112,7 +113,7 @@ def run_pipeline(
         page_blocks = blocks_by_page.get(window.center_page, [])
         if not page_blocks:
             continue
-        page = _page_for_number(pages, window.center_page)
+        page = page_by_number.get(window.center_page)
         cache_key = _cache_key(
             page_source_sha=page.source_sha256 if page is not None else "",
             manifest_sha=manifest_sha,
@@ -255,14 +256,6 @@ def _cache_key(
 def _file_sha256(path: Path) -> str:
     """ファイル内容の SHA-256 十六進を返す。"""
     return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def _page_for_number(pages: Sequence[OcrPage], page_number: int) -> OcrPage | None:
-    """ページ番号に対応する OcrPage を返す。"""
-    for page in pages:
-        if page.page_number == page_number:
-            return page
-    return None
 
 
 def _apply_validation_to_segments(
