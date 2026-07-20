@@ -9,6 +9,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from nova_parser.gemini_backend import BackendUnavailableError, current_backend
+from nova_parser.semistructure.evaluate import evaluate_gold_against_output, format_structure_metrics
 from nova_parser.semistructure.llm import GeminiStructureClassifier
 from nova_parser.semistructure.manifest import load_manifest
 from nova_parser.semistructure.models import PipelineConfig
@@ -25,8 +26,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="OCR regions.json を追跡可能な半構造化 JSONL へ変換する",
     )
-    parser.add_argument("--manifest", type=Path, required=True, help="書籍マニフェスト JSON")
-    parser.add_argument("--input-dir", type=Path, required=True, help="*.regions.json の入力ディレクトリ")
+    parser.add_argument(
+        "--manifest",
+        type=Path,
+        default=None,
+        help="書籍マニフェスト JSON（--evaluate-gold のみのときは不要）",
+    )
+    parser.add_argument(
+        "--input-dir",
+        type=Path,
+        default=None,
+        help="*.regions.json の入力ディレクトリ（--evaluate-gold のみのときは不要）",
+    )
     parser.add_argument("--output-dir", type=Path, required=True, help="正本・派生・レビューの出力先")
     parser.add_argument(
         "--review-decisions",
@@ -43,6 +54,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="LLM を呼ばず入力検査と決定的正規化まで行い件数を表示する",
+    )
+    parser.add_argument(
+        "--evaluate-gold",
+        type=Path,
+        default=None,
+        help=(
+            "正解 gold-segments.jsonl（またはそれを含むディレクトリ）。"
+            "指定時は output-dir/segments.jsonl と構造比較してメトリクスを表示する"
+        ),
     )
     return parser
 
@@ -69,6 +89,19 @@ def main(argv: list[str] | None = None) -> None:
     load_dotenv()
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    # 評価のみ: 既存の正本と gold を比較して終了する
+    if args.evaluate_gold is not None and args.manifest is None and args.input_dir is None:
+        try:
+            metrics = evaluate_gold_against_output(args.evaluate_gold, args.output_dir)
+        except FileNotFoundError as error:
+            print(str(error), file=sys.stderr)
+            raise SystemExit(1) from error
+        print(format_structure_metrics(metrics))
+        return
+
+    if args.manifest is None or args.input_dir is None:
+        parser.error("--manifest と --input-dir はパイプライン実行時に必須です")
 
     config = PipelineConfig(
         manifest_path=args.manifest,
@@ -98,6 +131,15 @@ def main(argv: list[str] | None = None) -> None:
     )
     report = run_pipeline(config, classifier=classifier)
     print(format_report(report))
+
+    # パイプライン後に gold 比較を続ける
+    if args.evaluate_gold is not None:
+        try:
+            metrics = evaluate_gold_against_output(args.evaluate_gold, args.output_dir)
+        except FileNotFoundError as error:
+            print(str(error), file=sys.stderr)
+            raise SystemExit(1) from error
+        print(format_structure_metrics(metrics))
 
 
 if __name__ == "__main__":
