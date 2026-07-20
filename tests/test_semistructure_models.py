@@ -11,6 +11,7 @@ from nova_parser.semistructure.models import (
     SemanticSegment,
     SourceSpan,
     StructureProposal,
+    StructureWindow,
 )
 from tests.semistructure_factories import FakeClassifier, make_block
 
@@ -58,6 +59,36 @@ def test_structure_proposal_rejects_generated_text_in_nested_segment() -> None:
                     }
                 ]
             }
+        )
+
+
+def test_structure_proposal_requires_valid_processing_metadata() -> None:
+    """構造提案は分類器・prompt契約・入力hashを必須で保持する。"""
+    with pytest.raises(ValidationError):
+        StructureProposal(segments=[])
+    with pytest.raises(ValidationError, match="input_sha256"):
+        StructureProposal(
+            segments=[],
+            classifier_id="gemini:test",
+            prompt_contract_version="v1",
+            input_sha256="not-a-hash",
+        )
+
+
+def test_structure_window_rejects_unknown_or_duplicate_allowed_block_ids() -> None:
+    """返却許可IDは文脈内に存在し、重複してはならない。"""
+    blocks = [make_block("b1"), make_block("b2")]
+    with pytest.raises(ValidationError, match="存在"):
+        StructureWindow(
+            center_page=22,
+            context_blocks=blocks,
+            allowed_block_ids=["missing"],
+        )
+    with pytest.raises(ValidationError, match="重複"):
+        StructureWindow(
+            center_page=22,
+            context_blocks=blocks,
+            allowed_block_ids=["b1", "b1"],
         )
 
 

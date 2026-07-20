@@ -111,7 +111,12 @@ def make_proposal(block_ids: list[str] | None = None, **overrides: Any) -> Struc
         "audience": Audience.SHARED,
     }
     segment_values.update(segment_overrides)
-    values = {"segments": [ProposalSegment(**segment_values)]}
+    values = {
+        "segments": [ProposalSegment(**segment_values)],
+        "classifier_id": "fake-classifier",
+        "prompt_contract_version": "test-v1",
+        "input_sha256": f"sha256:{'0' * 64}",
+    }
     values.update(overrides)
     return StructureProposal(**values)
 
@@ -147,14 +152,22 @@ def make_segment(
 def make_window(block_ids: list[str] | None = None, **overrides: Any) -> StructureWindow:
     """指定ID順のブロックを持つ分類窓を作る。"""
     blocks = overrides.pop("blocks", None)
+    center_page = overrides.pop("center_page", overrides.pop("page", 22))
     if blocks is None:
         blocks = [
-            make_block(block_id, rect_id=f"r{index}", page=overrides.get("page", 22))
+            make_block(block_id, rect_id=f"r{index}", page=center_page)
             for index, block_id in enumerate(block_ids or ["b1"], start=1)
         ]
-    values = {"blocks": blocks}
+    allowed_block_ids = overrides.pop(
+        "allowed_block_ids",
+        [block.block_id for block in blocks if block.page == center_page],
+    )
+    values = {
+        "center_page": center_page,
+        "context_blocks": blocks,
+        "allowed_block_ids": allowed_block_ids,
+    }
     values.update(overrides)
-    values.pop("page", None)
     return StructureWindow(**values)
 
 
@@ -213,6 +226,6 @@ class FakeClassifier:
 
     def classify(self, window: StructureWindow) -> StructureProposal:
         """入力ブロックを順番どおり1セグメントとして返す。"""
-        if self._fail_page is not None and any(block.page == self._fail_page for block in window.blocks):
+        if self._fail_page is not None and window.center_page == self._fail_page:
             raise RuntimeError("classifier failure")
-        return make_proposal(block_ids=[block.block_id for block in window.blocks])
+        return make_proposal(block_ids=window.allowed_block_ids)

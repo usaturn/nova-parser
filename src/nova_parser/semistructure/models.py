@@ -213,13 +213,34 @@ class StructureProposal(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     segments: list[ProposalSegment] = Field(default_factory=list)
+    classifier_id: str = Field(min_length=1)
+    prompt_contract_version: str = Field(min_length=1)
+    input_sha256: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
 
 
 class StructureWindow(BaseModel):
     """前後文脈を含めて分類器へ渡す正規化ブロック窓。"""
 
-    blocks: list[NormalizedBlock] = Field(min_length=1)
+    center_page: int = Field(ge=1)
+    context_blocks: list[NormalizedBlock] = Field(min_length=1)
+    allowed_block_ids: list[str] = Field(min_length=1)
     outline: BookOutline | None = None
+
+    @model_validator(mode="after")
+    def validate_allowed_blocks(self) -> Self:
+        """返却許可IDを文脈内の中心ページブロックだけに限定する。"""
+        if len(self.allowed_block_ids) != len(set(self.allowed_block_ids)):
+            raise ValueError("allowed_block_ids に重複があります")
+        context_by_id = {block.block_id: block for block in self.context_blocks}
+        missing = [block_id for block_id in self.allowed_block_ids if block_id not in context_by_id]
+        if missing:
+            raise ValueError(f"allowed_block_ids が context_blocks に存在しません: {missing}")
+        off_center = [
+            block_id for block_id in self.allowed_block_ids if context_by_id[block_id].page != self.center_page
+        ]
+        if off_center:
+            raise ValueError(f"中心ページ以外の block_id は許可できません: {off_center}")
+        return self
 
 
 class SemanticSegment(BaseModel):
