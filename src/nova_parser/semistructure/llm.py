@@ -121,16 +121,28 @@ def build_structure_windows(
 ) -> list[StructureWindow]:
     """各中心ページに前後1ページだけを加えた重複生成しない窓を作る。"""
     ordered = sorted(blocks, key=lambda block: (block.page, block.draw_order))
-    pages = sorted({block.page for block in ordered})
-    return [
-        StructureWindow(
-            center_page=center_page,
-            context_blocks=[block for block in ordered if abs(block.page - center_page) <= 1],
-            allowed_block_ids=[block.block_id for block in ordered if block.page == center_page],
-            outline=outline,
+    blocks_by_page: dict[int, list[NormalizedBlock]] = {}
+    for block in ordered:
+        blocks_by_page.setdefault(block.page, []).append(block)
+    pages = sorted(blocks_by_page)
+    windows: list[StructureWindow] = []
+    for center_page in pages:
+        center_blocks = blocks_by_page[center_page]
+        context_blocks = []
+        if previous_blocks := blocks_by_page.get(center_page - 1):
+            context_blocks.append(previous_blocks[-1])
+        context_blocks.extend(center_blocks)
+        if next_blocks := blocks_by_page.get(center_page + 1):
+            context_blocks.append(next_blocks[0])
+        windows.append(
+            StructureWindow(
+                center_page=center_page,
+                context_blocks=context_blocks,
+                allowed_block_ids=[block.block_id for block in center_blocks],
+                outline=outline,
+            )
         )
-        for center_page in pages
-    ]
+    return windows
 
 
 class GeminiStructureClassifier:
@@ -153,10 +165,13 @@ class GeminiStructureClassifier:
 
     def infer_outline(self, blocks: Sequence[NormalizedBlock]) -> BookOutline:
         """短いサンプルだけからアウトラインを一度推定し、失敗時はunknownへ戻す。"""
-        if self._outline is not None:
-            return self._outline
         if not blocks:
             raise ValueError("アウトライン推定には1件以上の block が必要です")
+        book_id = self._validate_book(blocks)
+        if self._outline is not None:
+            if self._outline.book_id != book_id:
+                raise ValueError("同じ分類器を別の書籍のアウトライン推定には再利用できません")
+            return self._outline
 
         payload = [
             {
@@ -183,7 +198,7 @@ class GeminiStructureClassifier:
             if not isinstance(result, dict):
                 raise ValueError("outline のトップレベルは object である必要があります")
             self._outline = BookOutline(
-                book_id=blocks[0].book_id,
+                book_id=book_id,
                 sections=result["sections"],
             )
         except Exception:
@@ -192,6 +207,7 @@ class GeminiStructureClassifier:
 
     def classify(self, window: StructureWindow) -> StructureProposal:
         """中心ページのブロックだけを参照可能な分類結果を返す。"""
+        self._validate_book(window.context_blocks)
         center_page = window.center_page
         allowed_id_set = set(window.allowed_block_ids)
         allowed = [block for block in window.context_blocks if block.block_id in allowed_id_set]
@@ -252,6 +268,15 @@ class GeminiStructureClassifier:
             source_path=Path(source_name),
             prompt=prompt,
         )
+
+    def _validate_book(self, blocks: Sequence[NormalizedBlock]) -> str:
+        book_ids = {block.book_id for block in blocks}
+        if len(book_ids) != 1:
+            raise ValueError("1つの分類窓・アウトラインに別の書籍の block を混在できません")
+        book_id = next(iter(book_ids))
+        if self.manifest is not None and self.manifest.book_id != book_id:
+            raise ValueError(f"block の book_id が manifest と一致しません: {book_id} != {self.manifest.book_id}")
+        return book_id
 
     @staticmethod
     def _outline_validator(

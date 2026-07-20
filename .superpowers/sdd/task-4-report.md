@@ -32,14 +32,15 @@
   - OCR 原文が prompt に含まれず 1 failure
 - entity 境界 RED: `-k spanning`
   - 2 ブロック連結だけで成立する entity を誤受理して 1 failure
-- 最終 GREEN: focused 44 passed、全体 625 passed / 6 skipped
+- review RED: 別書籍 cache 再利用、manifest 不一致、隣接ページ全量文脈の 3 failure
+- 最終 GREEN: focused 47 passed、全体 628 passed / 6 skipped
 
 ## 検証コマンドと結果
 
 - `uv run pytest -q tests/test_semistructure_llm.py tests/test_semistructure_models.py tests/test_semistructure_normalize.py tests/test_semistructure_input.py`
-  - 44 passed
+  - 47 passed
 - `uv run pytest -q`
-  - 625 passed、6 skipped
+  - 628 passed、6 skipped
 - `uv run task ruff`
   - All checks passed、71 files unchanged
 - `git diff --check`
@@ -61,6 +62,10 @@
 - 返却順は中心ページの `context_blocks` 順と比較し、同一 ID の複数窓生成を防いだ。
 - entity は選択ブロックそれぞれの `raw_text` 内で検証し、ブロック間連結による偽一致を防いだ。
 - API 実呼び出しを行わず、全 LLM テストを注入した fake で実行した。
+- 独立レビューの有効な指摘に対し、隣接文脈を前ページ末尾・次ページ先頭へ限定し、
+  別書籍への outline cache 誤流用と manifest 不一致を拒否した。
+- fallback 範囲の指摘は、Task 4 の確定契約どおり実ブロックの min/max page を使用しているため
+  変更不要と判断した（`BookManifest` にページ範囲は追加しない）。
 
 ## 懸念
 

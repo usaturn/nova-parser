@@ -199,6 +199,36 @@ def test_outline_failure_falls_back_deterministically_to_unknown_manifest_range(
     assert outline.sections[0].default_content_type == "unknown"
 
 
+def test_outline_cache_rejects_reuse_for_a_different_book() -> None:
+    fake = FakeGenerateJSON(
+        {
+            "sections": [
+                {
+                    "title": "第一章",
+                    "start_page": 22,
+                    "end_page": 22,
+                    "default_content_type": "unknown",
+                }
+            ]
+        }
+    )
+    classifier = GeminiStructureClassifier(generate_json=fake)
+    classifier.infer_outline([make_block(book_id="book-a")])
+
+    with pytest.raises(ValueError, match="別の書籍"):
+        classifier.infer_outline([make_block(book_id="book-b")])
+
+
+def test_outline_rejects_blocks_not_matching_manifest_book() -> None:
+    classifier = GeminiStructureClassifier(
+        manifest=make_manifest(book_id="manifest-book"),
+        generate_json=FakeGenerateJSON(),
+    )
+
+    with pytest.raises(ValueError, match="manifest"):
+        classifier.infer_outline([make_block(book_id="other-book")])
+
+
 def test_classify_window_exposes_only_center_page_ids_to_validator() -> None:
     fake = FakeGenerateJSON(valid_result(["prev"]))
     classifier = GeminiStructureClassifier(generate_json=fake)
@@ -255,3 +285,25 @@ def test_build_windows_adds_adjacent_context_and_unique_center_ownership() -> No
         block.block_id for window in windows for block in window.context_blocks if block.page == window.center_page
     ]
     assert center_ids == ["p21", "p22", "p23"]
+
+
+def test_build_windows_uses_only_previous_tail_and_next_head_as_context() -> None:
+    blocks = [
+        make_block("p21a", page=21, draw_order=0),
+        make_block("p21b", page=21, draw_order=1),
+        make_block("p22a", page=22, draw_order=0),
+        make_block("p22b", page=22, draw_order=1),
+        make_block("p23a", page=23, draw_order=0),
+        make_block("p23b", page=23, draw_order=1),
+    ]
+
+    windows = build_structure_windows(blocks)
+
+    center = windows[1]
+    assert [block.block_id for block in center.context_blocks] == [
+        "p21b",
+        "p22a",
+        "p22b",
+        "p23a",
+    ]
+    assert center.allowed_block_ids == ["p22a", "p22b"]
