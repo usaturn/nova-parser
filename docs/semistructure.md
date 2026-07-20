@@ -160,7 +160,7 @@ uv run nova-parser-semistructure \
 |--------|------|
 | 0 | 成功。部分ページの LLM 失敗でも fallback が書けていれば 0（`failed_pages` / `review_required` を stdout に明示） |
 | 1 | 実行前エラー（API キー未設定、評価対象ファイル欠落など） |
-| 2 | 入力不正（マニフェスト / regions 読み取り失敗など） |
+| 2 | 入力不正（マニフェスト / regions 読み取り失敗など）。`ValueError` / `FileNotFoundError` / `OSError` を CLI が捕捉して 2 にする。レポートの `input_errors` フィールドは件数表示用で、現状パイプラインは常に 0 を返し、実際の入力不正は例外経路で exit 2 になる |
 | 3 | LLM が全ページで失敗 |
 | 4 | 正本（provenance）検証エラー（`validation_errors>0`） |
 

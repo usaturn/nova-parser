@@ -216,7 +216,12 @@ def test_main_wires_review_decisions_and_no_cache(
 
 
 def test_cli_end_to_end_with_fake_classifier(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """FakeClassifier で CLI 全体を通し、正本と派生ビューが出力される。"""
+    """FakeClassifier で CLI 全体を通し、正本と派生ビューが出力される。
+
+    API キー不要（ensure_backend_available を no-op 化）かつ FakeClassifier 注入で
+    hermetic に通す。
+    """
+    monkeypatch.setattr(main_mod, "ensure_backend_available", lambda: None)
     monkeypatch.setattr(main_mod, "build_classifier", lambda _: FakeClassifier.valid())
     fixture_dir = Path(__file__).parent / "fixtures" / "semistructure"
     exit_code = main_mod.main(
@@ -233,3 +238,77 @@ def test_cli_end_to_end_with_fake_classifier(tmp_path: Path, monkeypatch: pytest
     assert read_jsonl(tmp_path / "out/segments.jsonl", SemanticSegment)
     assert read_jsonl(tmp_path / "out/derived/retrieval-inputs.jsonl", EmbeddingInput)
     assert read_jsonl(tmp_path / "out/derived/topic-inputs.jsonl", EmbeddingInput)
+
+
+def _make_report(**overrides: object):  # type: ignore[no-untyped-def]
+    """exit_code_for_report / format_report 用の最小 PipelineReport を作る。"""
+    from nova_parser.semistructure.pipeline import PipelineReport
+
+    base = PipelineReport(
+        pages=2,
+        regions=2,
+        llm_calls=0,
+        input_errors=0,
+        failed_pages=[],
+        review_candidates=0,
+        review_required=0,
+        segments=2,
+        source_coverage=1.0,
+        validation_errors=0,
+        dry_run=False,
+    )
+    for key, value in overrides.items():
+        setattr(base, key, value)
+    return base
+
+
+def test_exit_code_partial_page_failures_is_zero_and_stdout_mentions_flags(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """部分ページ失敗は exit 0 で、stdout に failed_pages / review_required を出す。"""
+    report = _make_report(
+        pages=3,
+        failed_pages=[22],
+        review_required=2,
+        segments=3,
+    )
+    assert main_mod.exit_code_for_report(report) == 0
+    print(main_mod.format_report(report))
+    out = capsys.readouterr().out
+    assert "failed_pages=22" in out
+    assert "review_required=2" in out
+
+
+def test_exit_code_all_pages_failed_is_three() -> None:
+    """全ページ LLM 失敗は exit 3。"""
+    report = _make_report(pages=2, failed_pages=[22, 234], segments=2)
+    assert main_mod.exit_code_for_report(report) == 3
+
+
+def test_exit_code_validation_errors_is_four() -> None:
+    """validation_errors > 0 は exit 4。"""
+    report = _make_report(validation_errors=1)
+    assert main_mod.exit_code_for_report(report) == 4
+
+
+def test_cli_input_error_missing_manifest_returns_two(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """存在しない manifest は入力不正として exit 2（backend は mock）。"""
+    monkeypatch.setattr(main_mod, "ensure_backend_available", lambda: None)
+    monkeypatch.setattr(main_mod, "build_classifier", lambda _: FakeClassifier.valid())
+    _, input_dir, output_dir = _setup_cli_workspace(tmp_path)
+    missing = tmp_path / "no-such-manifest.json"
+
+    exit_code = main_mod.main(
+        [
+            "--manifest",
+            str(missing),
+            "--input-dir",
+            str(input_dir),
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+    assert exit_code == 2
