@@ -22,12 +22,14 @@ def test_normalize_joins_word_wrap_and_records_operation() -> None:
 
 
 def test_normalize_does_not_auto_join_different_regions() -> None:
+    """隣接領域は結合せず、単なる隣接だけでは review_reasons を付けない。"""
     page = make_page(regions=[make_region("r1", "本文"), make_region("r2", "欄外注釈")])
 
     blocks = normalize_pages([page])
 
     assert [block.normalized_text for block in blocks] == ["本文", "欄外注釈"]
-    assert blocks[1].review_reasons == ["cross_region_relation"]
+    assert blocks[0].review_reasons == []
+    assert blocks[1].review_reasons == []
 
 
 def test_classify_line_join_keeps_sentence_boundary() -> None:
@@ -101,13 +103,37 @@ def test_normalize_preserves_terminal_line_break_without_an_operation() -> None:
     assert block.operations == []
 
 
-def test_normalize_marks_page_boundary_without_combining_pages() -> None:
+def test_normalize_keeps_page_boundary_without_review_reason() -> None:
+    """ページ境界は結合せず、単なる境界だけでは review_reasons を付けない。"""
     pages = [make_page(page=22, text="前ページ"), make_page(page=23, text="次ページ")]
 
     blocks = normalize_pages(pages)
 
     assert [block.normalized_text for block in blocks] == ["前ページ", "次ページ"]
-    assert blocks[1].review_reasons == ["cross_page_relation"]
+    assert blocks[0].review_reasons == []
+    assert blocks[1].review_reasons == []
+
+
+def test_classify_line_join_refuses_cross_region_without_review_reason() -> None:
+    """領域またぎは結合しないが、通常の非結合として review_reason は付けない。"""
+    left = PhysicalLine(page=22, rect_id="r1", text="本文が続く", start=0, end=5)
+    right = PhysicalLine(page=22, rect_id="r2", text="別領域の文", start=0, end=5)
+
+    decision = classify_line_join(left, right)
+
+    assert decision.should_join is False
+    assert decision.review_reason is None
+
+
+def test_classify_line_join_refuses_cross_page_without_review_reason() -> None:
+    """ページまたぎは結合しないが、通常の非結合として review_reason は付けない。"""
+    left = PhysicalLine(page=22, rect_id="r1", text="前ページの文", start=0, end=6)
+    right = PhysicalLine(page=23, rect_id="r1", text="次ページの文", start=0, end=6)
+
+    decision = classify_line_join(left, right)
+
+    assert decision.should_join is False
+    assert decision.review_reason is None
 
 
 def test_normalize_is_deterministic_by_page_and_draw_order() -> None:

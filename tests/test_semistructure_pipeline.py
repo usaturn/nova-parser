@@ -2,17 +2,54 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 
-from nova_parser.semistructure.models import Audience, AudienceOverride, ReviewStatus, SemanticSegment
+from nova_parser.semistructure.models import (
+    Audience,
+    AudienceOverride,
+    NormalizedBlock,
+    ReviewDecision,
+    ReviewStatus,
+    SemanticSegment,
+    StructureProposal,
+    StructureWindow,
+)
 from nova_parser.semistructure.pipeline import run_pipeline
-from nova_parser.semistructure.storage import read_jsonl
+from nova_parser.semistructure.storage import read_jsonl, resolve_segment_input_hash, write_jsonl_atomic
 from tests.semistructure_factories import (
     FakeClassifier,
     make_config,
     make_manifest,
+    make_proposal,
     write_region_fixture,
 )
+
+
+class _AudiencePreservingClassifier(FakeClassifier):
+    """ブロックの inherited_audience を提案 audience に反映する分類器。"""
+
+    def classify(self, window: StructureWindow) -> StructureProposal:
+        if self._fail_page is not None and window.center_page == self._fail_page:
+            raise RuntimeError("classifier failure")
+        blocks = [block for block in window.context_blocks if block.block_id in window.allowed_block_ids]
+        audience = _fail_closed_audience(blocks)
+        return make_proposal(
+            block_ids=window.allowed_block_ids,
+            segment={"audience": audience},
+        )
+
+
+def _fail_closed_audience(blocks: Sequence[NormalizedBlock]) -> Audience:
+    audiences = [block.inherited_audience for block in blocks]
+    if any(audience == Audience.GM for audience in audiences):
+        return Audience.GM
+    if any(audience == Audience.UNKNOWN for audience in audiences):
+        return Audience.UNKNOWN
+    unique = set(audiences)
+    if len(unique) == 1:
+        return audiences[0]
+    return Audience.SHARED
 
 
 def _setup_two_page_workspace(tmp_path: Path) -> Path:
@@ -100,20 +137,59 @@ def test_pipeline_no_cache_reclassifies_even_when_cache_exists(tmp_path: Path) -
     assert 22 in report.failed_pages
 
 
-def test_pipeline_marks_gm_segments_for_player_visibility_review(tmp_path: Path) -> None:
-    """GM セグメントは検証前に除外せず、可視性理由で REQUIRED になる。"""
+def test_pipeline_excludes_gm_from_player_views_without_forcing_required(tmp_path: Path) -> None:
+    """正当な GM は正本に残り player 派生から除外され、可視性理由だけで REQUIRED にしない。"""
     _setup_two_page_workspace(tmp_path)
-    run_pipeline(make_config(tmp_path), classifier=FakeClassifier.valid())
+    run_pipeline(make_config(tmp_path), classifier=_AudiencePreservingClassifier.valid())
 
     segments = read_jsonl(tmp_path / "out/segments.jsonl", SemanticSegment)
     gm_segments = [segment for segment in segments if segment.audience == Audience.GM]
     assert gm_segments, "manifest の GM 範囲から GM セグメントが生成される想定"
     for segment in gm_segments:
-        assert segment.review_status == ReviewStatus.REQUIRED
         reasons = segment.processing.get("review_reasons", "")
-        assert "gm_audience_visible" in reasons
+        assert "gm_audience_visible" not in reasons
+        assert "audience_downgrade_candidate" not in reasons
+        assert segment.review_status == ReviewStatus.NOT_REQUIRED
 
     # 派生は player モードのため GM は載らない
     retrieval = (tmp_path / "out/derived/retrieval-inputs.jsonl").read_text(encoding="utf-8")
     for segment in gm_segments:
         assert segment.segment_id not in retrieval
+
+
+def test_pipeline_keeps_approved_gm_on_rerun(tmp_path: Path) -> None:
+    """APPROVED 済みの正当な GM は再実行しても APPROVED のまま残る。"""
+    _setup_two_page_workspace(tmp_path)
+    classifier = _AudiencePreservingClassifier.valid()
+    run_pipeline(make_config(tmp_path), classifier=classifier)
+    segments = read_jsonl(tmp_path / "out/segments.jsonl", SemanticSegment)
+    gm = next(segment for segment in segments if segment.audience == Audience.GM)
+
+    decisions_path = tmp_path / "out/review/decisions.jsonl"
+    write_jsonl_atomic(
+        decisions_path,
+        [
+            ReviewDecision(
+                review_id=f"{gm.book_id}:{gm.segment_id}",
+                segment_id=gm.segment_id,
+                status=ReviewStatus.APPROVED,
+                input_hash=resolve_segment_input_hash(gm),
+                processing_version="test-v1",
+                decided_by="tester",
+                comment="正当な GM シナリオ",
+            )
+        ],
+    )
+
+    run_pipeline(
+        make_config(tmp_path, review_decisions=decisions_path),
+        classifier=_AudiencePreservingClassifier.valid(),
+    )
+    rerun = read_jsonl(tmp_path / "out/segments.jsonl", SemanticSegment)
+    approved = next(segment for segment in rerun if segment.segment_id == gm.segment_id)
+    assert approved.audience == Audience.GM
+    assert approved.review_status == ReviewStatus.APPROVED
+    assert "gm_audience_visible" not in approved.processing.get("review_reasons", "")
+
+    retrieval = (tmp_path / "out/derived/retrieval-inputs.jsonl").read_text(encoding="utf-8")
+    assert approved.segment_id not in retrieval

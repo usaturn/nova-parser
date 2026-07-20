@@ -147,7 +147,14 @@ def validate_corpus(
 
 
 def validate_player_visibility(segments: Sequence[SemanticSegment]) -> ValidationReport:
-    """プレイヤー向け導出に載せてはいけない audience を検出する。
+    """プレイヤー向け導出集合に混入してはいけない audience を検出する。
+
+    呼び出し側は **player 派生に実際に載った（または載ろうとしている）セグメント**
+    だけを渡すこと。正本全体に対して呼ぶと、正当な GM セグメントまで
+    `gm_audience_visible` になりレビューキューが溢れる。
+
+    プレイヤー安全性の一次防御は `build_views(audience_mode="player")` の除外であり、
+    本関数はフィルタ不具合に対する防御的検査（defense-in-depth）である。
 
     `audience=gm` と `audience=unknown` をエラーとして報告する。
     被覆率は可視性検証の対象外のため 1.0 を返す。

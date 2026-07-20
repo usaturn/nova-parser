@@ -55,11 +55,14 @@ def should_keep_break(left: str, right: str) -> bool:
 
 
 def classify_line_join(left: PhysicalLine, right: PhysicalLine) -> JoinDecision:
-    """隣接行を、安全な同一領域内の語中改行だけに限定して分類する。"""
-    if left.page != right.page:
-        return JoinDecision(should_join=False, review_reason="cross_page_relation")
-    if left.rect_id != right.rect_id:
-        return JoinDecision(should_join=False, review_reason="cross_region_relation")
+    """隣接行を、安全な同一領域内の語中改行だけに限定して分類する。
+
+    ページまたぎ・領域またぎは結合しないが、正規化が領域内だけを対象にするため
+    これは通常の安全な非結合であり、レビュー理由にはしない。
+    レビュー理由は表・箇条書き・短行など「人が見た方が良い曖昧境界」に限る。
+    """
+    if left.page != right.page or left.rect_id != right.rect_id:
+        return JoinDecision(should_join=False)
     if left.text.startswith(HARD_BREAK_PREFIXES) or right.text.startswith(HARD_BREAK_PREFIXES):
         return JoinDecision(should_join=False, review_reason="bullet_list_structure")
     if _TABLE_SPACING.search(left.text) or _TABLE_SPACING.search(right.text):
@@ -74,34 +77,20 @@ def classify_line_join(left: PhysicalLine, right: PhysicalLine) -> JoinDecision:
 
 
 def normalize_pages(pages: Sequence[OcrPage]) -> list[NormalizedBlock]:
-    """ページと領域を安定順に並べ、各領域内の安全な改行だけを除去する。"""
+    """ページと領域を安定順に並べ、各領域内の安全な改行だけを除去する。
+
+    領域・ページの単なる隣接は review_reasons にしない（結合は領域内のみで、
+    隣接境界を REQUIRED 化するとキューが溢れるため）。
+    """
     blocks: list[NormalizedBlock] = []
-    previous_page: int | None = None
 
     for page in sorted(pages, key=lambda item: item.page_number):
         for region in sorted(page.regions, key=lambda item: item.draw_order):
             if not region.raw_text:
                 continue
-            boundary_reason = _boundary_reason(previous_page, page.page_number, blocks)
-            block = _normalize_region(page, region)
-            if boundary_reason is not None:
-                block.review_reasons.insert(0, boundary_reason)
-            blocks.append(block)
-            previous_page = page.page_number
+            blocks.append(_normalize_region(page, region))
 
     return blocks
-
-
-def _boundary_reason(
-    previous_page: int | None,
-    page: int,
-    blocks: list[NormalizedBlock],
-) -> str | None:
-    if previous_page is None or not blocks:
-        return None
-    if previous_page != page:
-        return "cross_page_relation"
-    return "cross_region_relation"
 
 
 def _normalize_region(page: OcrPage, region: OcrRegion) -> NormalizedBlock:

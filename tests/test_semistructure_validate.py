@@ -17,8 +17,11 @@ def test_validate_corpus_reports_missing_character_range() -> None:
     assert report.errors[0].code == "source_gap"
 
 
-def test_validate_corpus_rejects_unknown_in_player_export() -> None:
-    """プレイヤー向け可視性検証で unknown / gm を拒否する。"""
+def test_validate_player_visibility_rejects_gm_and_unknown_in_export_set() -> None:
+    """プレイヤー向け導出集合に混入した unknown / gm を拒否する。
+
+    正本全体ではなく、player 派生に載った（または載ろうとしている）セグメント集合に対して使う。
+    """
     report = validate_player_visibility(
         [
             make_segment(audience=Audience.UNKNOWN),

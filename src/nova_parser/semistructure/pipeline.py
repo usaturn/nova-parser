@@ -152,21 +152,27 @@ def run_pipeline(
     corpus_report = validate_corpus(pages, segments)
     segments = _apply_validation_to_segments(segments, corpus_report.errors)
 
-    # REJECTED 除外後の正本に対して可視性検証し、GM/UNKNOWN を REQUIRED へ戻す。
-    # 派生フィルタは build_views の audience_mode に任せ、検証前に player 限定しない。
-    # 可視性エラーはレビューキューへ回し、正本検証（exit 4）の件数には含めない。
+    # プレイヤー安全性の一次防御は build_views(audience_mode="player")。
+    # 可視性検証は派生に実際に載った集合だけにかけ、正当な GM を REQUIRED に戻さない。
+    # フィルタ不具合で gm/unknown が混入した場合のみレビューキューへ回す（exit 4 にはしない）。
     book_titles = {manifest.book_id: manifest.title}
     view_source = _exclude_rejected(segments)
-    visibility = validate_player_visibility(view_source)
-    if not visibility.ok:
-        segments = _apply_validation_to_segments(segments, visibility.errors)
-        view_source = _exclude_rejected(segments)
-
     player_views = build_views(
         view_source,
         audience_mode="player",
         book_titles=book_titles,
     )
+    exported_ids = {item.segment_id for item in player_views.retrieval}
+    exported_segments = [segment for segment in view_source if segment.segment_id in exported_ids]
+    visibility = validate_player_visibility(exported_segments)
+    if not visibility.ok:
+        segments = _apply_validation_to_segments(segments, visibility.errors)
+        view_source = _exclude_rejected(segments)
+        player_views = build_views(
+            view_source,
+            audience_mode="player",
+            book_titles=book_titles,
+        )
 
     review_items = build_review_items(segments, pages=pages)
     _write_outputs(
