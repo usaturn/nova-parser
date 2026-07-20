@@ -229,6 +229,12 @@ class StructureWindow(BaseModel):
     @model_validator(mode="after")
     def validate_allowed_blocks(self) -> Self:
         """返却許可IDを文脈内の中心ページブロックだけに限定する。"""
+        context_book_ids = {block.book_id for block in self.context_blocks}
+        if len(context_book_ids) != 1:
+            raise ValueError("context_blocks に別の書籍を混在できません")
+        context_book_id = next(iter(context_book_ids))
+        if self.outline is not None and self.outline.book_id != context_book_id:
+            raise ValueError("outline の book_id が context_blocks と一致しません")
         if len(self.allowed_block_ids) != len(set(self.allowed_block_ids)):
             raise ValueError("allowed_block_ids に重複があります")
         context_by_id = {block.block_id: block for block in self.context_blocks}

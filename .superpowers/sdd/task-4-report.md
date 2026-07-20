@@ -33,14 +33,15 @@
 - entity 境界 RED: `-k spanning`
   - 2 ブロック連結だけで成立する entity を誤受理して 1 failure
 - review RED: 別書籍 cache 再利用、manifest 不一致、隣接ページ全量文脈の 3 failure
-- 最終 GREEN: focused 47 passed、全体 628 passed / 6 skipped
+- 再レビュー RED: 別書籍 outline を窓へ混入できる 1 failure
+- 最終 GREEN: focused 48 passed、全体 629 passed / 6 skipped
 
 ## 検証コマンドと結果
 
 - `uv run pytest -q tests/test_semistructure_llm.py tests/test_semistructure_models.py tests/test_semistructure_normalize.py tests/test_semistructure_input.py`
-  - 47 passed
+  - 48 passed
 - `uv run pytest -q`
-  - 628 passed、6 skipped
+  - 629 passed、6 skipped
 - `uv run task ruff`
   - All checks passed、71 files unchanged
 - `git diff --check`
@@ -64,6 +65,7 @@
 - API 実呼び出しを行わず、全 LLM テストを注入した fake で実行した。
 - 独立レビューの有効な指摘に対し、隣接文脈を前ページ末尾・次ページ先頭へ限定し、
   別書籍への outline cache 誤流用と manifest 不一致を拒否した。
+- 再レビューの指摘に対し、`StructureWindow` の outline と context の book ID 一致を必須化した。
 - fallback 範囲の指摘は、Task 4 の確定契約どおり実ブロックの min/max page を使用しているため
   変更不要と判断した（`BookManifest` にページ範囲は追加しない）。
 

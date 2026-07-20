@@ -92,6 +92,17 @@ def test_structure_window_rejects_unknown_or_duplicate_allowed_block_ids() -> No
         )
 
 
+def test_structure_window_rejects_outline_from_another_book() -> None:
+    """分類窓は別書籍のアウトラインを文脈へ混入させない。"""
+    with pytest.raises(ValidationError, match="outline"):
+        StructureWindow(
+            center_page=22,
+            context_blocks=[make_block(book_id="book-a")],
+            allowed_block_ids=["b1"],
+            outline=BookOutline(book_id="book-b", sections=[]),
+        )
+
+
 def test_book_outline_rejects_extra_top_level_field() -> None:
     """章構造はLLMが返した未知のトップレベルフィールドを拒否する。"""
     with pytest.raises(ValidationError, match="summary"):
