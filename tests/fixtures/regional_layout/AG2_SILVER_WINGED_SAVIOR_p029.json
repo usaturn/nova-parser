@@ -1,0 +1,135 @@
+{
+  "image_name": "AG2_SILVER_WINGED_SAVIOR_p029_00.png",
+  "image_width": 1694,
+  "image_height": 2488,
+  "paragraph_blocks": [
+    {
+      "x": 180,
+      "y": 203,
+      "width": 604,
+      "height": 29
+    },
+    {
+      "x": 1496,
+      "y": 368,
+      "width": 38,
+      "height": 1551
+    },
+    {
+      "x": 1381,
+      "y": 384,
+      "width": 38,
+      "height": 347
+    },
+    {
+      "x": 1265,
+      "y": 364,
+      "width": 95,
+      "height": 1430
+    },
+    {
+      "x": 1210,
+      "y": 367,
+      "width": 35,
+      "height": 438
+    },
+    {
+      "x": 1095,
+      "y": 365,
+      "width": 93,
+      "height": 1042
+    },
+    {
+      "x": 980,
+      "y": 365,
+      "width": 91,
+      "height": 456
+    },
+    {
+      "x": 461,
+      "y": 363,
+      "width": 498,
+      "height": 890
+    },
+    {
+      "x": 408,
+      "y": 368,
+      "width": 31,
+      "height": 400
+    },
+    {
+      "x": 348,
+      "y": 366,
+      "width": 34,
+      "height": 885
+    },
+    {
+      "x": 431,
+      "y": 1312,
+      "width": 451,
+      "height": 54
+    },
+    {
+      "x": 163,
+      "y": 551,
+      "width": 30,
+      "height": 967
+    },
+    {
+      "x": 628,
+      "y": 1540,
+      "width": 52,
+      "height": 25
+    },
+    {
+      "x": 443,
+      "y": 1656,
+      "width": 77,
+      "height": 35
+    },
+    {
+      "x": 759,
+      "y": 1757,
+      "width": 54,
+      "height": 23
+    },
+    {
+      "x": 495,
+      "y": 1757,
+      "width": 52,
+      "height": 25
+    },
+    {
+      "x": 122,
+      "y": 2334,
+      "width": 43,
+      "height": 42
+    },
+    {
+      "x": 627,
+      "y": 1951,
+      "width": 54,
+      "height": 25
+    }
+  ],
+  "expected_horizontal_blocks": [
+    {
+      "x": 976,
+      "y": 344,
+      "width": 583,
+      "height": 1593
+    },
+    {
+      "x": 338,
+      "y": 349,
+      "width": 637,
+      "height": 915
+    },
+    {
+      "x": 148,
+      "y": 536,
+      "width": 67,
+      "height": 1003
+    }
+  ]
+}

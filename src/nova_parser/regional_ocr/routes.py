@@ -26,6 +26,7 @@ from nova_parser.regional_ocr.images import (
     resolve_image,
 )
 from nova_parser.regional_ocr.layout import compute_vertical_blocks
+from nova_parser.regional_ocr.layout_horizontal import compute_horizontal_blocks
 from nova_parser.regional_ocr.markdown import write_markdown
 from nova_parser.regional_ocr.models import (
     BatchOcrItemResult,
@@ -57,9 +58,10 @@ AppStateDep = Annotated[AppState, Depends(get_app_state)]
 
 
 def _to_blocks_response(result: BlockDetectionResult) -> BlockDetectionResponse:
-    """キャッシュモデルへ、ローカル生成した縦ブロックを付与する（毎回再生成、スペック 6.3）。"""
+    """キャッシュモデルへ、ローカル生成した縦・横ブロックを付与する（毎回再生成、スペック 6.3）。"""
     vertical = compute_vertical_blocks(result.image_width, result.image_height, result.blocks)
-    return BlockDetectionResponse(**result.model_dump(), vertical_blocks=vertical)
+    horizontal = compute_horizontal_blocks(result.image_width, result.image_height, result.blocks)
+    return BlockDetectionResponse(**result.model_dump(), vertical_blocks=vertical, horizontal_blocks=horizontal)
 
 
 def build_router() -> APIRouter:

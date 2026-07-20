@@ -102,8 +102,8 @@ class BlockRect(BaseModel):
 class BlockDetectionResult(BaseModel):
     """1 枚の画像に対するブロック検出結果のキャッシュ形式（`{stem}.blocks.json`）。
 
-    `blocks` は Cloud Vision が返した段落矩形のみ。縦ブロックは含まない。
-    API レスポンスは `BlockDetectionResponse`（本モデル + `vertical_blocks`）を使う。
+    `blocks` は Cloud Vision が返した段落矩形のみ。縦・横ブロックは含まない。
+    API レスポンスは `BlockDetectionResponse`（本モデル + `vertical_blocks` / `horizontal_blocks`）を使う。
     """
 
     image_name: str = Field(min_length=1)
@@ -115,12 +115,14 @@ class BlockDetectionResult(BaseModel):
 
 
 class BlockDetectionResponse(BlockDetectionResult):
-    """GET /api/blocks/{name} のレスポンス。キャッシュ形式へローカル生成の縦ブロックを加える。
+    """GET /api/blocks/{name} のレスポンス。キャッシュ形式へローカル生成の縦・横ブロックを加える。
 
-    vertical_blocks はキャッシュへ保存せず、API 要求ごとに layout.compute_vertical_blocks で再生成する。
+    vertical_blocks / horizontal_blocks はキャッシュへ保存せず、API 要求ごとに
+    layout.compute_vertical_blocks / layout_horizontal.compute_horizontal_blocks で再生成する。
     """
 
     vertical_blocks: list[BlockRect] = Field(default_factory=list)
+    horizontal_blocks: list[BlockRect] = Field(default_factory=list)
 
 
 class ImageListResponse(BaseModel):

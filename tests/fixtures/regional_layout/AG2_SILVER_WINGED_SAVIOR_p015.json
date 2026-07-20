@@ -1,0 +1,105 @@
+{
+  "image_name": "AG2_SILVER_WINGED_SAVIOR_p015_00.png",
+  "image_width": 1698,
+  "image_height": 2488,
+  "paragraph_blocks": [
+    {
+      "x": 182,
+      "y": 202,
+      "width": 585,
+      "height": 29
+    },
+    {
+      "x": 1496,
+      "y": 410,
+      "width": 40,
+      "height": 451
+    },
+    {
+      "x": 1433,
+      "y": 368,
+      "width": 44,
+      "height": 1807
+    },
+    {
+      "x": 1264,
+      "y": 367,
+      "width": 154,
+      "height": 582
+    },
+    {
+      "x": 1155,
+      "y": 402,
+      "width": 34,
+      "height": 153
+    },
+    {
+      "x": 1041,
+      "y": 401,
+      "width": 32,
+      "height": 155
+    },
+    {
+      "x": 924,
+      "y": 401,
+      "width": 35,
+      "height": 156
+    },
+    {
+      "x": 845,
+      "y": 533,
+      "width": 11,
+      "height": 52
+    },
+    {
+      "x": 1095,
+      "y": 404,
+      "width": 36,
+      "height": 825
+    },
+    {
+      "x": 980,
+      "y": 403,
+      "width": 35,
+      "height": 755
+    },
+    {
+      "x": 866,
+      "y": 402,
+      "width": 35,
+      "height": 685
+    },
+    {
+      "x": 460,
+      "y": 365,
+      "width": 399,
+      "height": 1803
+    },
+    {
+      "x": 164,
+      "y": 550,
+      "width": 70,
+      "height": 1617
+    },
+    {
+      "x": 115,
+      "y": 2332,
+      "width": 43,
+      "height": 44
+    }
+  ],
+  "expected_horizontal_blocks": [
+    {
+      "x": 436,
+      "y": 326,
+      "width": 1129,
+      "height": 1874
+    },
+    {
+      "x": 142,
+      "y": 536,
+      "width": 118,
+      "height": 1664
+    }
+  ]
+}

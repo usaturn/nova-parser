@@ -112,6 +112,7 @@ function regionalOcrApp() {
     blockGranularity: "vertical",
     paragraphBlocks: null,
     verticalBlocks: null,
+    horizontalBlocks: null,
     blocksLoading: false,
     hoverBlock: null,
     _blocksRequestFor: null,
@@ -146,6 +147,7 @@ function regionalOcrApp() {
       this.draftRect = null;
       this.paragraphBlocks = null;
       this.verticalBlocks = null;
+      this.horizontalBlocks = null;
       this.hoverBlock = null;
       this._blocksEpoch += 1;
       try {
@@ -415,13 +417,18 @@ function regionalOcrApp() {
     activeBlocks() {
       const paragraphs = this.paragraphBlocks || [];
       if (this.blockGranularity === "paragraph") return paragraphs;
+      if (this.blockGranularity === "horizontal") {
+        const horizontal = this.horizontalBlocks || [];
+        // 横ブロックが 0 件でも段落があれば段落矩形へフォールバックする
+        return horizontal.length ? horizontal : paragraphs;
+      }
       const vertical = this.verticalBlocks || [];
       // 縦ブロックが 0 件でも段落があれば段落矩形へフォールバックする
       return vertical.length ? vertical : paragraphs;
     },
 
     setGranularity(value) {
-      if (value !== "vertical" && value !== "paragraph") return;
+      if (value !== "vertical" && value !== "horizontal" && value !== "paragraph") return;
       this.blockGranularity = value;
       // 粒度変更でホバーをクリアし、次の mousemove から新しい当たり判定を使う
       this.hoverBlock = null;
@@ -449,6 +456,7 @@ function regionalOcrApp() {
         if (!this.currentImage || this.currentImage.name !== imageName || epoch !== this._blocksEpoch) return;
         this.paragraphBlocks = result.blocks || [];
         this.verticalBlocks = result.vertical_blocks || [];
+        this.horizontalBlocks = result.horizontal_blocks || [];
         if (this.paragraphBlocks.length === 0 && this.verticalBlocks.length === 0) {
           const msg = `「${imageName}」からテキストブロックが検出されませんでした`;
           // 同一画像を行き来した際に同文言の警告が重複蓄積しないようにする

@@ -47,6 +47,7 @@ uv run nova-parser-regional Images/ --output-dir Output --host 127.0.0.1 --port 
 3. **ブロック選択モード**: ズームツールバーの「ブロック選択」トグルを ON にすると、初回のみ Cloud Vision `document_text_detection` で段落矩形を検出する（画像ごとに 1 回課金）。以降はマウスを乗せたブロックが点線でハイライトされ、クリックするとそのブロックの矩形が `pending` 領域として作成される。検出した段落は `{stem}.blocks.json` にキャッシュされ、再起動後も再課金されない（再検出したい場合はこのファイルを削除する）
 4. **ブロック粒度**: ブロック選択 ON 時に表示されるセレクタで粒度を切り替える
    - **縦ブロック**（既定）: 段落からローカル生成した縦方向の結合矩形をハイライト対象にする
+   - **横ブロック**: 縦書きページ向け。段落からローカル生成した、読み順（バンド上→下・バンド内右→左）の結合矩形をハイライト対象にする
    - **段落**: Cloud Vision が返した段落矩形をそのままハイライト対象にする
 5. **矩形編集**:
    - 矩形をクリックして選択 → 四隅・四辺のハンドルでリサイズ
@@ -61,7 +62,7 @@ uv run nova-parser-regional Images/ --output-dir Output --host 127.0.0.1 --port 
 
 - `{output_dir}/{stem}.regions.json` — セッション全体（`ImageSession`）。 `pending` / `done` / `error` の状態を含む
 - `{output_dir}/{stem}.regions.md` — `done` の領域を `draw_order` 順に書き出した Markdown
-- `{output_dir}/{stem}.blocks.json` — ブロック選択モードの段落検出キャッシュ（`BlockDetectionResult`）。段落矩形（`blocks`）のみを保存し、`vertical_blocks` はキャッシュしない
+- `{output_dir}/{stem}.blocks.json` — ブロック選択モードの段落検出キャッシュ（`BlockDetectionResult`）。段落矩形（`blocks`）のみを保存し、`vertical_blocks` / `horizontal_blocks` はキャッシュしない
 
 `done` 状態の領域は、その後の `PUT /api/session/{name}` でもサーバ側でテキストを保護してマージされます（再 OCR したい場合は領域を一旦削除してから再描画）。
 
@@ -74,7 +75,7 @@ uv run nova-parser-regional Images/ --output-dir Output --host 127.0.0.1 --port 
 | GET | `/api/images` | 画像一覧と stem 衝突警告 |
 | GET | `/api/image/{name}` | 画像メタ（width / height / mime_type） |
 | GET | `/api/image/{name}/raw` | 画像バイナリ |
-| GET | `/api/blocks/{name}` | ブロック検出。`blocks`（段落）と `vertical_blocks`（リクエストごとにローカル再生成）を返す。段落は初回のみ Cloud Vision を呼び `{stem}.blocks.json` にキャッシュ |
+| GET | `/api/blocks/{name}` | ブロック検出。`blocks`（段落）と `vertical_blocks` / `horizontal_blocks`（リクエストごとにローカル再生成）を返す。段落は初回のみ Cloud Vision を呼び `{stem}.blocks.json` にキャッシュ |
 | GET | `/api/regions/undone` | 全画像の未 OCR 領域（`pending` / `error`）を集計して返す。Vision は呼ばない（課金なし）。stem 衝突画像は `items` から除外し `warnings` で警告 |
 | GET | `/api/session/{name}` | セッション取得（`pending` 領域含む） |
 | PUT | `/api/session/{name}` | セッション upsert。`done` レコードは保護 |
