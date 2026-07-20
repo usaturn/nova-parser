@@ -282,6 +282,11 @@ def _file_sha256(path: Path) -> str:
 
 def _unknown_outline(blocks: Sequence[NormalizedBlock]) -> BookOutline:
     """アウトライン推定が失敗したときの unknown フォールバックを返す。"""
+    if not blocks:
+        return BookOutline(
+            book_id="unknown",
+            sections=[OutlineSection(title="unknown", start_page=0, end_page=0, default_content_type="unknown")],
+        )
     pages = [block.page for block in blocks]
     return BookOutline(
         book_id=blocks[0].book_id,
