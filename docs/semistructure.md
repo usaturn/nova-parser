@@ -62,9 +62,11 @@ review_required=...
 出力先の `review/pending.md` を上から確認する。優先順の目安:
 
 1. `audience_downgrade_candidate`（最優先）
-2. 別領域結合・ページまたぎ
-3. 表・能力値・ルビ
+2. 表・能力値・ルビ（`table_like_spacing` 等）
+3. 箇条書き・短行の曖昧境界
 4. 分類失敗フォールバック（`classifier_failure` 等）
+
+注: 領域・ページの単なる隣接だけではレビュー理由にしない（正規化は領域内結合のみ）。
 
 同一内容は `review/queue.jsonl` にも JSONL で残る。
 
@@ -73,8 +75,20 @@ review_required=...
 1 行 1 JSON で記録する（`ReviewDecision` スキーマ）。例:
 
 ```json
-{"review_id":"angel_gear_2e:<segment_id>","decision":"accept","audience":"gm","notes":"シナリオ本文"}
+{
+  "review_id": "angel_gear_2e:<segment_id>",
+  "segment_id": "<segment_id>",
+  "status": "approved",
+  "input_hash": "<source-sha256-or-input-hash>",
+  "processing_version": "<pipeline-or-prompt-version>",
+  "decided_by": "<reviewer-id>",
+  "comment": "シナリオ本文として GM 確定"
+}
 ```
+
+`status` は `"approved"` または `"rejected"` のみ。`review/pending.md` の JSON 例と同じキー構成。
+
+**現状の制限**: 承認（`approved`）は `review_status` の更新だけを行い、**audience の書き換えはしない**。分類結果の audience を人手で上書きしたい場合は、別途設計（decision への audience フィールド追加など）が必要。正当な GM セグメントは `build_views(audience_mode="player")` で派生から除外されるため、承認してもプレイヤー派生には載らない。
 
 ### 1.5 同じコマンドを再実行して判断を適用する
 
@@ -164,7 +178,7 @@ uv run nova-parser-semistructure \
 | 3 | LLM が全ページで失敗 |
 | 4 | 正本（provenance）検証エラー（`validation_errors>0`） |
 
-プレイヤー可視性（GM/unknown のレビュー要）は終了コード 4 にはしない。レビューキューへ回し `review_required` として件数を出す。
+プレイヤー可視性の一次防御は派生ビュー生成時の audience フィルタ（`gm` / `unknown` 除外）である。正当な GM を正本に残しただけでは REQUIRED にしない。フィルタ不具合で player 派生へ混入した場合のみレビューキューへ回し、終了コード 4 にはしない。
 
 ### 出力レイアウト
 
