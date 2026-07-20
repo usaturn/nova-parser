@@ -291,3 +291,19 @@ def test_corrupted_cache_triggers_reclassification(tmp_path: Path) -> None:
     report = run_pipeline(make_config(tmp_path), classifier=classifier2)
     assert report.failed_pages == []
     assert len(classifier2.classified_pages) >= 2
+
+
+def test_pipeline_empty_raw_text_returns_empty_report(tmp_path: Path) -> None:
+    """全領域の raw_text が空のページだけの入力は ValidationError なしで空レポートを返す。"""
+    manifest = make_manifest()
+    (tmp_path / "manifest.json").write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
+    input_dir = tmp_path / "input"
+    write_region_fixture(input_dir / "p001.regions.json", image_name="p001.png", text="")
+
+    report = run_pipeline(make_config(tmp_path), classifier=FakeClassifier.valid())
+
+    assert report.pages == 1
+    assert report.segments == 0
+    assert report.llm_calls == 0
+    assert report.failed_pages == []
+    assert not (tmp_path / "out/segments.jsonl").exists()
