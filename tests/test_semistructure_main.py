@@ -46,6 +46,78 @@ def test_main_dry_run_prints_counts(tmp_path: Path, capsys: pytest.CaptureFixtur
     assert not (output_dir / "segments.jsonl").exists()
 
 
+def test_main_dry_run_with_evaluate_gold_uses_existing_segments(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """--dry-run + --evaluate-gold は既存 segments.jsonl があれば評価する。"""
+    from nova_parser.semistructure.models import Audience
+    from tests.semistructure_factories import make_segment
+
+    manifest_path, input_dir, output_dir = _setup_cli_workspace(tmp_path)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    gold = make_segment("s1", Audience.GM)
+    actual = make_segment("s1", Audience.PLAYER)
+    gold_path = tmp_path / "gold-segments.jsonl"
+    gold_path.write_text(gold.model_dump_json(ensure_ascii=False) + "\n", encoding="utf-8")
+    (output_dir / "segments.jsonl").write_text(
+        actual.model_dump_json(ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    main_mod.main(
+        [
+            "--manifest",
+            str(manifest_path),
+            "--input-dir",
+            str(input_dir),
+            "--output-dir",
+            str(output_dir),
+            "--dry-run",
+            "--evaluate-gold",
+            str(gold_path),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert "pages=2" in captured.out
+    assert "critical_audience_errors=1" in captured.out
+    assert "source_coverage=" in captured.out
+
+
+def test_main_dry_run_with_evaluate_gold_without_segments_prints_message(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """--dry-run + --evaluate-gold で segments.jsonl が無いときは明確なメッセージを出す。"""
+    from tests.semistructure_factories import make_segment
+    from nova_parser.semistructure.models import Audience
+
+    manifest_path, input_dir, output_dir = _setup_cli_workspace(tmp_path)
+    gold = make_segment("s1", Audience.GM)
+    gold_path = tmp_path / "gold-segments.jsonl"
+    gold_path.write_text(gold.model_dump_json(ensure_ascii=False) + "\n", encoding="utf-8")
+
+    main_mod.main(
+        [
+            "--manifest",
+            str(manifest_path),
+            "--input-dir",
+            str(input_dir),
+            "--output-dir",
+            str(output_dir),
+            "--dry-run",
+            "--evaluate-gold",
+            str(gold_path),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert "pages=2" in captured.out
+    assert "evaluate-gold" in captured.err
+    assert "segments.jsonl" in captured.err
+
+
 def test_main_without_api_key_does_not_overwrite(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

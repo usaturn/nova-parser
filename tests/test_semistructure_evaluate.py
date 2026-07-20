@@ -44,6 +44,15 @@ def test_structure_metrics_count_gm_downgrade_as_critical() -> None:
     assert metrics.critical_audience_errors == 1
 
 
+def test_structure_metrics_count_gm_to_shared_as_critical() -> None:
+    """正解が GM で実際が SHARED のときも重大な audience エラーを数える。"""
+    metrics = evaluate_structure(
+        gold=[make_segment("s1", Audience.GM)],
+        actual=[make_segment("s1", Audience.SHARED)],
+    )
+    assert metrics.critical_audience_errors == 1
+
+
 def test_evaluate_structure_perfect_match_is_one() -> None:
     """同一セグメントなら被覆率と各一致率が 1.0 になる。"""
     gold = [

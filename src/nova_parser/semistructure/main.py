@@ -84,6 +84,28 @@ def format_report(report: PipelineReport) -> str:
     return "\n".join(lines)
 
 
+def _run_evaluate_gold(gold_path: Path, output_dir: Path, *, dry_run: bool = False) -> None:
+    """output-dir/segments.jsonl と gold を比較して表示する。
+
+    dry-run 経路では正本を新規に書かないため、既存 segments.jsonl が無い場合は
+    評価をスキップして明確なメッセージを出す（SystemExit にはしない）。
+    """
+    actual_path = Path(output_dir) / "segments.jsonl"
+    if dry_run and not actual_path.is_file():
+        print(
+            "evaluate-gold: dry-run では正本を書かないため、"
+            f"既存の segments.jsonl が必要です（見つかりません: {actual_path}）",
+            file=sys.stderr,
+        )
+        return
+    try:
+        metrics = evaluate_gold_against_output(gold_path, output_dir)
+    except FileNotFoundError as error:
+        print(str(error), file=sys.stderr)
+        raise SystemExit(1) from error
+    print(format_structure_metrics(metrics))
+
+
 def main(argv: list[str] | None = None) -> None:
     """CLI エントリポイント。argv=None なら sys.argv を使用する。"""
     load_dotenv()
@@ -92,12 +114,7 @@ def main(argv: list[str] | None = None) -> None:
 
     # 評価のみ: 既存の正本と gold を比較して終了する
     if args.evaluate_gold is not None and args.manifest is None and args.input_dir is None:
-        try:
-            metrics = evaluate_gold_against_output(args.evaluate_gold, args.output_dir)
-        except FileNotFoundError as error:
-            print(str(error), file=sys.stderr)
-            raise SystemExit(1) from error
-        print(format_structure_metrics(metrics))
+        _run_evaluate_gold(args.evaluate_gold, args.output_dir, dry_run=False)
         return
 
     if args.manifest is None or args.input_dir is None:
@@ -115,6 +132,9 @@ def main(argv: list[str] | None = None) -> None:
     if config.dry_run:
         report = run_pipeline(config, classifier=None)
         print(format_report(report))
+        # dry-run は正本を書かないが、既存 segments.jsonl があれば評価を続行する
+        if args.evaluate_gold is not None:
+            _run_evaluate_gold(args.evaluate_gold, args.output_dir, dry_run=True)
         return
 
     # 正本上書き前に API キー有無を検査する
@@ -134,12 +154,7 @@ def main(argv: list[str] | None = None) -> None:
 
     # パイプライン後に gold 比較を続ける
     if args.evaluate_gold is not None:
-        try:
-            metrics = evaluate_gold_against_output(args.evaluate_gold, args.output_dir)
-        except FileNotFoundError as error:
-            print(str(error), file=sys.stderr)
-            raise SystemExit(1) from error
-        print(format_structure_metrics(metrics))
+        _run_evaluate_gold(args.evaluate_gold, args.output_dir, dry_run=False)
 
 
 if __name__ == "__main__":
