@@ -25,6 +25,7 @@ dependencies = [
 nova-parser = "nova_parser.main:main"
 nova-parser-regional = "nova_parser.regional_ocr.main:main"
 nova-parser-claude-handoff = "nova_parser.claude_handoff:main"
+nova-parser-semistructure = "nova_parser.semistructure.main:main"
 
 [dependency-groups]
 dev = [
