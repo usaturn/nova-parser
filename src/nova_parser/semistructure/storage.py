@@ -41,6 +41,22 @@ def write_jsonl_atomic(path: Path, records: Iterable[BaseModel]) -> None:
         raise
 
 
+def write_text_atomic(path: Path, text: str) -> None:
+    """同一ディレクトリの一時ファイルへテキストを書き、`Path.replace()` で確定する。"""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        tmp_path.replace(path)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
+
+
 def read_jsonl(path: Path, model_type: type[T]) -> list[T]:
     """JSONL を 1 行ずつ `model_type` として読み込む。空行は無視する。"""
     path = Path(path)

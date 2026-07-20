@@ -51,6 +51,8 @@ def test_main_without_api_key_does_not_overwrite(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """API キー無しの通常実行は BackendUnavailableError 相当で止まり正本を上書きしない。"""
+    from nova_parser import gemini_backend
+
     manifest_path, input_dir, output_dir = _setup_cli_workspace(tmp_path)
     output_dir.mkdir(parents=True, exist_ok=True)
     sentinel = output_dir / "segments.jsonl"
@@ -62,6 +64,8 @@ def test_main_without_api_key_does_not_overwrite(
     # dotenv 経由で復活しないよう空を強制
     monkeypatch.setenv("GEMINI_API_KEY", "")
     monkeypatch.setenv("VERTEX_AI_API_KEY", "")
+    # 先行テストで初期化された backend 状態を捨て、空キーで再評価させる
+    gemini_backend.reset_for_tests()
 
     with pytest.raises(SystemExit) as exc_info:
         main_mod.main(
@@ -77,6 +81,7 @@ def test_main_without_api_key_does_not_overwrite(
 
     assert exc_info.value.code != 0
     assert sentinel.read_text(encoding="utf-8") == original
+    gemini_backend.reset_for_tests()
 
 
 def test_main_wires_review_decisions_and_no_cache(

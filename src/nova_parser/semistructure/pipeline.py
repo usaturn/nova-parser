@@ -11,7 +11,6 @@ from nova_parser.semistructure.input import load_pages
 from nova_parser.semistructure.llm import PROMPT_CONTRACT_VERSION, StructureClassifier, build_structure_windows
 from nova_parser.semistructure.manifest import load_manifest
 from nova_parser.semistructure.models import (
-    Audience,
     EmbeddingInput,
     NormalizedBlock,
     OcrPage,
@@ -29,6 +28,7 @@ from nova_parser.semistructure.storage import (
     apply_review_decisions,
     load_review_decisions,
     write_jsonl_atomic,
+    write_text_atomic,
 )
 from nova_parser.semistructure.validate import ValidationError, validate_corpus, validate_player_visibility
 from nova_parser.semistructure.views import build_views
@@ -149,11 +149,11 @@ def run_pipeline(
     corpus_report = validate_corpus(pages, segments)
     segments = _apply_validation_to_segments(segments, corpus_report.errors)
 
-    # REJECTED はプレイヤー向け派生から除外し、可視性違反は REQUIRED へ戻す
+    # REJECTED 除外後の正本に対して可視性検証し、GM/UNKNOWN を REQUIRED へ戻す。
+    # 派生フィルタは build_views の audience_mode に任せ、検証前に player 限定しない。
     book_titles = {manifest.book_id: manifest.title}
     view_source = _exclude_rejected(segments)
-    player_candidate = _player_visible_segments(view_source)
-    visibility = validate_player_visibility(player_candidate)
+    visibility = validate_player_visibility(view_source)
     if not visibility.ok:
         segments = _apply_validation_to_segments(segments, visibility.errors)
         view_source = _exclude_rejected(segments)
@@ -184,12 +184,6 @@ def _exclude_rejected(segments: Sequence[SemanticSegment]) -> list[SemanticSegme
     return [segment for segment in segments if segment.review_status != ReviewStatus.REJECTED]
 
 
-def _player_visible_segments(segments: Sequence[SemanticSegment]) -> list[SemanticSegment]:
-    """プレイヤー向け派生に載せ得る audience のセグメントだけ返す。"""
-    allowed = {Audience.PLAYER, Audience.SHARED}
-    return [segment for segment in segments if segment.audience in allowed]
-
-
 def _write_outputs(
     output_dir: Path,
     *,
@@ -201,9 +195,7 @@ def _write_outputs(
     """正本・レビュー・派生ビューを所定レイアウトへ書き出す。"""
     write_jsonl_atomic(output_dir / "segments.jsonl", segments)
     write_jsonl_atomic(output_dir / "review" / "queue.jsonl", review_items)
-    pending = output_dir / "review" / "pending.md"
-    pending.parent.mkdir(parents=True, exist_ok=True)
-    pending.write_text(render_review_markdown(review_items), encoding="utf-8")
+    write_text_atomic(output_dir / "review" / "pending.md", render_review_markdown(review_items))
     write_jsonl_atomic(output_dir / "derived" / "retrieval-inputs.jsonl", retrieval)
     write_jsonl_atomic(output_dir / "derived" / "topic-inputs.jsonl", topic)
 

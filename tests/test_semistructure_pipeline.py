@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from nova_parser.semistructure.models import Audience, AudienceOverride, SemanticSegment
+from nova_parser.semistructure.models import Audience, AudienceOverride, ReviewStatus, SemanticSegment
 from nova_parser.semistructure.pipeline import run_pipeline
 from nova_parser.semistructure.storage import read_jsonl
 from tests.semistructure_factories import (
@@ -84,3 +84,36 @@ def test_pipeline_uses_page_cache_on_second_run(tmp_path: Path) -> None:
     assert second.failed_pages == []
     assert (tmp_path / "out" / ".cache").is_dir()
     assert any((tmp_path / "out" / ".cache").iterdir())
+
+
+def test_pipeline_no_cache_reclassifies_even_when_cache_exists(tmp_path: Path) -> None:
+    """no_cache=True のときは既存キャッシュを読まず classify を再実行する。"""
+    _setup_two_page_workspace(tmp_path)
+    run_pipeline(make_config(tmp_path), classifier=FakeClassifier.valid())
+    assert any((tmp_path / "out" / ".cache").iterdir())
+
+    # キャッシュがあれば page 22 は成功するはずだが、no_cache なら失敗に到達する
+    report = run_pipeline(
+        make_config(tmp_path, no_cache=True),
+        classifier=FakeClassifier.fail_on_page(22),
+    )
+    assert 22 in report.failed_pages
+
+
+def test_pipeline_marks_gm_segments_for_player_visibility_review(tmp_path: Path) -> None:
+    """GM セグメントは検証前に除外せず、可視性理由で REQUIRED になる。"""
+    _setup_two_page_workspace(tmp_path)
+    run_pipeline(make_config(tmp_path), classifier=FakeClassifier.valid())
+
+    segments = read_jsonl(tmp_path / "out/segments.jsonl", SemanticSegment)
+    gm_segments = [segment for segment in segments if segment.audience == Audience.GM]
+    assert gm_segments, "manifest の GM 範囲から GM セグメントが生成される想定"
+    for segment in gm_segments:
+        assert segment.review_status == ReviewStatus.REQUIRED
+        reasons = segment.processing.get("review_reasons", "")
+        assert "gm_audience_visible" in reasons
+
+    # 派生は player モードのため GM は載らない
+    retrieval = (tmp_path / "out/derived/retrieval-inputs.jsonl").read_text(encoding="utf-8")
+    for segment in gm_segments:
+        assert segment.segment_id not in retrieval
