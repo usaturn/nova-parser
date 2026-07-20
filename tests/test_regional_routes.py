@@ -1072,7 +1072,7 @@ def test_cache_hit_regenerates_vertical_blocks_without_vision_call(tmp_path):
 
 
 def test_schema_version_1_cache_without_vertical_blocks_is_served(tmp_path):
-    """既存 schema_version=1 キャッシュ（vertical_blocks キーなし）を読み込み、縦ブロックを再生成する。"""
+    """既存 schema_version=1 キャッシュ（vertical_blocks キーなし）を読み込み、縦・横ブロックを再生成する。"""
     image_dir = tmp_path / "images"
     image_dir.mkdir()
     _write_png(image_dir / "a.png", (100, 100))
@@ -1097,6 +1097,7 @@ def test_schema_version_1_cache_without_vertical_blocks_is_served(tmp_path):
     assert resp.json()["blocks"] == [{"x": 10, "y": 10, "width": 50, "height": 30}]
     # 単一段落でも finalize 余白が付く（PAD_*_RATIO=0.006 → 100px 画像で ±1px 程度）
     assert resp.json()["vertical_blocks"] == [{"x": 9, "y": 9, "width": 52, "height": 32}]
+    assert resp.json()["horizontal_blocks"] == [{"x": 9, "y": 9, "width": 52, "height": 32}]
 
 
 def test_get_blocks_paragraph_mode_matches_fixture_order(tmp_path):
