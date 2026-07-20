@@ -1,0 +1,10 @@
+{"query_id": "q-rule-escape", "text": "戦闘シーンから逃走するにはどうすればよいか", "relevant_ids": ["eg:p203:escape-rule"], "query_type": "rule"}
+{"query_id": "q-rule-gm-player", "text": "TRPGにおけるGMとプレイヤーの役割は何か", "relevant_ids": ["eg:p022:gm-player-roles", "eg:p022:trpg-body"], "query_type": "rule"}
+{"query_id": "q-world-angel-core", "text": "天使核（エンゼル・コア）とは何か", "relevant_ids": ["eg:p023:term-angel-core"], "query_type": "world"}
+{"query_id": "q-world-schnellgear", "text": "シュネルギアはどのような兵器か", "relevant_ids": ["eg:p023:term-schnellgear", "eg:p023:angel-gear-intro"], "query_type": "world"}
+{"query_id": "q-char-itou", "text": "八坂凍はどのようなナビゲーターか", "relevant_ids": ["eg:p249:pc1-setup", "eg:p251:scene4", "eg:p259:itou-dialogue"], "query_type": "character"}
+{"query_id": "q-char-koyuki", "text": "仁科小雪中尉は誰で何をしているか", "relevant_ids": ["eg:p251:scene3", "eg:p251:scene3-dialogue"], "query_type": "character"}
+{"query_id": "q-scenario-preview", "text": "第二話の今回予告のあらすじは何か", "relevant_ids": ["eg:p249:preview"], "query_type": "scenario"}
+{"query_id": "q-scenario-char-create", "text": "シナリオ開始時のキャラクター作成手順は何か", "relevant_ids": ["eg:p249:char-create", "eg:p249:pc1-setup"], "query_type": "scenario"}
+{"query_id": "q-similar-farewell", "text": "別れやテストパイロット任命で絆が引き裂かれるシーン", "relevant_ids": ["eg:p251:scene4", "eg:p251:combat-data", "eg:p249:preview"], "query_type": "similar"}
+{"query_id": "q-similar-reunion-fear", "text": "再会や恐怖を語る感情的なクライマックスシーン", "relevant_ids": ["eg:p259:scene21", "eg:p259:itou-dialogue", "eg:p259:gm-note-fear"], "query_type": "similar"}

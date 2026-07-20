@@ -10,6 +10,20 @@ uv run nova-parser
 nova-parser
 ```
 
+## 半構造化パイプライン（semistructure）
+
+OCR の `*.regions.json` から追跡可能な正本 JSONL と Ruri 向け派生ビューを生成する専用 CLI がある。
+
+```bash
+uv run nova-parser-semistructure \
+  --manifest config/semistructure/angel_gear_2e.json \
+  --input-dir Output/EG \
+  --output-dir Output/EG_semistructured \
+  --dry-run
+```
+
+運用手順・終了コード・レビューフロー・Ruri 引き渡し条件は [semistructure.md](./semistructure.md) を参照。
+
 ## CLI 引数
 
 ```
