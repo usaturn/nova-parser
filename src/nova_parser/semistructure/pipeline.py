@@ -254,7 +254,9 @@ def _context_digest(window: StructureWindow) -> str:
     """窓の全文脈ブロックとアウトラインから決定的ダイジェストを算出する。"""
     parts: list[str] = []
     for block in window.context_blocks:
-        parts.append(f"{block.block_id}|{block.normalized_text}|{block.inherited_audience}")
+        parts.append(
+            f"{block.block_id}|{block.page}|{block.draw_order}|{block.raw_text}|{block.normalized_text}|{block.inherited_audience}"
+        )
     if window.outline is not None:
         parts.append(window.outline.model_dump_json())
     return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()

@@ -307,3 +307,24 @@ def test_pipeline_empty_raw_text_returns_empty_report(tmp_path: Path) -> None:
     assert report.llm_calls == 0
     assert report.failed_pages == []
     assert not (tmp_path / "out/segments.jsonl").exists()
+
+
+def test_cache_invalidates_when_raw_text_changes_but_normalized_stays_same(tmp_path: Path) -> None:
+    """normalized_text が同一でも raw_text が変わればキャッシュが無効化され再分類される。"""
+    manifest = make_manifest()
+    (tmp_path / "manifest.json").write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
+    input_dir = tmp_path / "input"
+    # 初回: 改行なし → normalized_text = "abcdefghij1234567890"
+    write_region_fixture(input_dir / "p001.regions.json", image_name="p001.png", text="abcdefghij1234567890")
+
+    classifier1 = _TrackingClassifier()
+    run_pipeline(make_config(tmp_path), classifier=classifier1)
+    assert 1 in classifier1.classified_pages
+
+    # 2回目: 改行あり → 正規化で結合されて normalized_text は同一になる
+    write_region_fixture(input_dir / "p001.regions.json", image_name="p001.png", text="abcdefghij\n1234567890")
+
+    classifier2 = _TrackingClassifier()
+    run_pipeline(make_config(tmp_path), classifier=classifier2)
+    # raw_text が変わったのでキャッシュは無効化され再分類される
+    assert 1 in classifier2.classified_pages
