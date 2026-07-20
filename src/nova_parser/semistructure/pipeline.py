@@ -48,7 +48,10 @@ class PipelineReport:
     llm_calls: int = 0
     input_errors: int = 0
     review_candidates: int = 0
+    review_required: int = 0
     segments: int = 0
+    source_coverage: float = 1.0
+    validation_errors: int = 0
     dry_run: bool = False
 
 
@@ -151,6 +154,7 @@ def run_pipeline(
 
     # REJECTED 除外後の正本に対して可視性検証し、GM/UNKNOWN を REQUIRED へ戻す。
     # 派生フィルタは build_views の audience_mode に任せ、検証前に player 限定しない。
+    # 可視性エラーはレビューキューへ回し、正本検証（exit 4）の件数には含めない。
     book_titles = {manifest.book_id: manifest.title}
     view_source = _exclude_rejected(segments)
     visibility = validate_player_visibility(view_source)
@@ -176,6 +180,9 @@ def run_pipeline(
     report.failed_pages = failed_pages
     report.segments = len(segments)
     report.review_candidates = len(review_items)
+    report.review_required = len(review_items)
+    report.source_coverage = corpus_report.coverage_ratio
+    report.validation_errors = len(corpus_report.errors)
     return report
 
 

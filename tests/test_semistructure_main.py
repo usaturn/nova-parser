@@ -7,7 +7,9 @@ from pathlib import Path
 import pytest
 
 from nova_parser.semistructure import main as main_mod
-from tests.semistructure_factories import make_manifest, write_region_fixture
+from nova_parser.semistructure.models import EmbeddingInput, SemanticSegment
+from nova_parser.semistructure.storage import read_jsonl
+from tests.semistructure_factories import FakeClassifier, make_manifest, write_region_fixture
 
 
 def _setup_cli_workspace(tmp_path: Path) -> tuple[Path, Path, Path]:
@@ -90,8 +92,8 @@ def test_main_dry_run_with_evaluate_gold_without_segments_prints_message(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """--dry-run + --evaluate-gold で segments.jsonl が無いときは明確なメッセージを出す。"""
-    from tests.semistructure_factories import make_segment
     from nova_parser.semistructure.models import Audience
+    from tests.semistructure_factories import make_segment
 
     manifest_path, input_dir, output_dir = _setup_cli_workspace(tmp_path)
     gold = make_segment("s1", Audience.GM)
@@ -139,19 +141,18 @@ def test_main_without_api_key_does_not_overwrite(
     # 先行テストで初期化された backend 状態を捨て、空キーで再評価させる
     gemini_backend.reset_for_tests()
 
-    with pytest.raises(SystemExit) as exc_info:
-        main_mod.main(
-            [
-                "--manifest",
-                str(manifest_path),
-                "--input-dir",
-                str(input_dir),
-                "--output-dir",
-                str(output_dir),
-            ]
-        )
+    exit_code = main_mod.main(
+        [
+            "--manifest",
+            str(manifest_path),
+            "--input-dir",
+            str(input_dir),
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
 
-    assert exc_info.value.code != 0
+    assert exit_code != 0
     assert sentinel.read_text(encoding="utf-8") == original
     gemini_backend.reset_for_tests()
 
@@ -177,7 +178,10 @@ def test_main_wires_review_decisions_and_no_cache(
             input_errors = 0
             failed_pages: list[int] = []
             review_candidates = 0
+            review_required = 0
             segments = 0
+            source_coverage = 1.0
+            validation_errors = 0
             dry_run = False
 
         return _Report()
@@ -185,11 +189,7 @@ def test_main_wires_review_decisions_and_no_cache(
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.setattr(main_mod, "run_pipeline", fake_run_pipeline)
     monkeypatch.setattr(main_mod, "ensure_backend_available", lambda: None)
-    monkeypatch.setattr(
-        main_mod,
-        "GeminiStructureClassifier",
-        lambda **kwargs: object(),
-    )
+    monkeypatch.setattr(main_mod, "build_classifier", lambda _config: object())
 
     main_mod.main(
         [
@@ -213,3 +213,23 @@ def test_main_wires_review_decisions_and_no_cache(
     assert config.no_cache is True
     assert config.dry_run is False
     assert captured["classifier"] is not None
+
+
+def test_cli_end_to_end_with_fake_classifier(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """FakeClassifier で CLI 全体を通し、正本と派生ビューが出力される。"""
+    monkeypatch.setattr(main_mod, "build_classifier", lambda _: FakeClassifier.valid())
+    fixture_dir = Path(__file__).parent / "fixtures" / "semistructure"
+    exit_code = main_mod.main(
+        [
+            "--manifest",
+            str(fixture_dir / "manifest.json"),
+            "--input-dir",
+            str(fixture_dir),
+            "--output-dir",
+            str(tmp_path / "out"),
+        ]
+    )
+    assert exit_code == 0
+    assert read_jsonl(tmp_path / "out/segments.jsonl", SemanticSegment)
+    assert read_jsonl(tmp_path / "out/derived/retrieval-inputs.jsonl", EmbeddingInput)
+    assert read_jsonl(tmp_path / "out/derived/topic-inputs.jsonl", EmbeddingInput)
