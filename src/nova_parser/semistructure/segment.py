@@ -78,7 +78,7 @@ def assemble_segments(
             fallback_segment(
                 block,
                 reason,
-                document_type=manifest.default_document_type,
+                document_type=manifest.resolve_document_type(block.page),
                 classifier_id=proposal.classifier_id,
                 prompt_contract_version=proposal.prompt_contract_version,
                 input_sha256=proposal.input_sha256,
@@ -162,6 +162,15 @@ def _compose_segment(
     if reasons:
         review_status = ReviewStatus.REQUIRED
 
+    resolved_types = {manifest.resolve_document_type(block.page) for block in ordered_blocks}
+    if len(resolved_types) == 1:
+        document_type = next(iter(resolved_types))
+    else:
+        document_type = manifest.default_document_type
+        if "mixed_document_type_override" not in reasons:
+            reasons.append("mixed_document_type_override")
+        review_status = ReviewStatus.REQUIRED
+
     source_spans: list[SourceSpan] = [span for block in ordered_blocks for span in block.source_spans]
     normalization_ops = [op for block in ordered_blocks for op in block.operations]
 
@@ -182,7 +191,7 @@ def _compose_segment(
         ),
         parent_segment_id=proposal_segment.parent_segment_id,
         book_id=manifest.book_id,
-        document_type=manifest.default_document_type,
+        document_type=document_type,
         section_path=list(proposal_segment.section_path),
         content_type=proposal_segment.content_type,
         audience=audience,

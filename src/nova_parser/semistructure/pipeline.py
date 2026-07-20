@@ -135,7 +135,7 @@ def run_pipeline(
                 fallback_segment(
                     block,
                     CLASSIFIER_FAILURE_REASON,
-                    document_type=manifest.default_document_type,
+                    document_type=manifest.resolve_document_type(block.page),
                     classifier_id=classifier.classifier_id,
                     prompt_contract_version=PROMPT_CONTRACT_VERSION,
                 )

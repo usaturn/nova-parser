@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 
-from nova_parser.semistructure.models import Audience, ReviewStatus
+from nova_parser.semistructure.models import Audience, DocumentType, DocumentTypeOverride, ReviewStatus
 from nova_parser.semistructure.segment import assemble_segments, fallback_segment
 from tests.semistructure_factories import make_block, make_manifest, make_proposal
 
@@ -137,6 +137,74 @@ def test_segment_id_matches_hash_formula() -> None:
     )
     expected = f"eg-test-{hashlib.sha256(payload.encode()).hexdigest()[:16]}"
     assert segment.segment_id == expected
+
+
+def test_compose_segment_uses_document_type_override() -> None:
+    """override 範囲内のページのセグメントは override の document_type になる。"""
+    blocks = [make_block("b1", "シナリオ本文", page=55)]
+    proposal = make_proposal(block_ids=["b1"])
+    manifest = make_manifest(
+        document_type_overrides=[
+            DocumentTypeOverride(start_page=50, end_page=60, document_type=DocumentType.SCENARIO),
+        ],
+    )
+
+    segments = assemble_segments(blocks, proposal, manifest)
+
+    assert segments[0].document_type == DocumentType.SCENARIO
+
+
+def test_compose_segment_uses_default_outside_override_range() -> None:
+    """override 範囲外のページのセグメントは default_document_type になる。"""
+    blocks = [make_block("b1", "ルール本文", page=22)]
+    proposal = make_proposal(block_ids=["b1"])
+    manifest = make_manifest(
+        document_type_overrides=[
+            DocumentTypeOverride(start_page=50, end_page=60, document_type=DocumentType.SCENARIO),
+        ],
+    )
+
+    segments = assemble_segments(blocks, proposal, manifest)
+
+    assert segments[0].document_type == DocumentType.RULEBOOK
+
+
+def test_fallback_segment_uses_document_type_override() -> None:
+    """分類失敗フォールバック経路でも override の document_type が適用される。"""
+    blocks = [make_block("b1", "シナリオ本文", page=55)]
+    manifest = make_manifest(
+        document_type_overrides=[
+            DocumentTypeOverride(start_page=50, end_page=60, document_type=DocumentType.SCENARIO),
+        ],
+    )
+
+    segments = assemble_segments(
+        blocks,
+        make_proposal(segments=[]),
+        manifest,
+    )
+
+    assert segments[0].content_type == "unknown"
+    assert segments[0].document_type == DocumentType.SCENARIO
+
+
+def test_compose_segment_mixed_override_adds_review_reason() -> None:
+    """複数 override 範囲をまたぐブロックは default_document_type + レビュー理由になる。"""
+    blocks = [
+        make_block("b1", "前半", page=49, draw_order=0),
+        make_block("b2", "後半", page=50, draw_order=1),
+    ]
+    proposal = make_proposal(block_ids=["b1", "b2"])
+    manifest = make_manifest(
+        document_type_overrides=[
+            DocumentTypeOverride(start_page=50, end_page=60, document_type=DocumentType.SCENARIO),
+        ],
+    )
+
+    segments = assemble_segments(blocks, proposal, manifest)
+
+    assert segments[0].document_type == DocumentType.RULEBOOK
+    assert "mixed_document_type_override" in segments[0].processing.get("review_reasons", "")
 
 
 def test_fallback_segment_preserves_block_text_and_spans() -> None:

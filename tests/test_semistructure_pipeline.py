@@ -8,6 +8,8 @@ from pathlib import Path
 from nova_parser.semistructure.models import (
     Audience,
     AudienceOverride,
+    DocumentType,
+    DocumentTypeOverride,
     NormalizedBlock,
     ReviewDecision,
     ReviewStatus,
@@ -93,6 +95,26 @@ def test_pipeline_falls_back_when_one_page_classifier_fails(tmp_path: Path) -> N
         )[-1].content_type
         == "unknown"
     )
+
+
+def test_pipeline_fallback_segment_uses_document_type_override(tmp_path: Path) -> None:
+    """分類失敗フォールバックでも manifest の document_type_overrides を適用する。"""
+    manifest = make_manifest(
+        document_type_overrides=[
+            DocumentTypeOverride(start_page=200, end_page=300, document_type=DocumentType.SCENARIO),
+        ],
+    )
+    (tmp_path / "manifest.json").write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
+    input_dir = tmp_path / "input"
+    write_region_fixture(input_dir / "p022.regions.json", image_name="p022.png", text="ページ22の本文")
+    write_region_fixture(input_dir / "p234.regions.json", image_name="p234.png", text="ページ234の本文")
+
+    report = run_pipeline(make_config(tmp_path), classifier=FakeClassifier.fail_on_page(234))
+
+    assert report.failed_pages == [234]
+    segments = read_jsonl(tmp_path / "out/segments.jsonl", SemanticSegment)
+    fallback = next(segment for segment in segments if segment.content_type == "unknown")
+    assert fallback.document_type == DocumentType.SCENARIO
 
 
 def test_pipeline_dry_run_skips_llm_and_writes_nothing(tmp_path: Path) -> None:

@@ -105,6 +105,13 @@ class BookManifest(BaseModel):
     document_type_overrides: list[DocumentTypeOverride] = Field(default_factory=list)
     schema_version: int = Field(default=1, ge=1)
 
+    def resolve_document_type(self, page: int) -> DocumentType:
+        """ページ番号から document_type_overrides を探索し、該当する DocumentType を返す。"""
+        for override in self.document_type_overrides:
+            if override.start_page <= page <= override.end_page:
+                return override.document_type
+        return self.default_document_type
+
 
 class OcrRegion(BaseModel):
     """原文を変更せず保持するOCR領域。"""

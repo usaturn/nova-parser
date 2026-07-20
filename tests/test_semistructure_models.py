@@ -7,13 +7,14 @@ from nova_parser.semistructure.models import (
     Audience,
     BookOutline,
     DocumentType,
+    DocumentTypeOverride,
     OutlineSection,
     SemanticSegment,
     SourceSpan,
     StructureProposal,
     StructureWindow,
 )
-from tests.semistructure_factories import FakeClassifier, make_block
+from tests.semistructure_factories import FakeClassifier, make_block, make_manifest
 
 
 def test_source_span_rejects_empty_range() -> None:
@@ -150,6 +151,20 @@ def test_book_outline_rejects_extra_field_in_nested_section() -> None:
                 ],
             }
         )
+
+
+def test_manifest_resolve_document_type_uses_override() -> None:
+    """override 範囲内のページは override の document_type を返す。"""
+    manifest = make_manifest(
+        document_type_overrides=[
+            DocumentTypeOverride(start_page=50, end_page=60, document_type=DocumentType.SCENARIO),
+        ],
+    )
+    assert manifest.resolve_document_type(55) == DocumentType.SCENARIO
+    assert manifest.resolve_document_type(49) == DocumentType.RULEBOOK
+    assert manifest.resolve_document_type(61) == DocumentType.RULEBOOK
+    assert manifest.resolve_document_type(50) == DocumentType.SCENARIO
+    assert manifest.resolve_document_type(60) == DocumentType.SCENARIO
 
 
 def test_fake_classifier_returns_outline_with_section_defaults() -> None:
