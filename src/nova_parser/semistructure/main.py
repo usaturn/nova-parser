@@ -96,6 +96,8 @@ def format_report(report: PipelineReport) -> str:
     if report.failed_pages:
         pages = ",".join(str(page) for page in report.failed_pages)
         lines.append(f"failed_pages={pages}")
+    if not report.dry_run and report.outline_fallback:
+        lines.append("outline=fallback (--no-cache での再実行を推奨)")
     return "\n".join(lines)
 
 
@@ -104,12 +106,12 @@ def exit_code_for_report(report: PipelineReport) -> int:
 
     - 0: 成功（部分ページの LLM 失敗でも fallback があれば成功）
     - 2: 入力エラー
-    - 3: 全ページで LLM が失敗
+    - 3: 分類対象ページ（classified_pages）が全て LLM 失敗
     - 4: 正本（provenance）検証エラー
     """
     if report.input_errors > 0:
         return 2
-    if report.pages > 0 and report.failed_pages and len(report.failed_pages) >= report.pages:
+    if report.classified_pages > 0 and report.failed_pages and len(report.failed_pages) >= report.classified_pages:
         return 3
     if report.validation_errors > 0:
         return 4

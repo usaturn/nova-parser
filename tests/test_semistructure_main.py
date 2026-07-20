@@ -183,6 +183,8 @@ def test_main_wires_review_decisions_and_no_cache(
             source_coverage = 1.0
             validation_errors = 0
             dry_run = False
+            classified_pages = 2
+            outline_fallback = False
 
         return _Report()
 
@@ -256,6 +258,8 @@ def _make_report(**overrides: object):  # type: ignore[no-untyped-def]
         source_coverage=1.0,
         validation_errors=0,
         dry_run=False,
+        classified_pages=2,
+        outline_fallback=False,
     )
     for key, value in overrides.items():
         setattr(base, key, value)
@@ -285,10 +289,24 @@ def test_exit_code_all_pages_failed_is_three() -> None:
     assert main_mod.exit_code_for_report(report) == 3
 
 
+def test_exit_code_all_classified_pages_failed_with_empty_page_is_three() -> None:
+    """空テキストページ混在でも分類対象ページが全失敗なら exit 3。"""
+    report = _make_report(pages=2, classified_pages=1, failed_pages=[22], segments=1)
+    assert main_mod.exit_code_for_report(report) == 3
+
+
 def test_exit_code_validation_errors_is_four() -> None:
     """validation_errors > 0 は exit 4。"""
     report = _make_report(validation_errors=1)
     assert main_mod.exit_code_for_report(report) == 4
+
+
+def test_format_report_shows_outline_fallback(capsys: pytest.CaptureFixture[str]) -> None:
+    """outline fallback 時にレポートに警告が含まれる。"""
+    report = _make_report(outline_fallback=True)
+    output = main_mod.format_report(report)
+    assert "outline=fallback" in output
+    assert "--no-cache" in output
 
 
 def test_cli_input_error_missing_manifest_returns_two(

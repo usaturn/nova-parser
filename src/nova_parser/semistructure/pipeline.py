@@ -11,8 +11,10 @@ from nova_parser.semistructure.input import load_pages
 from nova_parser.semistructure.llm import PROMPT_CONTRACT_VERSION, StructureClassifier, build_structure_windows
 from nova_parser.semistructure.manifest import load_manifest
 from nova_parser.semistructure.models import (
+    BookOutline,
     EmbeddingInput,
     NormalizedBlock,
+    OutlineSection,
     PipelineConfig,
     ReviewItem,
     ReviewStatus,
@@ -52,6 +54,8 @@ class PipelineReport:
     source_coverage: float = 1.0
     validation_errors: int = 0
     dry_run: bool = False
+    classified_pages: int = 0
+    outline_fallback: bool = False
 
 
 def run_pipeline(
@@ -96,8 +100,13 @@ def run_pipeline(
     cache_dir = config.output_dir / ".cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
 
-    outline = classifier.infer_outline(blocks)
+    try:
+        outline = classifier.infer_outline(blocks)
+    except Exception:
+        outline = _unknown_outline(blocks)
     report.llm_calls += 1
+    if len(outline.sections) == 1 and outline.sections[0].title == "unknown":
+        report.outline_fallback = True
 
     windows = build_structure_windows(blocks, outline=outline)
     blocks_by_page: dict[int, list[NormalizedBlock]] = {}
@@ -106,11 +115,13 @@ def run_pipeline(
 
     segments: list[SemanticSegment] = []
     failed_pages: list[int] = []
+    classified_pages = 0
 
     for window in windows:
         page_blocks = blocks_by_page.get(window.center_page, [])
         if not page_blocks:
             continue
+        classified_pages += 1
         cache_key = _cache_key(
             context_digest=_context_digest(window),
             manifest_sha=manifest_sha,
@@ -182,6 +193,7 @@ def run_pipeline(
     )
 
     report.failed_pages = failed_pages
+    report.classified_pages = classified_pages
     report.segments = len(segments)
     report.review_candidates = len(review_items)
     report.review_required = len(review_items)
@@ -266,6 +278,22 @@ def _cache_key(
 def _file_sha256(path: Path) -> str:
     """ファイル内容の SHA-256 十六進を返す。"""
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _unknown_outline(blocks: Sequence[NormalizedBlock]) -> BookOutline:
+    """アウトライン推定が失敗したときの unknown フォールバックを返す。"""
+    pages = [block.page for block in blocks]
+    return BookOutline(
+        book_id=blocks[0].book_id,
+        sections=[
+            OutlineSection(
+                title="unknown",
+                start_page=min(pages),
+                end_page=max(pages),
+                default_content_type="unknown",
+            )
+        ],
+    )
 
 
 def _apply_validation_to_segments(

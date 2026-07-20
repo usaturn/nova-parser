@@ -8,6 +8,7 @@ from pathlib import Path
 from nova_parser.semistructure.models import (
     Audience,
     AudienceOverride,
+    BookOutline,
     DocumentType,
     DocumentTypeOverride,
     NormalizedBlock,
@@ -54,6 +55,13 @@ def _fail_closed_audience(blocks: Sequence[NormalizedBlock]) -> Audience:
     return Audience.SHARED
 
 
+class _FailingOutlineClassifier(FakeClassifier):
+    """infer_outline が例外を送出する分類器。"""
+
+    def infer_outline(self, blocks: Sequence[NormalizedBlock]) -> BookOutline:
+        raise RuntimeError("outline inference failed")
+
+
 def _setup_two_page_workspace(tmp_path: Path) -> Path:
     """manifest + 2ページの regions.json を make_config の既定配置へ用意する。"""
     manifest = make_manifest(
@@ -78,6 +86,13 @@ def test_pipeline_writes_canonical_review_and_views(tmp_path: Path) -> None:
     assert (tmp_path / "out/review/pending.md").is_file()
     assert (tmp_path / "out/derived/retrieval-inputs.jsonl").is_file()
     assert (tmp_path / "out/derived/topic-inputs.jsonl").is_file()
+
+
+def test_pipeline_reports_outline_fallback(tmp_path: Path) -> None:
+    """アウトライン推定が失敗すると report.outline_fallback が True になる。"""
+    _setup_two_page_workspace(tmp_path)
+    report = run_pipeline(make_config(tmp_path), classifier=_FailingOutlineClassifier())
+    assert report.outline_fallback is True
 
 
 def test_pipeline_falls_back_when_one_page_classifier_fails(tmp_path: Path) -> None:
