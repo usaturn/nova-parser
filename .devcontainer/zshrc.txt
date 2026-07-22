@@ -70,14 +70,16 @@ function buni(){
 export EDITOR=code
 export LANG=ja_JP.utf8
 
-function tmuxstart(){
-    if [ -n "$TMUX" ]; then
+function herdrstart(){
+    if [ "${HERDR_ENV:-}" = "1" ] || [ -n "${TMUX:-}" ] || [ ! -t 0 ] || [ ! -t 1 ]; then
         return 0
     fi
-    project_dir=$(ls -1 /workspaces/)
     export TZ="${TZ:-Asia/Tokyo}"
-    tmux -u new-session -A -s main -n main -c "/workspaces/${project_dir}" \; \
-        set-environment -g TZ "${TZ}"
+    if ! command -v herdr >/dev/null 2>&1; then
+        print -u2 "warning: herdr not found; continuing without a multiplexer"
+        return 0
+    fi
+    herdr
 }
 
 function update(){
@@ -89,4 +91,4 @@ function update(){
 # Starship プロンプト
 eval "$(starship init zsh)"
 
-tmuxstart
+herdrstart
