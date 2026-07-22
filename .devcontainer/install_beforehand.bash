@@ -23,6 +23,26 @@ curl -fsSL https://antigravity.google/cli/install.sh | bash
 YARN_GLOBAL_BIN="$(yarn global bin)"
 export PATH="$YARN_GLOBAL_BIN:$HOME/.local/bin:$PATH"
 
+echo "Installing Herdr..."
+if ! (set -o pipefail; curl -fsSL https://herdr.dev/install.sh | sh); then
+    echo "Herdr installation failed." >&2
+    exit 1
+fi
+
+mkdir -p "${HOME}/.config/herdr"
+if [ ! -f "${HOME}/.config/herdr/config.toml" ]; then
+    cp .devcontainer/herdr.toml "${HOME}/.config/herdr/config.toml"
+fi
+
+if ! command -v herdr >/dev/null 2>&1; then
+    echo "Herdr installation completed without placing herdr on PATH." >&2
+    exit 1
+fi
+if ! herdr --version; then
+    echo "Herdr version verification failed." >&2
+    exit 1
+fi
+
 curl -LsSf https://astral.sh/uv/install.sh | sh
 curl -fsSL https://bun.com/install | bash
 
