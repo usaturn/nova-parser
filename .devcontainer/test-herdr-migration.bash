@@ -32,7 +32,7 @@ run_zshrc() {
         PATH="$test_home/bin:/usr/bin:/bin" \
         HERDR_TEST_LOG="$test_home/herdr.log" \
         ZSHRC_TEMPLATE="$ZSHRC_TEMPLATE" \
-        "$@" /usr/bin/zsh -f -c 'source "$ZSHRC_TEMPLATE"'
+        "$@" /usr/bin/zsh -f -c 'source "$ZSHRC_TEMPLATE"' </dev/null >/dev/null
 }
 run_zshrc_tty() {
     local test_home="$1"
