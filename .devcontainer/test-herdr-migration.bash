@@ -21,6 +21,18 @@ run_zshrc() {
         ZSHRC_TEMPLATE="$ZSHRC_TEMPLATE" \
         "$@" /usr/bin/zsh -f -c 'source "$ZSHRC_TEMPLATE"'
 }
+run_zshrc_tty() {
+    local test_home="$1"
+    local zsh_command='/usr/bin/zsh -f -c '\''source "$ZSHRC_TEMPLATE"'\'' 2>"$HERDR_TEST_STDERR"'
+    shift
+    env -u TMUX -u HERDR_ENV \
+        HOME="$test_home" \
+        PATH="$test_home/bin:/usr/bin:/bin" \
+        HERDR_TEST_LOG="$test_home/herdr.log" \
+        HERDR_TEST_STDERR="$test_home/stderr.log" \
+        ZSHRC_TEMPLATE="$ZSHRC_TEMPLATE" \
+        "$@" script -qec "$zsh_command" /dev/null
+}
 
 test_config_and_syntax() {
     zsh -n "$ZSHRC_TEMPLATE"
@@ -39,18 +51,21 @@ test_launch_and_guards() {
         > "$test_home/bin/herdr"
     chmod +x "$test_home/bin/starship" "$test_home/bin/herdr"
 
-    run_zshrc "$test_home"
-    [ "$(wc -l < "$test_home/herdr.log")" -eq 1 ] || fail 'herdr call count'
+    run_zshrc_tty "$test_home"
+    [ "$(wc -l < "$test_home/herdr.log")" -eq 1 ] || fail 'TTY herdr call count'
     assert_contains "$test_home/herdr.log" '^called TZ=Asia/Tokyo$'
 
     : > "$test_home/herdr.log"
-    run_zshrc "$test_home" HERDR_ENV=1
+    run_zshrc "$test_home"
+    [ ! -s "$test_home/herdr.log" ] || fail 'non-TTY guard'
+
+    run_zshrc_tty "$test_home" HERDR_ENV=1
     [ ! -s "$test_home/herdr.log" ] || fail 'HERDR_ENV guard'
-    run_zshrc "$test_home" TMUX=/tmp/tmux-test
+    run_zshrc_tty "$test_home" TMUX=/tmp/tmux-test
     [ ! -s "$test_home/herdr.log" ] || fail 'TMUX guard'
 
     mv "$test_home/bin/herdr" "$test_home/bin/herdr.disabled"
-    run_zshrc "$test_home" 2> "$test_home/stderr.log"
+    run_zshrc_tty "$test_home"
     assert_contains "$test_home/stderr.log" 'herdr not found'
 }
 

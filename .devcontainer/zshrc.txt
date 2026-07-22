@@ -71,7 +71,7 @@ export EDITOR=code
 export LANG=ja_JP.utf8
 
 function herdrstart(){
-    if [ "${HERDR_ENV:-}" = "1" ] || [ -n "${TMUX:-}" ]; then
+    if [ "${HERDR_ENV:-}" = "1" ] || [ -n "${TMUX:-}" ] || [ ! -t 0 ] || [ ! -t 1 ]; then
         return 0
     fi
     export TZ="${TZ:-Asia/Tokyo}"
