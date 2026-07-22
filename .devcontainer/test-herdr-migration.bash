@@ -11,6 +11,19 @@ fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
 assert_contains() {
     rg -q -- "$2" "$1" || fail "$1 does not contain $2"
 }
+assert_before() {
+    local file="$1"
+    local earlier_pattern="$2"
+    local later_pattern="$3"
+    local earlier_line
+    local later_line
+    earlier_line="$(rg -n -m1 -- "$earlier_pattern" "$file" | cut -d: -f1)" \
+        || fail "$file does not contain $earlier_pattern"
+    later_line="$(rg -n -m1 -- "$later_pattern" "$file" | cut -d: -f1)" \
+        || fail "$file does not contain $later_pattern"
+    [ "$earlier_line" -lt "$later_line" ] \
+        || fail "$earlier_pattern must appear before $later_pattern in $file"
+}
 run_zshrc() {
     local test_home="$1"
     shift
@@ -71,12 +84,24 @@ test_launch_and_guards() {
 
 test_installer_wiring() {
     local installer="${REPO_ROOT}/.devcontainer/install_beforehand.bash"
+    local apt_install
     bash -n "$installer"
-    assert_contains "$installer" 'https://herdr\.dev/install\.sh'
+
+    assert_before "$installer" 'https://astral\.sh/uv/install\.sh' 'https://herdr\.dev/install\.sh'
+    assert_before "$installer" 'https://bun\.com/install' 'https://herdr\.dev/install\.sh'
+    assert_before "$installer" 'Installing Starship' 'https://herdr\.dev/install\.sh'
+    assert_before "$installer" 'Headroom setup complete' 'https://herdr\.dev/install\.sh'
+
     assert_contains "$installer" 'if \[ ! -f "\$\{HOME\}/\.config/herdr/config\.toml" \]'
-    assert_contains "$installer" 'cp \.devcontainer/herdr\.toml "\$\{HOME\}/\.config/herdr/config\.toml"'
+    assert_contains "$installer" 'if ! mkdir -p "\$\{HOME\}/\.config/herdr"; then'
+    assert_contains "$installer" 'if ! cp \.devcontainer/herdr\.toml "\$\{HOME\}/\.config/herdr/config\.toml"; then'
+    assert_contains "$installer" 'command -v herdr'
     assert_contains "$installer" 'herdr --version'
-    assert_contains "$installer" 'apt install -y tmux vim tig ripgrep fzf'
+
+    apt_install="$(rg -m1 -- 'apt install -y' "$installer")" \
+        || fail "$installer does not contain an apt install command"
+    printf '%s\n' "$apt_install" | rg -q -- '(^|[[:space:]])tmux([[:space:]]|$)' \
+        || fail 'apt install command does not retain tmux'
     assert_contains "$installer" 'cp \.devcontainer/tmux\.conf'
     assert_contains "$installer" 'tmux-git-status\.bash'
     assert_contains "$installer" 'tmux-url-copy\.zsh'
