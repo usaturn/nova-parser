@@ -7,6 +7,8 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.responses import Response
+from starlette.types import Scope
 
 from nova_parser.regional_ocr.errors import (
     AdcNotConfiguredError,
@@ -19,6 +21,20 @@ from nova_parser.regional_ocr.errors import (
 )
 from nova_parser.regional_ocr.routes import build_router
 from nova_parser.regional_ocr.state import AppState
+
+
+class _RevalidatingStaticFiles(StaticFiles):
+    """静的アセットを毎回再検証させる StaticFiles。
+
+    index.html と app.js は同時に更新されるが、ブラウザが片方だけをキャッシュから
+    使うと、新しい UI 要素が古い state を参照して静かに壊れる。no-cache は
+    etag による再検証を必須にするだけなので、未変更なら 304 で済む。
+    """
+
+    async def get_response(self, path: str, scope: Scope) -> Response:
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
 
 
 def create_app(state: AppState) -> FastAPI:
@@ -59,6 +75,6 @@ def create_app(state: AppState) -> FastAPI:
         return JSONResponse(status_code=400, content={"detail": str(exc)})
 
     static_dir = Path(__file__).parent / "static"
-    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+    app.mount("/static", _RevalidatingStaticFiles(directory=static_dir), name="static")
     app.include_router(build_router())
     return app

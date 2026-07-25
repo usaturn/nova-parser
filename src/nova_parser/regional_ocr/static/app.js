@@ -110,6 +110,7 @@ function regionalOcrApp() {
     zoomFit: true,
     blockMode: false,
     blockGranularity: "vertical",
+    manualReadingOrder: "vision",
     paragraphBlocks: null,
     verticalBlocks: null,
     horizontalBlocks: null,
@@ -386,7 +387,7 @@ function regionalOcrApp() {
       const rect = {
         rect_id: generateRectId(),
         draw_order: nextDrawOrder(this.session.regions),
-        reading_order: "vision",
+        reading_order: this.manualReadingOrder === "vertical" ? "vertical" : "vision",
         ...natural,
       };
       this.session.regions.push({

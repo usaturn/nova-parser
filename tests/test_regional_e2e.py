@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from PIL import Image
@@ -98,6 +99,33 @@ def test_get_static_styles_css_returns_200_with_css_mime(tmp_path):
     assert "text/css" in resp.headers["content-type"].lower()
 
 
+def test_index_and_static_assets_require_revalidation(tmp_path):
+    """index.html と静的アセットを毎回再検証させ、両者のバージョン食い違いを防ぐ。
+
+    index.html だけが再取得されて app.js がブラウザキャッシュのまま残ると、
+    新しい UI 要素は表示されるのに、その要素が参照する state が古い app.js に
+    存在しないという食い違いが起きる。実際に「手描き読み順」セレクタは操作できるのに
+    reading_order が既定値のまま保存される、という形で表面化した。
+    Cache-Control: no-cache は etag/last-modified による再検証を必須にするため、
+    変更のないアセットは 304 のまま、変更されたアセットだけが確実に配信される。
+    """
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    output_dir = tmp_path / "output"
+
+    client = _make_client(image_dir, output_dir, _simple_factory(FakeVisionClient()))
+
+    for path in ("/", "/static/app.js", "/static/styles.css"):
+        resp = client.get(path)
+        assert resp.status_code == 200, path
+        assert resp.headers.get("cache-control") == "no-cache", f"{path} が再検証必須になっていない"
+
+    # 再検証が成立する前提として、検証子（etag もしくは last-modified）が必要。
+    for path in ("/", "/static/app.js"):
+        headers = client.get(path).headers
+        assert "etag" in headers or "last-modified" in headers, f"{path} に検証子がない"
+
+
 def test_existing_api_routes_still_work_with_static_mount(tmp_path):
     """static mount 追加後も既存 /api/images が回帰しない。"""
     image_dir = tmp_path / "images"
@@ -110,6 +138,44 @@ def test_existing_api_routes_still_work_with_static_mount(tmp_path):
 
     assert resp.status_code == 200
     assert "a.png" in resp.json()["images"]
+
+
+def test_index_html_contains_manual_reading_order_selector(tmp_path):
+    """通常モード用の手描き読み順セレクタが、同一 <label> ブロック内に
+    x-show/x-model/選択肢/title を揃えて配信されること。
+
+    独立した部分文字列一致だけだと、x-show="!blockMode" が別要素へ移動して
+    ブロック選択中もセレクタが表示されてしまう回帰を検出できない。
+    そのため「手描き読み順」を含む <label> ブロックを1つに絞り込み、
+    その内部だけを対象に各 assertion を行う。
+    """
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    output_dir = tmp_path / "output"
+
+    client = _make_client(image_dir, output_dir, _simple_factory(FakeVisionClient()))
+    body = client.get("/").text
+
+    label_blocks = re.findall(r"<label\b.*?</label>", body, re.DOTALL)
+    manual_blocks = [block for block in label_blocks if "手描き読み順" in block]
+    assert len(manual_blocks) == 1, (
+        "「手描き読み順」を含む <label> ブロックがちょうど1つ見つかること "
+        f"(found {len(manual_blocks)}): {manual_blocks}"
+    )
+    block = manual_blocks[0]
+
+    required_fragments = [
+        "手描き読み順",
+        'x-show="!blockMode"',
+        'x-model="manualReadingOrder"',
+        '<option value="vision">横書き（既定）</option>',
+        '<option value="vertical">縦書き</option>',
+        'title="新しく手描きする矩形の OCR 読み順"',
+    ]
+    missing = [fragment for fragment in required_fragments if fragment not in block]
+    assert not missing, (
+        f"手描き読み順の <label> ブロックに以下が欠けている（同一要素性が壊れている可能性）: {missing}\nblock={block}"
+    )
 
 
 # ---------------------------------------------------------------------------
