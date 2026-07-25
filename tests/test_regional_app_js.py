@@ -728,6 +728,69 @@ dropAutosaveTimer(app);
     )
 
 
+def test_manual_reading_order_defaults_to_vision_and_applies_only_to_new_drafts() -> None:
+    _run_node_inline(
+        r"""
+const app = newApp({
+  session: sessionPayload("a.png", []),
+  currentImage: { name: "a.png", width: 100, height: 100 },
+  imgLoaded: true,
+  draftRect: { x: 10, y: 10, width: 20, height: 20 },
+  scaleX: 1,
+  scaleY: 1,
+});
+
+assert.equal(app.manualReadingOrder, "vision", "手描き読み順の初期値は横書き");
+
+app.manualReadingOrder = "vertical";
+app._addRegionFromDraft();
+assert.equal(app.session.regions[0].rectangle.reading_order, "vertical");
+
+app.manualReadingOrder = "vision";
+app.draftRect = { x: 40, y: 40, width: 20, height: 20 };
+app._addRegionFromDraft();
+assert.equal(app.session.regions[0].rectangle.reading_order, "vertical", "既存矩形は変更しない");
+assert.equal(app.session.regions[1].rectangle.reading_order, "vision", "次の矩形だけ横書きに戻る");
+dropAutosaveTimer(app);
+"""
+    )
+
+
+def test_manual_reading_order_survives_image_switch_and_block_mode_exit() -> None:
+    _run_node_inline(
+        r"""
+global.fetch = (url) => {
+  if (url === "/api/image/new.png") {
+    return Promise.resolve(
+      fetchResponse({ image_width: 200, image_height: 200, mime_type: "image/png" }),
+    );
+  }
+  if (url === "/api/session/new.png") {
+    return Promise.resolve(fetchResponse(sessionPayload("new.png", [])));
+  }
+  throw new Error(`unexpected fetch: ${url}`);
+};
+
+const app = newApp({
+  currentImage: { name: "old.png", width: 100, height: 100, mime: "image/png" },
+  session: sessionPayload("old.png", []),
+});
+assert.equal(Object.hasOwn(app, "manualReadingOrder"), true);
+app.manualReadingOrder = "vertical";
+
+(async () => {
+  await app.selectImage("new.png");
+  assert.equal(app.manualReadingOrder, "vertical", "画像切替で維持する");
+
+  app.blockMode = true;
+  await app.toggleBlockMode();
+  assert.equal(app.blockMode, false);
+  assert.equal(app.manualReadingOrder, "vertical", "ブロック選択終了でも維持する");
+})().catch((err) => { console.error(err); process.exit(1); });
+"""
+    )
+
+
 # ---------------------------------------------------------------------------
 # 3.4 select / delete
 # ---------------------------------------------------------------------------
