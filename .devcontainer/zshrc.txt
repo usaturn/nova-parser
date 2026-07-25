@@ -79,6 +79,9 @@ function herdrstart(){
         print -u2 "warning: herdr not found; continuing without a multiplexer"
         return 0
     fi
+    if command -v herdr-status-updater >/dev/null 2>&1; then
+        herdr-status-updater --daemon || true
+    fi
     herdr
 }
 
