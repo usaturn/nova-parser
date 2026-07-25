@@ -386,6 +386,7 @@ function regionalOcrApp() {
       const rect = {
         rect_id: generateRectId(),
         draw_order: nextDrawOrder(this.session.regions),
+        reading_order: "vision",
         ...natural,
       };
       this.session.regions.push({
@@ -490,6 +491,7 @@ function regionalOcrApp() {
       const rect = {
         rect_id: generateRectId(),
         draw_order: nextDrawOrder(this.session.regions),
+        reading_order: this.blockGranularity === "vertical" ? "vertical" : "vision",
         x: block.x,
         y: block.y,
         width: block.width,

@@ -17,6 +17,7 @@ class Rectangle(BaseModel):
     y: int = Field(ge=0)
     width: int = Field(gt=0)
     height: int = Field(gt=0)
+    reading_order: Literal["vision", "vertical"] = "vision"
 
     @property
     def left(self) -> int:

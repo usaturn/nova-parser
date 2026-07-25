@@ -32,13 +32,44 @@ class _FakeResponse:
         text: str = "",
         error_message: str = "",
         blocks: "list[list[tuple[int, int]]] | None" = None,
+        structured_blocks: "list[dict[str, Any]] | None" = None,
     ) -> None:
-        self.full_text_annotation = SimpleNamespace(text=text, pages=_make_pages(blocks or []))
+        self.full_text_annotation = SimpleNamespace(
+            text=text,
+            pages=_make_pages(blocks or [], structured_blocks=structured_blocks),
+        )
         self.error = SimpleNamespace(message=error_message)
 
 
-def _make_pages(blocks: "list[list[tuple[int, int]]]") -> list[SimpleNamespace]:
+def _make_pages(
+    blocks: "list[list[tuple[int, int]]]",
+    *,
+    structured_blocks: "list[dict[str, Any]] | None" = None,
+) -> list[SimpleNamespace]:
     """頂点リスト群から full_text_annotation.pages 相当の構造を組み立てる。"""
+    if structured_blocks is not None:
+        page_blocks = []
+        for block in structured_blocks:
+            # symbols は (text, break_type) か (text, break_type, is_prefix) で指定する
+            symbols = [
+                SimpleNamespace(
+                    text=symbol[0],
+                    property=SimpleNamespace(
+                        detected_break=SimpleNamespace(
+                            type_=symbol[1],
+                            is_prefix=symbol[2] if len(symbol) > 2 else False,
+                        )
+                    ),
+                )
+                for symbol in block["symbols"]
+            ]
+            page_blocks.append(
+                SimpleNamespace(
+                    bounding_box=SimpleNamespace(vertices=[SimpleNamespace(x=x, y=y) for x, y in block["vertices"]]),
+                    paragraphs=[SimpleNamespace(words=[SimpleNamespace(symbols=symbols)])],
+                )
+            )
+        return [SimpleNamespace(blocks=page_blocks)] if page_blocks else []
     if not blocks:
         return []
     page_blocks = [
