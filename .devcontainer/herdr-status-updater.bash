@@ -7,9 +7,10 @@ set -euo pipefail
 
 SOURCE_ID="herdr-status"
 INTERVAL_SEC="${HERDR_STATUS_INTERVAL_SEC:-15}"
-# TTL は interval より十分長くし、daemon が一瞬落ちても表示がすぐ消えないようにする
-GIT_TTL_MS="${HERDR_STATUS_GIT_TTL_MS:-180000}"
-CLOCK_TTL_MS="${HERDR_STATUS_CLOCK_TTL_MS:-180000}"
+# TTL は長めに（daemon が一時停止しても Spaces がすぐ空にならない）
+# 投稿自体は INTERVAL ごとに更新される
+GIT_TTL_MS="${HERDR_STATUS_GIT_TTL_MS:-1800000}"
+CLOCK_TTL_MS="${HERDR_STATUS_CLOCK_TTL_MS:-1800000}"
 # HERDR_STATUS_LOCK_DIR で上書き可（テスト隔離用）。未設定時は従来どおり runtime 既定。
 LOCK_DIR="${HERDR_STATUS_LOCK_DIR:-${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/herdr-status-updater}"
 LOCK_FILE="${LOCK_DIR}/lock"
@@ -53,12 +54,17 @@ if ! flock -n 9; then
 fi
 
 if [ "$DAEMON" -eq 1 ] && [ "$ONCE" -eq 0 ] && [ "${HERDR_STATUS_DRY_RUN:-}" != "1" ]; then
-    # 再 exec でデーモン化（ロックは親が持ったままにしない）
+    # バックグラウンド化（ロックは親が持ったままにしない）
     if [ -z "${HERDR_STATUS_DAEMONIZED:-}" ]; then
         flock -u 9 || true
-        # ログを残して死活を追えるようにする
         mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
-        HERDR_STATUS_DAEMONIZED=1 nohup "$0" "$@" >>"$LOG_FILE" 2>&1 &
+        # setsid で端末セッションから切り離し、SIGHUP で死ににくくする
+        if command -v setsid >/dev/null 2>&1; then
+            HERDR_STATUS_DAEMONIZED=1 setsid -f "$0" "$@" >>"$LOG_FILE" 2>&1
+        else
+            HERDR_STATUS_DAEMONIZED=1 nohup "$0" "$@" >>"$LOG_FILE" 2>&1 &
+            disown 2>/dev/null || true
+        fi
         exit 0
     fi
 fi
@@ -70,7 +76,10 @@ if [ "${HERDR_STATUS_DAEMONIZED:-}" = "1" ]; then
         log_info "daemon child could not acquire lock; exiting"
         exit 0
     fi
-    log_info "daemon started pid=$$ interval=${INTERVAL_SEC}s"
+    log_info "daemon started pid=$$ interval=${INTERVAL_SEC}s git_ttl_ms=${GIT_TTL_MS}"
+    # ループ中はエラーでプロセスを落とさない
+    set +e
+    trap 'log_info "daemon exiting pid=$$ status=$?"' EXIT
 fi
 
 get_snapshot_json() {
@@ -414,8 +423,17 @@ run_cycle() {
     done < <(printf '%s' "$snap" | list_workspace_cwds)
 }
 
+cycle_n=0
 while true; do
-    run_cycle || true
-    [ "$ONCE" -eq 1 ] && exit 0
-    sleep "$INTERVAL_SEC"
+    cycle_n=$((cycle_n + 1))
+    if ! run_cycle; then
+        log_info "run_cycle failed cycle=${cycle_n}"
+    elif [ "$((cycle_n % 20))" -eq 0 ]; then
+        # 約 5 分ごと（15s * 20）に heartbeat
+        log_info "heartbeat cycle=${cycle_n} pid=$$"
+    fi
+    if [ "$ONCE" -eq 1 ]; then
+        exit 0
+    fi
+    sleep "$INTERVAL_SEC" || sleep 15
 done

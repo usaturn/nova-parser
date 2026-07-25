@@ -103,6 +103,18 @@ function precmd_tmux_refresh() {
 }
 precmd_functions+=(precmd_tmux_refresh)
 
+# herdr 内で status updater が死んでいても、プロンプトのたびに起こす（flock で多重起動しない）
+function precmd_herdr_status_updater() {
+    if [ "${HERDR_ENV:-}" != "1" ]; then
+        return 0
+    fi
+    if ! command -v herdr-status-updater >/dev/null 2>&1; then
+        return 0
+    fi
+    herdr-status-updater --daemon >/dev/null 2>&1 || true
+}
+precmd_functions+=(precmd_herdr_status_updater)
+
 function update(){
     claude update
     yarn global add @openai/codex@latest
