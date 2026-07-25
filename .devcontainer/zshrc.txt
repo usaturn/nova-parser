@@ -82,6 +82,24 @@ function herdrstart(){
     herdr
 }
 
+function tmuxstart(){
+    if [ -n "${TMUX:-}" ] || [ "${HERDR_ENV:-}" = "1" ]; then
+        return 0
+    fi
+    local project_dir="/workspaces/$(ls /workspaces/)"
+    export TZ="${TZ:-Asia/Tokyo}"
+    tmux -u new-session -A -s yamada -n yamada -c "${project_dir}" \; \
+        set-environment -g TZ "${TZ}"
+}
+
+# tmux ステータスバーの即時更新は Starship 管轄外のため precmd に残す。
+function precmd_tmux_refresh() {
+    if [ -n "${TMUX:-}" ]; then
+        tmux refresh-client -S 2>/dev/null
+    fi
+}
+precmd_functions+=(precmd_tmux_refresh)
+
 function update(){
     claude update
     yarn global add @openai/codex@latest

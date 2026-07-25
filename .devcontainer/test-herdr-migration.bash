@@ -51,8 +51,17 @@ test_config_and_syntax() {
     zsh -n "$ZSHRC_TEMPLATE"
     assert_contains "$HERDR_CONFIG" '^prefix = "ctrl\+k"$'
     assert_contains "$ZSHRC_TEMPLATE" '^function herdrstart\(\)\{$'
-    ! rg -q '^function tmuxstart\(\)\{|^tmuxstart$' "$ZSHRC_TEMPLATE" \
-        || fail 'tmuxstart remains enabled'
+
+    # 手動 tmuxstart: 関数は必須、末尾の単独呼び出しは禁止
+    assert_contains "$ZSHRC_TEMPLATE" '^function tmuxstart\(\)\{$'
+    ! rg -q '^tmuxstart$' "$ZSHRC_TEMPLATE" \
+        || fail 'tmuxstart must not be auto-invoked'
+    # ガード B: herdr 内でも no-op
+    assert_contains "$ZSHRC_TEMPLATE" 'HERDR_ENV'
+
+    # tmux status 即時更新フック
+    assert_contains "$ZSHRC_TEMPLATE" '^function precmd_tmux_refresh\(\) \{'
+    assert_contains "$ZSHRC_TEMPLATE" 'precmd_functions\+=\(precmd_tmux_refresh\)'
 }
 
 test_launch_and_guards() {
