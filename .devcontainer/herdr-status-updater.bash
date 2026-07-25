@@ -7,11 +7,13 @@ set -euo pipefail
 
 SOURCE_ID="herdr-status"
 INTERVAL_SEC="${HERDR_STATUS_INTERVAL_SEC:-15}"
-GIT_TTL_MS=45000
-CLOCK_TTL_MS=90000
+# TTL は interval より十分長くし、daemon が一瞬落ちても表示がすぐ消えないようにする
+GIT_TTL_MS="${HERDR_STATUS_GIT_TTL_MS:-180000}"
+CLOCK_TTL_MS="${HERDR_STATUS_CLOCK_TTL_MS:-180000}"
 # HERDR_STATUS_LOCK_DIR で上書き可（テスト隔離用）。未設定時は従来どおり runtime 既定。
 LOCK_DIR="${HERDR_STATUS_LOCK_DIR:-${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/herdr-status-updater}"
 LOCK_FILE="${LOCK_DIR}/lock"
+LOG_FILE="${HERDR_STATUS_LOG:-${HOME}/.config/herdr/herdr-status-updater.log}"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GIT_CORE="${HERDR_GIT_STATUS:-$script_dir/herdr-git-status.bash}"
 HERDR_BIN="${HERDR_BIN:-herdr}"
@@ -31,11 +33,22 @@ log_debug() {
     fi
 }
 
+log_info() {
+    local msg="$*"
+    # daemon 時はファイルへ（親 nohup で stdout を捨てるため）
+    if [ -n "${LOG_FILE:-}" ]; then
+        mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
+        printf '%s %s\n' "$(date -Iseconds 2>/dev/null || date)" "$msg" >>"$LOG_FILE" 2>/dev/null || true
+    fi
+    log_debug "$msg"
+}
+
 export TZ="${TZ:-Asia/Tokyo}"
 
 mkdir -p "$LOCK_DIR"
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
+    # 既に updater が動いている
     exit 0
 fi
 
@@ -43,7 +56,9 @@ if [ "$DAEMON" -eq 1 ] && [ "$ONCE" -eq 0 ] && [ "${HERDR_STATUS_DRY_RUN:-}" != 
     # 再 exec でデーモン化（ロックは親が持ったままにしない）
     if [ -z "${HERDR_STATUS_DAEMONIZED:-}" ]; then
         flock -u 9 || true
-        HERDR_STATUS_DAEMONIZED=1 nohup "$0" "$@" >/dev/null 2>&1 &
+        # ログを残して死活を追えるようにする
+        mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
+        HERDR_STATUS_DAEMONIZED=1 nohup "$0" "$@" >>"$LOG_FILE" 2>&1 &
         exit 0
     fi
 fi
@@ -51,7 +66,11 @@ fi
 # daemon 子は再度 flock
 if [ "${HERDR_STATUS_DAEMONIZED:-}" = "1" ]; then
     exec 9>"$LOCK_FILE"
-    flock -n 9 || exit 0
+    if ! flock -n 9; then
+        log_info "daemon child could not acquire lock; exiting"
+        exit 0
+    fi
+    log_info "daemon started pid=$$ interval=${INTERVAL_SEC}s"
 fi
 
 get_snapshot_json() {
@@ -148,11 +167,11 @@ emit_or_report() {
     fi
 }
 
-# 状態行用の短い記号（色は herdr.toml の token style 側）
-readonly GIT_STATE_GLYPH="●"
+# 状態行は短い ASCII 語（色は herdr.toml）。Unicode 記号は端末/UI で消えて見えることがある。
+# ブランチ名は別トークン git_name（別行）。
 
 # git 関連トークンを batch 投稿
-# tokens は "name=value" の配列、clears はトークン名の配列
+# tokens は "name=value" の配列、clears は clear:name
 report_git_tokens() {
     local ws_id="$1"
     shift
@@ -219,25 +238,25 @@ report_git_absent() {
         clear:git_clean clear:git_staged clear:git_dirty clear:git_name
 }
 
-# git あり: 状態は短い記号、ブランチ名は別トークン git_name
+# git あり: 状態行は clean|staged|dirty、ブランチは git_name
 report_git_present() {
-    local ws_id="$1" state_token="$2" branch_label="$3"
+    local ws_id="$1" state_token="$2" branch_label="$3" state_text="$4"
     case "$state_token" in
         git_clean)
             report_git_tokens "$ws_id" \
-                "git_clean=${GIT_STATE_GLYPH}" \
+                "git_clean=${state_text}" \
                 "git_name=${branch_label}" \
                 clear:git_staged clear:git_dirty
             ;;
         git_staged)
             report_git_tokens "$ws_id" \
-                "git_staged=${GIT_STATE_GLYPH}" \
+                "git_staged=${state_text}" \
                 "git_name=${branch_label}" \
                 clear:git_clean clear:git_dirty
             ;;
         git_dirty)
             report_git_tokens "$ws_id" \
-                "git_dirty=${GIT_STATE_GLYPH}" \
+                "git_dirty=${state_text}" \
                 "git_name=${branch_label}" \
                 clear:git_clean clear:git_staged
             ;;
@@ -288,13 +307,13 @@ emit_for_workspace() {
 
     case "$state" in
         clean)
-            report_git_present "$ws_id" git_clean "$label"
+            report_git_present "$ws_id" git_clean "$label" "clean"
             ;;
         staged)
-            report_git_present "$ws_id" git_staged "$label"
+            report_git_present "$ws_id" git_staged "$label" "staged"
             ;;
         dirty)
-            report_git_present "$ws_id" git_dirty "$label"
+            report_git_present "$ws_id" git_dirty "$label" "dirty"
             ;;
         *)
             log_debug "unknown git state: $state"
