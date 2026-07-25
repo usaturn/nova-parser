@@ -112,7 +112,7 @@ def test_generate_handoff_extracts_superpowers_state_and_redacts_secrets(tmp_pat
     handoff = generate_handoff(
         session_path=session,
         project_dir=project,
-        out_dir=project / "docs_draft" / "claude_handoffs",
+        out_dir=project / "tmp" / "docs_draft" / "claude_handoffs",
     )
 
     assert handoff.markdown_path.exists()
@@ -222,7 +222,7 @@ def test_cli_writes_latest_handoff_to_default_repo_docs_dir(tmp_path: Path, monk
     exit_code = main(["--latest", "--claude-home", str(claude_home)])
 
     assert exit_code == 0
-    handoffs = sorted((project / "docs_draft" / "claude_handoffs").glob("*.handoff.md"))
+    handoffs = sorted((project / "tmp" / "docs_draft" / "claude_handoffs").glob("*.handoff.md"))
     assert len(handoffs) == 1
     assert "Phase C 完了報告" in handoffs[0].read_text(encoding="utf-8")
 
