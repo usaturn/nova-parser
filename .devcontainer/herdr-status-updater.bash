@@ -231,6 +231,68 @@ report_git_tokens() {
     done
 }
 
+# サイドバー幅（既定 max 36 前後）に収まるようブランチ表示を短縮する。
+# HERDR_STATUS_BRANCH_MAX_LEN で上書き可（既定 22）。
+BRANCH_MAX_LEN="${HERDR_STATUS_BRANCH_MAX_LEN:-22}"
+
+# label は「ブランチ名 + 任意の push 指標（ ↑ /  !）」
+# 戻り値: 短縮済み表示文字列（指標は末尾に保持）
+shorten_branch_label() {
+    local label="$1"
+    local max_len="${2:-$BRANCH_MAX_LEN}"
+    local name indicator="" short leaf
+
+    if [ -z "$label" ]; then
+        printf '\n'
+        return 0
+    fi
+    # max_len が異常ならそのまま
+    if ! [[ "$max_len" =~ ^[0-9]+$ ]] || [ "$max_len" -lt 4 ]; then
+        printf '%s\n' "$label"
+        return 0
+    fi
+
+    case "$label" in
+        *" ↑")
+            name="${label% ↑}"
+            indicator=" ↑"
+            ;;
+        *" !")
+            name="${label% !}"
+            indicator=" !"
+            ;;
+        *)
+            name="$label"
+            ;;
+    esac
+
+    # 指標分を除いた上限
+    local budget=$max_len
+    if [ -n "$indicator" ]; then
+        budget=$((max_len - ${#indicator}))
+        if [ "$budget" -lt 3 ]; then
+            budget=3
+        fi
+    fi
+
+    if [ "${#name}" -le "$budget" ]; then
+        printf '%s%s\n' "$name" "$indicator"
+        return 0
+    fi
+
+    # path 風なら末尾セグメントを優先（短いときだけ）
+    leaf="${name##*/}"
+    if [ "$leaf" != "$name" ] && [ "${#leaf}" -le "$budget" ] && [ -n "$leaf" ]; then
+        printf '%s%s\n' "$leaf" "$indicator"
+        return 0
+    fi
+
+    # 末尾優先の省略（識別しやすい suffix を残す）
+    # ellipsis 1 文字 + 末尾 (budget-1)
+    short="…${name: -$((budget - 1))}"
+    printf '%s%s\n' "$short" "$indicator"
+}
+
 # 非 git: 状態3種 + ブランチ名をすべて clear
 report_git_absent() {
     local ws_id="$1"
@@ -238,26 +300,29 @@ report_git_absent() {
         clear:git_clean clear:git_staged clear:git_dirty clear:git_name
 }
 
-# git あり: 状態行は clean|staged|dirty、ブランチは git_name
+# git あり: 状態行は clean|staged|dirty、ブランチは git_name（短縮済み）
 report_git_present() {
     local ws_id="$1" state_token="$2" branch_label="$3" state_text="$4"
+    local display_name
+    display_name="$(shorten_branch_label "$branch_label")"
+
     case "$state_token" in
         git_clean)
             report_git_tokens "$ws_id" \
                 "git_clean=${state_text}" \
-                "git_name=${branch_label}" \
+                "git_name=${display_name}" \
                 clear:git_staged clear:git_dirty
             ;;
         git_staged)
             report_git_tokens "$ws_id" \
                 "git_staged=${state_text}" \
-                "git_name=${branch_label}" \
+                "git_name=${display_name}" \
                 clear:git_clean clear:git_dirty
             ;;
         git_dirty)
             report_git_tokens "$ws_id" \
                 "git_dirty=${state_text}" \
-                "git_name=${branch_label}" \
+                "git_name=${display_name}" \
                 clear:git_clean clear:git_staged
             ;;
         *)

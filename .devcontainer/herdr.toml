@@ -1,6 +1,11 @@
 [keys]
 prefix = "ctrl+k"
 
+# Spaces の git_name 行が切れにくいよう、やや広めにする（必要なら調整）
+[ui]
+sidebar_width = 32
+sidebar_max_width = 48
+
 [ui.sidebar.spaces]
 rows = [
   ["state_icon", "workspace"],
