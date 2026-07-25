@@ -274,6 +274,42 @@ def test_ocr_rectangle_groups_blocks_of_differing_width_in_one_column():
     assert result == "上段\n下段"
 
 
+def test_vertical_text_keeps_one_column_when_blocks_drift_sideways():
+    """傾きスキャンで下へ行くほど横へずれる block 群を 1 列として上→下で読む。
+
+    隣接 block は十分に重なっているのに、列 X 範囲を積集合で保持すると
+    共通範囲が単調に縮み、上側の block が別列へ切り離されて読み順が反転する。
+    """
+    from google.cloud import vision
+
+    from nova_parser.regional_ocr.ocr_client import _vertical_text
+
+    def block(left: int, right: int, top: int, text: str) -> vision.Block:
+        return vision.Block(
+            bounding_box=vision.BoundingPoly(
+                vertices=[
+                    vision.Vertex(x=left, y=top),
+                    vision.Vertex(x=right, y=top),
+                    vision.Vertex(x=right, y=top + 90),
+                    vision.Vertex(x=left, y=top + 90),
+                ]
+            ),
+            paragraphs=[
+                vision.Paragraph(words=[vision.Word(symbols=[vision.Symbol(text=c) for c in text])]),
+            ],
+        )
+
+    # 幅 20px、下へ行くごとに 5px ずつ右へずれる 5 block（隣接同士は幅の 75% が重なる）
+    annotation = vision.TextAnnotation(
+        pages=[
+            vision.Page(blocks=[block(60 + 5 * i, 80 + 5 * i, 100 * i, str(i + 1)) for i in range(5)]),
+        ],
+        text="Vision既定順",
+    )
+
+    assert _vertical_text(annotation) == "1\n2\n3\n4\n5"
+
+
 def test_ocr_rectangle_restores_hyphen_break_as_line_wrap():
     """HYPHEN は行折り返しなので、ハイフンの後に改行を入れる。"""
     from google.cloud import vision

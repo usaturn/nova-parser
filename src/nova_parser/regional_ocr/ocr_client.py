@@ -10,7 +10,11 @@ from google.cloud import vision
 
 from nova_parser.regional_ocr.crop import crop_rectangle, to_png_bytes
 from nova_parser.regional_ocr.errors import AdcNotConfiguredError, OcrBackendError
-from nova_parser.regional_ocr.layout import COLUMN_X_OVERLAP_RATIO
+from nova_parser.regional_ocr.layout import (
+    COLUMN_X_OVERLAP_RATIO,
+    SPAN_COVER_RATIO,
+    WIDE_RECT_BAND_WIDTH_RATIO,
+)
 from nova_parser.regional_ocr.models import BlockRect, Rectangle
 
 if TYPE_CHECKING:
@@ -43,11 +47,24 @@ def _block_right(block: object) -> int:
     return _block_x_range(block)[1]
 
 
-def _block_top(block: object) -> int:
-    """OCR block の bounding box 上端 Y 座標を返す。頂点なしは 0。"""
+def _block_y_range(block: object) -> tuple[int, int]:
+    """OCR block の bounding box の Y 範囲 (上端, 下端) を返す。頂点なしは (0, 0)。"""
     bounding_box = getattr(block, "bounding_box", None)
     ys = [getattr(vertex, "y", 0) for vertex in getattr(bounding_box, "vertices", [])]
-    return min(ys, default=0)
+    if not ys:
+        return (0, 0)
+    return (min(ys), max(ys))
+
+
+def _block_top(block: object) -> int:
+    """OCR block の bounding box 上端 Y 座標を返す。頂点なしは 0。"""
+    return _block_y_range(block)[0]
+
+
+def _block_center_y(block: object) -> float:
+    """OCR block の bounding box の Y 方向中心座標を返す。"""
+    top, bottom = _block_y_range(block)
+    return (top + bottom) / 2
 
 
 def _same_column(a: tuple[int, int], b: tuple[int, int]) -> bool:
@@ -94,9 +111,11 @@ def _vertical_columns(blocks: list[object]) -> list[list[object]]:
     右端 X の降順に走査し、直前の列と X 範囲が重なる block を同じ列へ束ねる。
     画像幅に依存しない重なり率で判定するため、クロップの大きさに左右されない。
 
-    列の X 範囲は所属 block の積集合で保持する。和集合で広げると、左右の列に
-    またがる幅広 block（見出しなど）が列の範囲を隣の列まで伸ばしてしまい、
-    本来別々の列が 1 列へ橋渡しされて読み順が列間で交互になる。
+    列の代表 X 範囲は直近に取り込んだ block のものへ更新する。所属 block の
+    積集合で保持すると、スキャンの傾きで下へ行くほど横へずれる列では共通範囲が
+    単調に縮み、隣接 block が十分に重なっていても上側の block が別列へ
+    切り離されて読み順が反転する。左右の列にまたがる幅広 block による橋渡しは
+    _vertical_reading_order() で当該 block を列判定から除外して防ぐ。
     """
     columns: list[list[object]] = []
     spans: list[tuple[int, int]] = []
@@ -104,11 +123,76 @@ def _vertical_columns(blocks: list[object]) -> list[list[object]]:
         span = _block_x_range(block)
         if columns and _same_column(spans[-1], span):
             columns[-1].append(block)
-            spans[-1] = (max(spans[-1][0], span[0]), min(spans[-1][1], span[1]))
+            spans[-1] = span
             continue
         columns.append([block])
         spans.append(span)
     return columns
+
+
+def _column_x_range(column: list[object]) -> tuple[int, int]:
+    """列に属する block 全体を覆う X 範囲を返す。"""
+    ranges = [_block_x_range(block) for block in column]
+    return (min(left for left, _ in ranges), max(right for _, right in ranges))
+
+
+def _spanned_column_count(span: tuple[int, int], columns: list[list[object]]) -> int:
+    """span が横断している列数。列幅の SPAN_COVER_RATIO 以上を覆う列を数える。"""
+    count = 0
+    for column in columns:
+        left, right = _column_x_range(column)
+        width = right - left
+        if width > 0 and (min(span[1], right) - max(span[0], left)) / width >= SPAN_COVER_RATIO:
+            count += 1
+    return count
+
+
+def _ordered_within_columns(blocks: list[object]) -> list[object]:
+    """block を列は右→左、列内は上→下の順へ並べる。"""
+    return [block for column in _vertical_columns(blocks) for block in sorted(column, key=_block_top)]
+
+
+def _vertical_reading_order(blocks: list[object]) -> list[object]:
+    """block を縦書きの読み順（列は右→左、列内は上→下）へ並べる。
+
+    複数列を横断する幅広 block（帯見出しなど）はいずれの列へも吸収せず、
+    Y 方向の中心位置で列群の前後へ挟み込む。列判定を横断 block 抜きで行うことで、
+    幅広 block が左右の列の X 範囲をつないで 1 列へ橋渡しするのを防ぐ。
+    """
+    if len(blocks) <= 1:
+        return list(blocks)
+
+    ranges = {id(block): _block_x_range(block) for block in blocks}
+    content_width = max(right for _, right in ranges.values()) - min(left for left, _ in ranges.values())
+    wide_min = content_width * WIDE_RECT_BAND_WIDTH_RATIO
+
+    def is_wide(block: object) -> bool:
+        left, right = ranges[id(block)]
+        return right - left >= wide_min
+
+    narrow_columns = _vertical_columns([block for block in blocks if not is_wide(block)])
+    spanning = [
+        block for block in blocks if is_wide(block) and _spanned_column_count(ranges[id(block)], narrow_columns) >= 2
+    ]
+    if not spanning:
+        # 横断 block がなければ橋渡しは起きないので、全 block をまとめて列へ束ねる
+        return _ordered_within_columns(blocks)
+
+    spanning.sort(key=_block_center_y)
+    spanning_ids = {id(block) for block in spanning}
+    buckets: list[list[object]] = [[] for _ in range(len(spanning) + 1)]
+    for block in blocks:
+        if id(block) in spanning_ids:
+            continue
+        center = _block_center_y(block)
+        buckets[sum(1 for s in spanning if _block_center_y(s) <= center)].append(block)
+
+    ordered: list[object] = []
+    for index, block in enumerate(spanning):
+        ordered.extend(_ordered_within_columns(buckets[index]))
+        ordered.append(block)
+    ordered.extend(_ordered_within_columns(buckets[-1]))
+    return ordered
 
 
 def _vertical_text(annotation: object) -> str:
@@ -116,7 +200,7 @@ def _vertical_text(annotation: object) -> str:
     blocks = [block for page in getattr(annotation, "pages", []) for block in getattr(page, "blocks", [])]
     if not blocks:
         return getattr(annotation, "text", "") or ""
-    ordered = [block for column in _vertical_columns(blocks) for block in sorted(column, key=_block_top)]
+    ordered = _vertical_reading_order(blocks)
     return "\n".join(text for block in ordered if (text := _block_text(block))).rstrip()
 
 
