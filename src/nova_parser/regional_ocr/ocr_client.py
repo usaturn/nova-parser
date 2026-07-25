@@ -93,6 +93,10 @@ def _vertical_columns(blocks: list[object]) -> list[list[object]]:
 
     右端 X の降順に走査し、直前の列と X 範囲が重なる block を同じ列へ束ねる。
     画像幅に依存しない重なり率で判定するため、クロップの大きさに左右されない。
+
+    列の X 範囲は所属 block の積集合で保持する。和集合で広げると、左右の列に
+    またがる幅広 block（見出しなど）が列の範囲を隣の列まで伸ばしてしまい、
+    本来別々の列が 1 列へ橋渡しされて読み順が列間で交互になる。
     """
     columns: list[list[object]] = []
     spans: list[tuple[int, int]] = []
@@ -100,7 +104,7 @@ def _vertical_columns(blocks: list[object]) -> list[list[object]]:
         span = _block_x_range(block)
         if columns and _same_column(spans[-1], span):
             columns[-1].append(block)
-            spans[-1] = (min(spans[-1][0], span[0]), max(spans[-1][1], span[1]))
+            spans[-1] = (max(spans[-1][0], span[0]), min(spans[-1][1], span[1]))
             continue
         columns.append([block])
         spans.append(span)

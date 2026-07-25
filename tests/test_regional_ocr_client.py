@@ -211,6 +211,69 @@ def test_ocr_rectangle_orders_columns_right_to_left_and_rows_top_to_bottom():
     assert result == "見出A\n本文A\n見出B\n本文B"
 
 
+@pytest.mark.parametrize("heading_right", [95, 105])
+def test_ocr_rectangle_keeps_columns_separate_across_a_spanning_block(heading_right: int):
+    """左右 2 列にまたがる幅広 block があっても、両列を 1 列へ併合しない。
+
+    heading_right は幅広 block が右端 X 降順の先頭に来る場合（105）と
+    後続に来る場合（95）の両方を再現する。
+    """
+    from nova_parser.regional_ocr.ocr_client import ocr_rectangle
+
+    def block(left: int, right: int, top: int, text: str) -> dict[str, object]:
+        return {
+            "vertices": [(left, top), (right, top), (right, top + 80), (left, top + 80)],
+            "symbols": [(character, 0) for character in text],
+        }
+
+    response = _FakeResponse(
+        text="Vision既定順",
+        structured_blocks=[
+            block(80, 100, 100, "右上"),
+            block(80, 100, 200, "右下"),
+            block(20, heading_right, 0, "見出"),
+            block(20, 50, 100, "左上"),
+            block(20, 50, 200, "左下"),
+        ],
+    )
+
+    result = ocr_rectangle(
+        FakeVisionClient(response),
+        _make_image(),
+        _make_rect(reading_order="vertical"),
+    )
+
+    assert result == "見出\n右上\n右下\n左上\n左下"
+
+
+def test_ocr_rectangle_groups_blocks_of_differing_width_in_one_column():
+    """橋渡し防止を入れても、幅の異なる block が重なる通常の列は 1 列にまとまる。"""
+    from nova_parser.regional_ocr.ocr_client import ocr_rectangle
+
+    response = _FakeResponse(
+        text="Vision既定順",
+        structured_blocks=[
+            # 下段の方が幅広かつ右端も大きい（右端 X 降順では下段が先頭に来る）
+            {
+                "vertices": [(1000, 100), (1060, 100), (1060, 180), (1000, 180)],
+                "symbols": [(character, 0) for character in "下段"],
+            },
+            {
+                "vertices": [(1030, 0), (1050, 0), (1050, 80), (1030, 80)],
+                "symbols": [(character, 0) for character in "上段"],
+            },
+        ],
+    )
+
+    result = ocr_rectangle(
+        FakeVisionClient(response),
+        _make_image(),
+        _make_rect(reading_order="vertical"),
+    )
+
+    assert result == "上段\n下段"
+
+
 def test_ocr_rectangle_restores_hyphen_break_as_line_wrap():
     """HYPHEN は行折り返しなので、ハイフンの後に改行を入れる。"""
     from google.cloud import vision
