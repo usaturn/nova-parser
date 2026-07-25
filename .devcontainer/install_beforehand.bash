@@ -32,6 +32,13 @@ mkdir -p "${HOME}/.config"
 cp .devcontainer/starship.toml "${HOME}/.config/starship.toml"
 
 mkdir -p "${HOME}/bin"
+cp .devcontainer/herdr-git-status.bash "${HOME}/bin/herdr-git-status.bash"
+chmod +x "${HOME}/bin/herdr-git-status.bash"
+cp .devcontainer/herdr-status-updater.bash "${HOME}/bin/herdr-status-updater.bash"
+chmod +x "${HOME}/bin/herdr-status-updater.bash"
+# herdrstart は PATH 上の herdr-status-updater（拡張子なし）を呼ぶ
+cp .devcontainer/herdr-status-updater.bash "${HOME}/bin/herdr-status-updater"
+chmod +x "${HOME}/bin/herdr-status-updater"
 cp .devcontainer/tmux-git-status.bash "${HOME}/bin/tmux-git-status.bash"
 chmod +x "${HOME}/bin/tmux-git-status.bash"
 cp .devcontainer/tmux-url-copy.zsh "${HOME}/bin/tmux-url-copy.zsh"

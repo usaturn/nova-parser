@@ -24,15 +24,35 @@ assert_before() {
     [ "$earlier_line" -lt "$later_line" ] \
         || fail "$earlier_pattern must appear before $later_pattern in $file"
 }
-run_zshrc() {
+# zshrc テンプレートを隔離環境で実行する共通部。$@ で追加の VAR=value を渡せる。
+run_zshrc_code() {
     local test_home="$1"
-    shift
+    local zsh_code="$2"
+    shift 2
     env -u TMUX -u HERDR_ENV \
         HOME="$test_home" \
         PATH="$test_home/bin:/usr/bin:/bin" \
         HERDR_TEST_LOG="$test_home/herdr.log" \
         ZSHRC_TEMPLATE="$ZSHRC_TEMPLATE" \
-        "$@" /usr/bin/zsh -f -c 'source "$ZSHRC_TEMPLATE"' </dev/null >/dev/null
+        "$@" /usr/bin/zsh -f -c "$zsh_code" </dev/null >/dev/null
+}
+run_zshrc() {
+    local test_home="$1"
+    shift
+    run_zshrc_code "$test_home" 'source "$ZSHRC_TEMPLATE"' "$@"
+}
+# precmd フックを明示的に発火させる。非対話 zsh では自動発火しないため。
+# 関数名を直接呼ばず $precmd_functions を走査することで、登録漏れも同時に検出する。
+# 各フックの失敗は rc に畳み込む（配列末尾以外での失敗を取りこぼさないため）。
+# より忠実な検証が要る場合は
+#   printf 'source "$ZSHRC_TEMPLATE"\nexit\n' | timeout 20 script -qec '/usr/bin/zsh -fi' /dev/null
+# で実プロンプトを再現できる。
+run_zshrc_precmd() {
+    local test_home="$1"
+    shift
+    run_zshrc_code "$test_home" \
+        'source "$ZSHRC_TEMPLATE"; rc=0; for f in $precmd_functions; do "$f" || rc=$?; done; exit $rc' \
+        "$@"
 }
 run_zshrc_tty() {
     local test_home="$1"
@@ -46,11 +66,29 @@ run_zshrc_tty() {
         ZSHRC_TEMPLATE="$ZSHRC_TEMPLATE" \
         "$@" script -qec "$zsh_command" /dev/null
 }
+# herdr / herdr-status-updater / starship のスタブと空ログを用意する。
+make_stub_home() {
+    local dir="$1"
+    mkdir -p "$dir/bin"
+    printf '%s\n' '#!/bin/sh' 'exit 0' > "$dir/bin/starship"
+    printf '%s\n' '#!/bin/sh' \
+        'printf "called TZ=%s\\n" "${TZ:-}" >> "$HERDR_TEST_LOG"' \
+        > "$dir/bin/herdr"
+    printf '%s\n' '#!/bin/sh' \
+        'printf "updater %s\\n" "$*" >> "$HERDR_TEST_LOG.upd"' \
+        > "$dir/bin/herdr-status-updater"
+    chmod +x "$dir/bin/starship" "$dir/bin/herdr" "$dir/bin/herdr-status-updater"
+    # set -e 下で `wc -l < 不在ファイル` が無言終了しないよう先に空で作る
+    : > "$dir/herdr.log"
+    : > "$dir/herdr.log.upd"
+}
 
 test_config_and_syntax() {
     zsh -n "$ZSHRC_TEMPLATE"
     assert_contains "$HERDR_CONFIG" '^prefix = "ctrl\+k"$'
+    assert_contains "$HERDR_CONFIG" '\$clock'
     assert_contains "$ZSHRC_TEMPLATE" '^function herdrstart\(\)\{$'
+    assert_contains "$ZSHRC_TEMPLATE" 'herdr-status-updater'
 
     # 手動 tmuxstart: 関数は必須、末尾の単独呼び出しは禁止
     assert_contains "$ZSHRC_TEMPLATE" '^function tmuxstart\(\)\{$'
@@ -62,33 +100,80 @@ test_config_and_syntax() {
     # tmux status 即時更新フック
     assert_contains "$ZSHRC_TEMPLATE" '^function precmd_tmux_refresh\(\) \{'
     assert_contains "$ZSHRC_TEMPLATE" 'precmd_functions\+=\(precmd_tmux_refresh\)'
+
+    # herdr 内で status updater が落ちたときの唯一の復旧フック
+    assert_contains "$ZSHRC_TEMPLATE" '^function precmd_herdr_status_updater\(\) \{'
+    assert_contains "$ZSHRC_TEMPLATE" 'precmd_functions\+=\(precmd_herdr_status_updater\)'
 }
 
+# ここで検証するのは herdrstart 経路のみ。precmd 経路（herdr 内で updater を起こす）は
+# test_precmd_status_updater が担当する（このハーネスでは precmd は発火しない）。
 test_launch_and_guards() {
     local test_home="${TEST_ROOT}/home"
-    mkdir -p "$test_home/bin"
-    printf '%s\n' '#!/bin/sh' 'exit 0' > "$test_home/bin/starship"
-    printf '%s\n' '#!/bin/sh' \
-        'printf "called TZ=%s\\n" "${TZ:-}" >> "$HERDR_TEST_LOG"' \
-        > "$test_home/bin/herdr"
-    chmod +x "$test_home/bin/starship" "$test_home/bin/herdr"
+    make_stub_home "$test_home"
 
     run_zshrc_tty "$test_home"
     [ "$(wc -l < "$test_home/herdr.log")" -eq 1 ] || fail 'TTY herdr call count'
     assert_contains "$test_home/herdr.log" '^called TZ=Asia/Tokyo$'
+    assert_contains "$test_home/herdr.log.upd" '^updater --daemon$'
+    [ "$(wc -l < "$test_home/herdr.log.upd")" -eq 1 ] || fail 'TTY herdrstart updater call count'
 
     : > "$test_home/herdr.log"
+    : > "$test_home/herdr.log.upd"
     run_zshrc "$test_home"
     [ ! -s "$test_home/herdr.log" ] || fail 'non-TTY guard'
+    [ ! -s "$test_home/herdr.log.upd" ] || fail 'non-TTY herdrstart updater guard'
 
+    : > "$test_home/herdr.log"
+    : > "$test_home/herdr.log.upd"
     run_zshrc_tty "$test_home" HERDR_ENV=1
     [ ! -s "$test_home/herdr.log" ] || fail 'HERDR_ENV guard'
+    # herdrstart 経路限定。herdr 内での起動は precmd 側の責務。
+    [ ! -s "$test_home/herdr.log.upd" ] || fail 'HERDR_ENV herdrstart updater guard'
+
+    : > "$test_home/herdr.log"
+    : > "$test_home/herdr.log.upd"
     run_zshrc_tty "$test_home" TMUX=/tmp/tmux-test
     [ ! -s "$test_home/herdr.log" ] || fail 'TMUX guard'
+    [ ! -s "$test_home/herdr.log.upd" ] || fail 'TMUX herdrstart updater guard'
 
     mv "$test_home/bin/herdr" "$test_home/bin/herdr.disabled"
+    : > "$test_home/herdr.log.upd"
     run_zshrc_tty "$test_home"
     assert_contains "$test_home/stderr.log" 'herdr not found'
+    [ ! -s "$test_home/herdr.log.upd" ] || fail 'herdrstart updater skipped when herdr missing'
+}
+
+# herdr 内で status updater が死んだときの復旧経路（precmd）を検証する。
+# herdrstart 経路は test_launch_and_guards が担当。
+test_precmd_status_updater() {
+    local test_home="${TEST_ROOT}/home-precmd"
+    make_stub_home "$test_home"
+
+    # (a) herdr 内: precmd が updater をちょうど 1 回起こす。
+    #     非 TTY なので herdrstart は早期 return し、ログは precmd 由来のみ。
+    run_zshrc_precmd "$test_home" HERDR_ENV=1 \
+        || fail 'precmd invocation failed (HERDR_ENV=1)'
+    [ "$(wc -l < "$test_home/herdr.log.upd")" -eq 1 ] \
+        || fail 'precmd updater must run exactly once inside herdr'
+    assert_contains "$test_home/herdr.log.upd" '^updater --daemon$'
+    [ ! -s "$test_home/herdr.log" ] || fail 'precmd must not launch herdr'
+
+    # (b) herdr 外: precmd は完全に no-op。
+    : > "$test_home/herdr.log"
+    : > "$test_home/herdr.log.upd"
+    run_zshrc_precmd "$test_home" || fail 'precmd invocation failed (outside herdr)'
+    [ ! -s "$test_home/herdr.log.upd" ] \
+        || fail 'precmd updater must stay quiet outside herdr'
+    [ ! -s "$test_home/herdr.log" ] || fail 'precmd must not launch herdr outside herdr'
+
+    # (c) updater 不在でも precmd 自体は非 0 を返さない（プロンプト毎のエラー表示を防ぐ）。
+    #     破壊的操作なのでこのテスト関数の最後に置く。
+    mv "$test_home/bin/herdr-status-updater" "$test_home/bin/herdr-status-updater.disabled"
+    : > "$test_home/herdr.log.upd"
+    run_zshrc_precmd "$test_home" HERDR_ENV=1 \
+        || fail 'precmd must tolerate missing updater'
+    [ ! -s "$test_home/herdr.log.upd" ] || fail 'missing updater must not log'
 }
 
 test_installer_wiring() {
@@ -112,6 +197,8 @@ test_installer_wiring() {
     printf '%s\n' "$apt_install" | rg -q -- '(^|[[:space:]])tmux([[:space:]]|$)' \
         || fail 'apt install command does not retain tmux'
     assert_contains "$installer" 'cp \.devcontainer/tmux\.conf'
+    assert_contains "$installer" 'herdr-git-status\.bash'
+    assert_contains "$installer" 'herdr-status-updater\.bash'
     assert_contains "$installer" 'tmux-git-status\.bash'
     assert_contains "$installer" 'tmux-url-copy\.zsh'
 }
@@ -119,4 +206,5 @@ test_installer_wiring() {
 test_config_and_syntax
 test_installer_wiring
 test_launch_and_guards
+test_precmd_status_updater
 printf 'PASS: herdr Dev Container migration\n'
