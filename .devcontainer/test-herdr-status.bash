@@ -201,29 +201,31 @@ test_updater_dry_run_dirty() {
 
 test_shorten_branch_label() {
     [ -x "$UPDATER" ] || fail "updater missing"
-    # shellcheck を避け、updater 内関数を source せず CLI 経由で検証する
-    # 長いブランチ: path 末尾 or …suffix で max 22 前後に収まること
     local repo="${TEST_ROOT}/upd-long-branch"
     make_repo "$repo"
-    git -C "$repo" checkout -q -b "feat/herdr-status-datetime-git"
     local snap="${TEST_ROOT}/snapshot-long.json"
+
+    # 既定上限(40)では通常の feat/... は省略しない
+    git -C "$repo" checkout -q -b "feat/herdr-status-datetime-git"
     write_focused_snap "$snap" "w6" "$repo"
+    out="$(run_updater_dry "$snap")"
+    printf '%s\n' "$out" | rg -q $'w6\tgit_name\tfeat/herdr-status-datetime-git' \
+        || fail "default max should keep full branch: $out"
+
+    # 強制的に短い上限では …suffix または leaf
     out="$(
-        HERDR_STATUS_BRANCH_MAX_LEN=22 \
+        HERDR_STATUS_BRANCH_MAX_LEN=18 \
         run_updater_dry "$snap"
     )"
-    # leaf が 26 文字超なので … + 末尾 21 文字系になる（または max 内の leaf）
     name_line="$(printf '%s\n' "$out" | rg $'w6\tgit_name\t' | head -1)"
     [ -n "$name_line" ] || fail "long branch missing git_name: $out"
     value="${name_line#*$'\tgit_name\t'}"
-    # 指標なしの表示長
-    [ "${#value}" -le 22 ] || fail "git_name too long (${#value}): '$value'"
-    # 末尾の識別子は残す
-    printf '%s\n' "$value" | rg -q 'datetime-git|herdr-status-datetime-git' \
+    [ "${#value}" -le 18 ] || fail "git_name too long under max 18 (${#value}): '$value'"
+    printf '%s\n' "$value" | rg -q 'datetime-git|status-datetime' \
         || fail "git_name lost distinctive suffix: '$value'"
+
     # 短いブランチはそのまま
     git -C "$repo" checkout -q -b "main-short"
-    # main-short は clean? dirty file may exist - ok
     write_focused_snap "$snap" "w6" "$repo"
     out="$(run_updater_dry "$snap")"
     printf '%s\n' "$out" | rg -q $'w6\tgit_name\tmain-short' \

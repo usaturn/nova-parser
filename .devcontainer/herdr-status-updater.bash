@@ -240,9 +240,10 @@ report_git_tokens() {
     done
 }
 
-# サイドバー幅（既定 max 36 前後）に収まるようブランチ表示を短縮する。
-# HERDR_STATUS_BRANCH_MAX_LEN で上書き可（既定 22）。
-BRANCH_MAX_LEN="${HERDR_STATUS_BRANCH_MAX_LEN:-22}"
+# サイドバーに収まるようブランチ表示を必要時だけ短縮する。
+# 既定 40: feat/herdr-status-datetime-git (30) は省略せず出す。
+# HERDR_STATUS_BRANCH_MAX_LEN で上書き可。
+BRANCH_MAX_LEN="${HERDR_STATUS_BRANCH_MAX_LEN:-40}"
 
 # label は「ブランチ名 + 任意の push 指標（ ↑ /  !）」
 # 戻り値: 短縮済み表示文字列（指標は末尾に保持）

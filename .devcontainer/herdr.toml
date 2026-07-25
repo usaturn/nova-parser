@@ -1,10 +1,11 @@
 [keys]
 prefix = "ctrl+k"
 
-# Spaces の git_name 行が切れにくいよう、やや広めにする（必要なら調整）
+# Spaces の git_name（長い branch）が切れにくい幅
 [ui]
-sidebar_width = 32
-sidebar_max_width = 48
+sidebar_width = 40
+sidebar_min_width = 28
+sidebar_max_width = 56
 
 [ui.sidebar.spaces]
 rows = [
