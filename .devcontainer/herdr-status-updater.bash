@@ -240,17 +240,18 @@ report_git_tokens() {
     done
 }
 
-# サイドバーに収まるようブランチ表示を必要時だけ短縮する。
-# 既定 40: feat/herdr-status-datetime-git (30) は省略せず出す。
-# HERDR_STATUS_BRANCH_MAX_LEN で上書き可。
+# サイドバーに収まるようブランチ表示を短縮する。
+# 1) Conventional な type/ 接頭辞を落とす（feat/ fix/ ...）
+# 2) なお長い場合のみ max 長で …suffix
+# HERDR_STATUS_BRANCH_MAX_LEN で上書き可（既定 40）。
 BRANCH_MAX_LEN="${HERDR_STATUS_BRANCH_MAX_LEN:-40}"
 
 # label は「ブランチ名 + 任意の push 指標（ ↑ /  !）」
-# 戻り値: 短縮済み表示文字列（指標は末尾に保持）
+# 戻り値: 表示用文字列（指標は末尾に保持）
 shorten_branch_label() {
     local label="$1"
     local max_len="${2:-$BRANCH_MAX_LEN}"
-    local name indicator="" short leaf
+    local name indicator="" short leaf head rest
 
     if [ -z "$label" ]; then
         printf '\n'
@@ -276,6 +277,19 @@ shorten_branch_label() {
             ;;
     esac
 
+    # feat/fix/chore など conventional 接頭辞を表示から外す
+    # 例: feat/herdr-status-datetime-git → herdr-status-datetime-git
+    case "$name" in
+        feat/* | feature/* | fix/* | bugfix/* | chore/* | docs/* | doc/* | \
+        refactor/* | test/* | tests/* | ci/* | build/* | perf/* | style/* | \
+        revert/* | hotfix/* | release/*)
+            rest="${name#*/}"
+            if [ -n "$rest" ]; then
+                name="$rest"
+            fi
+            ;;
+    esac
+
     # 指標分を除いた上限
     local budget=$max_len
     if [ -n "$indicator" ]; then
@@ -290,15 +304,14 @@ shorten_branch_label() {
         return 0
     fi
 
-    # path 風なら末尾セグメントを優先（短いときだけ）
+    # path が残っていれば末尾セグメントを優先
     leaf="${name##*/}"
     if [ "$leaf" != "$name" ] && [ "${#leaf}" -le "$budget" ] && [ -n "$leaf" ]; then
         printf '%s%s\n' "$leaf" "$indicator"
         return 0
     fi
 
-    # 末尾優先の省略（識別しやすい suffix を残す）
-    # ellipsis 1 文字 + 末尾 (budget-1)
+    # 末尾優先の省略
     short="…${name: -$((budget - 1))}"
     printf '%s%s\n' "$short" "$indicator"
 }

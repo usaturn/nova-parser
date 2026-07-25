@@ -205,14 +205,16 @@ test_shorten_branch_label() {
     make_repo "$repo"
     local snap="${TEST_ROOT}/snapshot-long.json"
 
-    # 既定上限(40)では通常の feat/... は省略しない
+    # feat/ は表示から外す
     git -C "$repo" checkout -q -b "feat/herdr-status-datetime-git"
     write_focused_snap "$snap" "w6" "$repo"
     out="$(run_updater_dry "$snap")"
-    printf '%s\n' "$out" | rg -q $'w6\tgit_name\tfeat/herdr-status-datetime-git' \
-        || fail "default max should keep full branch: $out"
+    printf '%s\n' "$out" | rg -q $'w6\tgit_name\therdr-status-datetime-git' \
+        || fail "feat/ prefix should be stripped: $out"
+    printf '%s\n' "$out" | rg -q $'w6\tgit_name\tfeat/' \
+        && fail "feat/ must not remain in git_name: $out" || true
 
-    # 強制的に短い上限では …suffix または leaf
+    # 強制的に短い上限では …suffix
     out="$(
         HERDR_STATUS_BRANCH_MAX_LEN=18 \
         run_updater_dry "$snap"
