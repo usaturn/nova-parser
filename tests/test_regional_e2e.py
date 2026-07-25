@@ -99,6 +99,33 @@ def test_get_static_styles_css_returns_200_with_css_mime(tmp_path):
     assert "text/css" in resp.headers["content-type"].lower()
 
 
+def test_index_and_static_assets_require_revalidation(tmp_path):
+    """index.html と静的アセットを毎回再検証させ、両者のバージョン食い違いを防ぐ。
+
+    index.html だけが再取得されて app.js がブラウザキャッシュのまま残ると、
+    新しい UI 要素は表示されるのに、その要素が参照する state が古い app.js に
+    存在しないという食い違いが起きる。実際に「手描き読み順」セレクタは操作できるのに
+    reading_order が既定値のまま保存される、という形で表面化した。
+    Cache-Control: no-cache は etag/last-modified による再検証を必須にするため、
+    変更のないアセットは 304 のまま、変更されたアセットだけが確実に配信される。
+    """
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    output_dir = tmp_path / "output"
+
+    client = _make_client(image_dir, output_dir, _simple_factory(FakeVisionClient()))
+
+    for path in ("/", "/static/app.js", "/static/styles.css"):
+        resp = client.get(path)
+        assert resp.status_code == 200, path
+        assert resp.headers.get("cache-control") == "no-cache", f"{path} が再検証必須になっていない"
+
+    # 再検証が成立する前提として、検証子（etag もしくは last-modified）が必要。
+    for path in ("/", "/static/app.js"):
+        headers = client.get(path).headers
+        assert "etag" in headers or "last-modified" in headers, f"{path} に検証子がない"
+
+
 def test_existing_api_routes_still_work_with_static_mount(tmp_path):
     """static mount 追加後も既存 /api/images が回帰しない。"""
     image_dir = tmp_path / "images"

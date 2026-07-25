@@ -70,7 +70,13 @@ def build_router() -> APIRouter:
 
     @router.get("/", include_in_schema=False)
     def serve_index() -> FileResponse:
-        return FileResponse(static_dir / "index.html", media_type="text/html; charset=utf-8")
+        # index.html だけが再取得されて app.js が古いまま、という食い違いを防ぐため
+        # 毎回 etag で再検証させる（変更がなければ 304 で済む）。
+        return FileResponse(
+            static_dir / "index.html",
+            media_type="text/html; charset=utf-8",
+            headers={"Cache-Control": "no-cache"},
+        )
 
     @router.get("/api/images", response_model=ImageListResponse)
     def api_list_images(state: AppStateDep) -> ImageListResponse:
