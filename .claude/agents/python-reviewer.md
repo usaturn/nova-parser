@@ -25,7 +25,7 @@ tools: Read, Grep, Glob, Bash
      - `git ls-files --others --exclude-standard` (untracked files の一覧)
      - `git diff <base_ref>...HEAD` (`review_mode` が `commit` または `mixed` の場合)
    - **untracked ファイル読み込みの制約（セキュリティ）**:
-     - 既定 allowlist パス glob: `src/**`, `tests/**`, `.claude/agents/**`, `docs/**`, `docs_draft/**`, `pyproject.toml`, `README.md`
+     - 既定 allowlist パス glob: `src/**`, `tests/**`, `.claude/agents/**`, `docs/**`, `tmp/docs_draft/**`, `pyproject.toml`, `README.md`
      - orchestrator が `allowlist` を引数で渡した場合はそれが優先
      - **拒否ルール**:
        - パス名に `.env`, `*credentials*`, `*secret*`, `*.pem`, `*.key`, `id_rsa*`, `*.pfx` のいずれかを含むファイルは **絶対に開かない**（指摘文に「セキュリティ上スキップ」と記録）

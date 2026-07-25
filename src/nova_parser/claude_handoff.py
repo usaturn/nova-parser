@@ -85,7 +85,7 @@ def main(argv: list[str] | None = None) -> int:
     group.add_argument("--list", action="store_true", help="候補 session を新しい順に表示する")
     parser.add_argument("--project-dir", type=Path, default=Path.cwd(), help="Claude project として扱うディレクトリ")
     parser.add_argument("--claude-home", type=Path, default=None, help="Claude home。既定は ~/.claude")
-    parser.add_argument("--out-dir", type=Path, default=Path("docs_draft/claude_handoffs"))
+    parser.add_argument("--out-dir", type=Path, default=Path("tmp/docs_draft/claude_handoffs"))
     parser.add_argument("--stdout", action="store_true", help="生成した Markdown を標準出力する")
     args = parser.parse_args(argv)
 
