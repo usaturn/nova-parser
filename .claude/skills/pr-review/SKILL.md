@@ -1,7 +1,7 @@
 ---
 name: pr-review
-description: GitHub の指定した PR をレビューする。PRのメタデータ、説明、差分（diff）を gh CLI を用いて取得し、git worktree 上で検証した指摘を Severity・位置・根拠付きで `docs/reviews/` 配下にドキュメントとして作成または更新する
-allowed-tools: Read, Grep, Glob, Bash(gh *), Bash(git *), Edit(docs/reviews/**), Agent
+description: GitHub の指定した PR をレビューする。PRのメタデータ、説明、差分（diff）を gh CLI を用いて取得し、git worktree 上で検証した指摘を Severity・位置・根拠付きで `docs/reviews/<変換後ブランチ名>/<モデル名>.md` にドキュメントとして作成または更新する
+allowed-tools: Read, Grep, Glob, Bash(gh *), Bash(git *), Edit(docs/reviews/**), Write(docs/reviews/**), Agent
 ---
 
 # GitHub PR レビュー（Claude Code 版）
@@ -22,7 +22,8 @@ GitHub 上の指定された Pull Request（PR）に対して高品質なコー�
 - 指摘が不確かな場合は【確認推奨】と明記する
 - 実行可能な指摘がない場合は、その旨を明確に伝える
 - レビューは日本語で返す
-- レビュー結果は常に `docs/reviews/<モデル名>-pr<PR番号>-<トピック>-review.md`（例: `fable-5-pr8-pr-review-skill-review.md`）に作成する。同一 PR の再レビュー時は既存のレビュードキュメントを更新する
+- レビュー結果は常に `docs/reviews/<変換後ブランチ名>/<モデル名>.md` に作成する。`<変換後ブランチ名>` は PR のヘッドブランチ名に含まれる `/` をすべて `-` に置換した値とする（例: `feature/foo` は `feature-foo`、`bugfix/foo` は `bugfix-foo`）
+- 同じブランチを同じモデルで再レビューする場合は、同一ファイルの内容全体を上書きし、別名ファイルを作らない。別モデルの結果は同じブランチディレクトリ内の別ファイルへ保存する
 - PR 上で既に指摘済みの問題は重複報告しない（触れる場合は「既出」と明記する）
 
 ## 手順
@@ -39,7 +40,7 @@ GitHub 上の指定された Pull Request（PR）に対して高品質なコー�
    - 存在しない場合（新規展開）: `git fetch origin pull/<PR_NUMBER>/head` を実行し、`git worktree add --detach "$WT" FETCH_HEAD` で PR head を detached HEAD として展開する。ローカルブランチ `pr-review/<PR_NUMBER>` は作らない（同名のユーザ作成ブランチを `+` refspec で強制上書きし、後片付けで削除してしまう事故を防ぐ）。
    - 既に存在する場合（前回レビューが後片付け未完了で残っている等）: `$WT` 内で `git fetch origin pull/<PR_NUMBER>/head` の後 `git checkout -f --detach FETCH_HEAD` で、未コミットの追跡変更を破棄しつつ明示的に detached HEAD として最新 PR head に揃えて再利用する。`$WT` はスキル専用の一時 worktree のため破棄してよい。旧版手順が残した branch-attached worktree でも、`reset --hard` のようにブランチ tip を動かさず、既存ローカルブランチを保護する。
    - worktree の管理情報が壊れている場合は `git worktree remove --force "$WT"`（または `git worktree prune`）で除去してから、新規展開のフローをやり直す。
-   - 以降のファイル読解・テスト実行は `$WT` を対象に行う。ただしレビュー成果物（`docs/reviews/<...>.md`）はメインリポジトリの `docs/reviews/` に書き、`$WT` 内には書かない（`$WT` は後片付けで削除されるため）。
+   - 以降のファイル読解・テスト実行は `$WT` を対象に行う。ただしレビュー成果物（`docs/reviews/<変換後ブランチ名>/<モデル名>.md`）はメインリポジトリの `docs/reviews/` に書き、`$WT` 内には書かない（`$WT` は後片付けで削除されるため）。
 3. **差分収集**:
    - `gh pr diff <PR_NUMBER>` を実行し、PR全体の差分（diff）を取得して変更ファイル一覧と具体的な変更内容を把握する。
 4. **コンテキスト読解（並列化）**:
@@ -47,7 +48,12 @@ GitHub 上の指定された Pull Request（PR）に対して高品質なコー�
    - 変更箇所の呼び出し元・呼び出し先の調査、依存関係ファイル（pyproject.toml / package.json / lock ファイル等）の確認、変更に対応する既存テストの探索は、Explore サブエージェントに並列で委譲してよい。
 5. **プロジェクト固有観点の取り込み**: CLAUDE.md と過去のレビュー記録（例: `docs/reviews/`）があれば読み、そのプロジェクトの重点観点（例: XSS 多層防御、並列・増分ビルド互換性）を優先順位のチェックリストに加える。
 6. **候補洗い出し → 検証 → 報告**: 優先順位に沿って候補指摘を洗い出し、検証プロトコルを通過したものだけを指摘フォーマットで報告する。
-7. **後片付け**: レビュー完了後、`git worktree remove "$WT"` で worktree を削除する（`$WT` 内でテストを実行して `.venv` 等の未追跡ファイルが生成された場合は `git worktree remove --force "$WT"`）。detached HEAD 運用のためローカルブランチは残らず、`git branch -D` は不要。
+7. **レビュー結果の保存**:
+   - PR のヘッドブランチ名に含まれる `/` をすべて `-` に置換して `<変換後ブランチ名>` を決定する（例: `feature/foo` は `feature-foo`、`bugfix/foo` は `bugfix-foo`）。
+   - 実行中のモデルを識別できる名前を `<モデル名>` とし（例: `opus-5`、`gpt-5`、`gemini-3.6-flash`。既存 `docs/reviews/` の綴りに合わせ、新規に別表記を作らない）、保存先を `docs/reviews/<変換後ブランチ名>/<モデル名>.md` とする。ブランチ名またはモデル名を確定できない場合は推測せず、ユーザに確認する。
+   - メインリポジトリ側の保存先ディレクトリが無い場合も、ファイル書き込み時に自動作成されるため、ディレクトリ作成コマンドは実行しない。対象ファイルがなければ新規作成し、同じブランチ・モデルの再レビューで対象ファイルが存在する場合は内容全体を上書きする。別名ファイルは作らない。
+   - 別モデルのレビュー結果は、同じブランチディレクトリ内の別の `<モデル名>.md` に保存する。レビュー成果物を `$WT` 内には書かない。
+8. **後片付け**: レビュー完了後、`git worktree remove "$WT"` で worktree を削除する（`$WT` 内でテストを実行して `.venv` 等の未追跡ファイルが生成された場合は `git worktree remove --force "$WT"`）。detached HEAD 運用のためローカルブランチは残らず、`git branch -D` は不要。
 
 ## 検証プロトコル
 
@@ -117,6 +123,8 @@ GitHub 上の指定された Pull Request（PR）に対して高品質なコー�
 以下のテンプレートを使用する。指摘が 0 件の Severity セクションは省略する。
 
 ```markdown
+- 対象: PR #<N> / head <short-sha> / <YYYY-MM-DD>
+
 ## Summary
 
 （総評 2〜4 文。何をレビューし、何を実行検証したかを含める）
@@ -163,5 +171,7 @@ Merge recommendation の判定基準:
 - 各指摘に反証を試みたか
 - 「コメントしないこと」に該当する指摘が紛れていないか
 - Merge recommendation が判定基準と整合しているか
-- レビュー成果物がメインリポジトリの `docs/reviews/` に書かれ、`$WT` 配下に無いか
-- worktree を削除したか（手順7）
+- PR のヘッドブランチ名に含まれる `/` をすべて `-` に置換し、`docs/reviews/<変換後ブランチ名>/<モデル名>.md` に保存したか
+- 同じブランチ・モデルの再レビューで既存ファイルの内容全体を上書きし、別名ファイルを作っていないか
+- レビュー成果物がメインリポジトリの `docs/reviews/<変換後ブランチ名>/<モデル名>.md` に書かれ、`$WT` 配下に無いか
+- worktree を削除したか（手順8）
