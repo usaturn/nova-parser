@@ -146,7 +146,9 @@ test_updater_dry_run() {
     write_focused_snap "$snap" "w1" "$repo"
     out="$(run_updater_dry "$snap")"
     printf '%s\n' "$out" | rg -q $'w1\tclock\t' || fail "dry-run missing clock: $out"
-    printf '%s\n' "$out" | rg -q $'w1\tgit_clean\tmain' || fail "dry-run missing git_clean: $out"
+    # 状態行は短い記号、ブランチ名は git_name に分離
+    printf '%s\n' "$out" | rg -q $'w1\tgit_clean\t●' || fail "dry-run missing git_clean glyph: $out"
+    printf '%s\n' "$out" | rg -q $'w1\tgit_name\tmain' || fail "dry-run missing git_name: $out"
     printf '%s\n' "$out" | rg -q $'w1\tclear_token\tgit_staged' || fail "dry-run missing clear staged"
     printf '%s\n' "$out" | rg -q $'w1\tclear_token\tgit_dirty' || fail "dry-run missing clear dirty"
 }
@@ -162,6 +164,7 @@ test_updater_dry_run_nongit() {
     printf '%s\n' "$out" | rg -q $'w2\tclear_token\tgit_clean' || fail "nongit missing clear git_clean: $out"
     printf '%s\n' "$out" | rg -q $'w2\tclear_token\tgit_staged' || fail "nongit missing clear git_staged: $out"
     printf '%s\n' "$out" | rg -q $'w2\tclear_token\tgit_dirty' || fail "nongit missing clear git_dirty: $out"
+    printf '%s\n' "$out" | rg -q $'w2\tclear_token\tgit_name' || fail "nongit missing clear git_name: $out"
     printf '%s\n' "$out" | rg -q $'w2\tgit_' && fail "nongit should not set git tokens: $out" || true
 }
 
@@ -174,7 +177,8 @@ test_updater_dry_run_staged() {
     local snap="${TEST_ROOT}/snapshot-staged.json"
     write_focused_snap "$snap" "w3" "$repo"
     out="$(run_updater_dry "$snap")"
-    printf '%s\n' "$out" | rg -q $'w3\tgit_staged\tmain' || fail "staged missing git_staged: $out"
+    printf '%s\n' "$out" | rg -q $'w3\tgit_staged\t●' || fail "staged missing git_staged glyph: $out"
+    printf '%s\n' "$out" | rg -q $'w3\tgit_name\tmain' || fail "staged missing git_name: $out"
     printf '%s\n' "$out" | rg -q $'w3\tclear_token\tgit_clean' || fail "staged missing clear clean: $out"
     printf '%s\n' "$out" | rg -q $'w3\tclear_token\tgit_dirty' || fail "staged missing clear dirty: $out"
     printf '%s\n' "$out" | rg -q $'w3\tgit_clean\t' && fail "staged should not set git_clean: $out" || true
@@ -188,7 +192,8 @@ test_updater_dry_run_dirty() {
     local snap="${TEST_ROOT}/snapshot-dirty.json"
     write_focused_snap "$snap" "w4" "$repo"
     out="$(run_updater_dry "$snap")"
-    printf '%s\n' "$out" | rg -q $'w4\tgit_dirty\tmain' || fail "dirty missing git_dirty: $out"
+    printf '%s\n' "$out" | rg -q $'w4\tgit_dirty\t●' || fail "dirty missing git_dirty glyph: $out"
+    printf '%s\n' "$out" | rg -q $'w4\tgit_name\tmain' || fail "dirty missing git_name: $out"
     printf '%s\n' "$out" | rg -q $'w4\tclear_token\tgit_clean' || fail "dirty missing clear clean: $out"
     printf '%s\n' "$out" | rg -q $'w4\tclear_token\tgit_staged' || fail "dirty missing clear staged: $out"
     printf '%s\n' "$out" | rg -q $'w4\tgit_clean\t' && fail "dirty should not set git_clean: $out" || true
@@ -223,7 +228,8 @@ test_updater_dry_run_cwd_fallback() {
 EOF
     out="$(run_updater_dry "$snap")"
     printf '%s\n' "$out" | rg -q $'w5\tclock\t' || fail "fallback missing clock: $out"
-    printf '%s\n' "$out" | rg -q $'w5\tgit_clean\tmain' || fail "fallback missing git_clean from active_tab pane: $out"
+    printf '%s\n' "$out" | rg -q $'w5\tgit_clean\t●' || fail "fallback missing git_clean glyph: $out"
+    printf '%s\n' "$out" | rg -q $'w5\tgit_name\tmain' || fail "fallback missing git_name: $out"
     printf '%s\n' "$out" | rg -q $'w5\tclear_token\tgit_staged' || fail "fallback missing clear staged"
     printf '%s\n' "$out" | rg -q $'w5\tclear_token\tgit_dirty' || fail "fallback missing clear dirty"
 }
@@ -235,6 +241,7 @@ test_herdr_toml() {
     assert_contains "$HERDR_CONFIG" '\$git_clean'
     assert_contains "$HERDR_CONFIG" '\$git_staged'
     assert_contains "$HERDR_CONFIG" '\$git_dirty'
+    assert_contains "$HERDR_CONFIG" '\$git_name'
     assert_contains "$HERDR_CONFIG" '\$clock'
     assert_contains "$HERDR_CONFIG" '#50FA7B'
     assert_contains "$HERDR_CONFIG" '#E5A700'

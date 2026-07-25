@@ -9,5 +9,6 @@ rows = [
     { token = "$git_staged", fg = "#E5A700" },
     { token = "$git_dirty",  fg = "#FF5555" },
   ],
+  [{ token = "$git_name" }],
   [{ token = "$clock", fg = "#8BE9FD" }],
 ]

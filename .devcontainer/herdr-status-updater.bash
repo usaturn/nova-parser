@@ -148,18 +148,38 @@ emit_or_report() {
     fi
 }
 
-# git トークンを batch（複数 --token/--clear-token 対応）
-report_git_batch() {
-    local ws_id="$1" set_name="$2" label="$3"
-    shift 3
-    # remaining: clear token names
-    local clears=("$@")
+# 状態行用の短い記号（色は herdr.toml の token style 側）
+readonly GIT_STATE_GLYPH="●"
+
+# git 関連トークンを batch 投稿
+# tokens は "name=value" の配列、clears はトークン名の配列
+report_git_tokens() {
+    local ws_id="$1"
+    shift
+    local -a tokens=()
+    local -a clears=()
+    local arg
+    for arg in "$@"; do
+        case "$arg" in
+            clear:*)
+                clears+=("${arg#clear:}")
+                ;;
+            *=*)
+                tokens+=("$arg")
+                ;;
+            *)
+                log_debug "report_git_tokens: skip arg $arg"
+                ;;
+        esac
+    done
 
     if [ "${HERDR_STATUS_DRY_RUN:-}" = "1" ]; then
-        if [ -n "$set_name" ]; then
-            printf '%s\t%s\t%s\n' "$ws_id" "$set_name" "$label"
-        fi
-        local c
+        local t c name value
+        for t in "${tokens[@]}"; do
+            name="${t%%=*}"
+            value="${t#*=}"
+            printf '%s\t%s\t%s\n' "$ws_id" "$name" "$value"
+        done
         for c in "${clears[@]}"; do
             printf '%s\tclear_token\t%s\n' "$ws_id" "$c"
         done
@@ -171,10 +191,10 @@ report_git_batch() {
     fi
 
     local args=(workspace report-metadata "$ws_id" --source "$SOURCE_ID" --ttl-ms "$GIT_TTL_MS")
-    if [ -n "$set_name" ]; then
-        args+=(--token "${set_name}=${label}")
-    fi
-    local c
+    local t c name value
+    for t in "${tokens[@]}"; do
+        args+=(--token "$t")
+    done
     for c in "${clears[@]}"; do
         args+=(--clear-token "$c")
     done
@@ -182,12 +202,49 @@ report_git_batch() {
         return 0
     fi
     # 複数フラグ拒否時: 1 操作ずつ
-    if [ -n "$set_name" ]; then
-        emit_or_report "$ws_id" token "$set_name" "$label" "$GIT_TTL_MS"
-    fi
+    for t in "${tokens[@]}"; do
+        name="${t%%=*}"
+        value="${t#*=}"
+        emit_or_report "$ws_id" token "$name" "$value" "$GIT_TTL_MS"
+    done
     for c in "${clears[@]}"; do
         emit_or_report "$ws_id" clear_token "$c" "" "$GIT_TTL_MS"
     done
+}
+
+# 非 git: 状態3種 + ブランチ名をすべて clear
+report_git_absent() {
+    local ws_id="$1"
+    report_git_tokens "$ws_id" \
+        clear:git_clean clear:git_staged clear:git_dirty clear:git_name
+}
+
+# git あり: 状態は短い記号、ブランチ名は別トークン git_name
+report_git_present() {
+    local ws_id="$1" state_token="$2" branch_label="$3"
+    case "$state_token" in
+        git_clean)
+            report_git_tokens "$ws_id" \
+                "git_clean=${GIT_STATE_GLYPH}" \
+                "git_name=${branch_label}" \
+                clear:git_staged clear:git_dirty
+            ;;
+        git_staged)
+            report_git_tokens "$ws_id" \
+                "git_staged=${GIT_STATE_GLYPH}" \
+                "git_name=${branch_label}" \
+                clear:git_clean clear:git_dirty
+            ;;
+        git_dirty)
+            report_git_tokens "$ws_id" \
+                "git_dirty=${GIT_STATE_GLYPH}" \
+                "git_name=${branch_label}" \
+                clear:git_clean clear:git_staged
+            ;;
+        *)
+            report_git_absent "$ws_id"
+            ;;
+    esac
 }
 
 report_clock() {
@@ -222,7 +279,7 @@ emit_for_workspace() {
     fi
 
     if [ -z "$git_line" ]; then
-        report_git_batch "$ws_id" "" "" git_clean git_staged git_dirty
+        report_git_absent "$ws_id"
         return 0
     fi
 
@@ -231,17 +288,17 @@ emit_for_workspace() {
 
     case "$state" in
         clean)
-            report_git_batch "$ws_id" git_clean "$label" git_staged git_dirty
+            report_git_present "$ws_id" git_clean "$label"
             ;;
         staged)
-            report_git_batch "$ws_id" git_staged "$label" git_clean git_dirty
+            report_git_present "$ws_id" git_staged "$label"
             ;;
         dirty)
-            report_git_batch "$ws_id" git_dirty "$label" git_clean git_staged
+            report_git_present "$ws_id" git_dirty "$label"
             ;;
         *)
             log_debug "unknown git state: $state"
-            report_git_batch "$ws_id" "" "" git_clean git_staged git_dirty
+            report_git_absent "$ws_id"
             ;;
     esac
 }
