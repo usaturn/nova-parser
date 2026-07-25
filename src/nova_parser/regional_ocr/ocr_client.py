@@ -28,6 +28,48 @@ def build_vision_client() -> vision.ImageAnnotatorClient:
         raise AdcNotConfiguredError(msg) from exc
 
 
+def _block_right(block: object) -> int:
+    """OCR block の bounding box 右端 X 座標を返す。頂点なしは 0。"""
+    bounding_box = getattr(block, "bounding_box", None)
+    vertices = list(getattr(bounding_box, "vertices", []))
+    return max((getattr(vertex, "x", 0) for vertex in vertices), default=0)
+
+
+def _symbol_break(symbol: object) -> str:
+    """Cloud Vision の detected break を対応する文字へ変換する。"""
+    text_property = getattr(symbol, "property", None)
+    detected_break = getattr(text_property, "detected_break", None)
+    break_type = getattr(detected_break, "type_", None)
+    break_types = vision.TextAnnotation.DetectedBreak.BreakType
+    return {
+        break_types.SPACE: " ",
+        break_types.SURE_SPACE: " ",
+        break_types.EOL_SURE_SPACE: "\n",
+        break_types.LINE_BREAK: "\n",
+        break_types.HYPHEN: "-",
+    }.get(break_type, "")
+
+
+def _block_text(block: object) -> str:
+    """OCR block 内の symbol と detected break からテキストを復元する。"""
+    parts: list[str] = []
+    for paragraph in getattr(block, "paragraphs", []):
+        for word in getattr(paragraph, "words", []):
+            for symbol in getattr(word, "symbols", []):
+                parts.append(getattr(symbol, "text", ""))
+                parts.append(_symbol_break(symbol))
+    return "".join(parts).rstrip()
+
+
+def _vertical_text(annotation: object) -> str:
+    """構造化 OCR block を縦書きの右から左へ並べてテキスト化する。"""
+    blocks = [block for page in getattr(annotation, "pages", []) for block in getattr(page, "blocks", [])]
+    if not blocks:
+        return getattr(annotation, "text", "") or ""
+    blocks.sort(key=_block_right, reverse=True)
+    return "\n".join(text for block in blocks if (text := _block_text(block))).rstrip()
+
+
 def ocr_rectangle(
     client: vision.ImageAnnotatorClient,
     image: "Image",
@@ -47,7 +89,10 @@ def ocr_rectangle(
         msg = f"Cloud Vision API エラー: {response.error.message}"
         raise OcrBackendError(msg)
 
-    return response.full_text_annotation.text or ""
+    annotation = response.full_text_annotation
+    if rect.reading_order == "vertical":
+        return _vertical_text(annotation)
+    return annotation.text or ""
 
 
 def detect_blocks(

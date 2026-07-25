@@ -720,6 +720,7 @@ assert.deepEqual(
   "scale must be applied",
 );
 assert.equal(rect.draw_order, 1, "draw_order increments");
+assert.equal(rect.reading_order, "vision", "手描き矩形は Vision の既定順を使う");
 assert.equal(app.session.regions[1].ocr_status, "pending");
 assert.equal(app.savingState, "saving", "scheduleSave must mark saving");
 dropAutosaveTimer(app);
@@ -2127,6 +2128,48 @@ require("./src/nova_parser/regional_ocr/static/app.js");
   assert.equal(app.verticalBlocks, null);
   assert.equal(app.horizontalBlocks, null);
 })();
+"""
+    )
+
+
+def test_block_click_records_reading_order_for_each_granularity() -> None:
+    """縦ブロックだけ vertical、横ブロックと段落は Vision の既定順を保存する。"""
+    _run_node_inline(
+        r"""
+setupCanvas({
+  wrapRect: { left: 0, top: 0, width: 100, height: 100 },
+  imgRect: { left: 0, top: 0, width: 100, height: 100 },
+});
+
+const expectedByGranularity = {
+  vertical: "vertical",
+  horizontal: "vision",
+  paragraph: "vision",
+};
+
+for (const [granularity, expected] of Object.entries(expectedByGranularity)) {
+  const block = { x: 10, y: 10, width: 30, height: 40 };
+  const app = newApp({
+    session: sessionPayload("a.png", []),
+    currentImage: { name: "a.png", width: 100, height: 100 },
+    imgLoaded: true,
+    blockMode: true,
+    blockGranularity: granularity,
+    paragraphBlocks: [block],
+    verticalBlocks: [block],
+    horizontalBlocks: [block],
+  });
+
+  app._addRegionFromBlockClick({ clientX: 20, clientY: 20 });
+
+  assert.equal(app.session.regions.length, 1);
+  assert.equal(
+    app.session.regions[0].rectangle.reading_order,
+    expected,
+    `${granularity} の reading_order`,
+  );
+  dropAutosaveTimer(app);
+}
 """
     )
 

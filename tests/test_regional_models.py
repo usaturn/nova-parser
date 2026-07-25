@@ -70,6 +70,40 @@ def test_rectangle_builds_successfully_and_properties_correct():
     assert rect.bottom == 200
 
 
+def test_rectangle_defaults_reading_order_to_vision():
+    """既存セッションの Rectangle は Vision の既定順を維持する。"""
+    rect = Rectangle(rect_id="r1", draw_order=0, x=0, y=0, width=100, height=200)
+    assert rect.reading_order == "vision"
+
+
+def test_rectangle_accepts_vertical_reading_order():
+    """縦ブロック由来の Rectangle は vertical を保持できる。"""
+    rect = Rectangle(
+        rect_id="r1",
+        draw_order=0,
+        x=0,
+        y=0,
+        width=100,
+        height=200,
+        reading_order="vertical",
+    )
+    assert rect.reading_order == "vertical"
+
+
+def test_rectangle_rejects_unknown_reading_order():
+    """未定義の読み順は OCR の誤った並べ替えを防ぐため拒否する。"""
+    with pytest.raises(ValidationError):
+        Rectangle(
+            rect_id="r1",
+            draw_order=0,
+            x=0,
+            y=0,
+            width=100,
+            height=200,
+            reading_order="diagonal",
+        )
+
+
 # ---------------------------------------------------------------------------
 # AC-2: width=0 で ValidationError
 # ---------------------------------------------------------------------------

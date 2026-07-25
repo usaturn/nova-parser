@@ -13,11 +13,27 @@ from tests.conftest import FakeVisionClient, _FakeResponse
 # ---------------------------------------------------------------------------
 
 
-def _make_rect(*, x: int = 0, y: int = 0, width: int = 50, height: int = 50, rect_id: str = "r1"):
+def _make_rect(
+    *,
+    x: int = 0,
+    y: int = 0,
+    width: int = 50,
+    height: int = 50,
+    rect_id: str = "r1",
+    reading_order: str = "vision",
+):
     """Rectangle を生成するヘルパー（regional_ocr.models に依存）。"""
     from nova_parser.regional_ocr.models import Rectangle  # type: ignore[import]
 
-    return Rectangle(rect_id=rect_id, draw_order=0, x=x, y=y, width=width, height=height)
+    return Rectangle(
+        rect_id=rect_id,
+        draw_order=0,
+        x=x,
+        y=y,
+        width=width,
+        height=height,
+        reading_order=reading_order,
+    )
 
 
 def _make_image(width: int = 100, height: int = 100, mode: str = "RGB") -> Image.Image:
@@ -99,6 +115,102 @@ def test_ocr_rectangle_returns_text_from_vision_response():
 
     result = ocr_rectangle(client, image, rect)
     assert result == "OCR結果"
+
+
+def test_ocr_rectangle_orders_vertical_blocks_from_right_to_left():
+    """縦ブロックでは Vision のブロック配列順でなく画像上の右から左へ読む。"""
+    from nova_parser.regional_ocr.ocr_client import ocr_rectangle
+
+    def block(right: int, text: str) -> dict[str, object]:
+        return {
+            "vertices": [(right - 20, 0), (right, 0), (right, 100), (right - 20, 100)],
+            "symbols": [(character, 0) for character in text],
+        }
+
+    response = _FakeResponse(
+        text="怪異\n世界設定関連\n異世界\n侵蝕\n怪異本文\n異世界本文\n侵蝕本文",
+        structured_blocks=[
+            block(1051, "怪異"),
+            block(1197, "世界設定関連"),
+            block(656, "異世界"),
+            block(371, "侵蝕"),
+            block(990, "怪異本文"),
+            block(593, "異世界本文"),
+            block(310, "侵蝕本文"),
+        ],
+    )
+
+    result = ocr_rectangle(
+        FakeVisionClient(response),
+        _make_image(),
+        _make_rect(reading_order="vertical"),
+    )
+
+    assert result == "世界設定関連\n怪異\n怪異本文\n異世界\n異世界本文\n侵蝕\n侵蝕本文"
+
+
+def test_ocr_rectangle_restores_all_supported_symbol_breaks():
+    """縦書き再構成では Vision の symbol break を文字列へ復元する。"""
+    from google.cloud import vision
+
+    from nova_parser.regional_ocr.ocr_client import ocr_rectangle
+
+    break_type = vision.TextAnnotation.DetectedBreak.BreakType
+    response = _FakeResponse(
+        text="Vision既定順",
+        structured_blocks=[
+            {
+                "vertices": [(0, 0), (20, 0), (20, 100), (0, 100)],
+                "symbols": [
+                    ("語", break_type.SPACE),
+                    ("句", break_type.SURE_SPACE),
+                    ("次", break_type.EOL_SURE_SPACE),
+                    ("終", break_type.LINE_BREAK),
+                    ("末", break_type.HYPHEN),
+                ],
+            }
+        ],
+    )
+
+    result = ocr_rectangle(
+        FakeVisionClient(response),
+        _make_image(),
+        _make_rect(reading_order="vertical"),
+    )
+
+    assert result == "語 句 次\n終\n末-"
+
+
+def test_ocr_rectangle_preserves_vision_text_for_non_vertical_region():
+    """構造化 block があっても通常矩形は Vision の集約済みテキストを維持する。"""
+    from nova_parser.regional_ocr.ocr_client import ocr_rectangle
+
+    response = _FakeResponse(
+        text="Vision既定順",
+        structured_blocks=[
+            {
+                "vertices": [(0, 0), (20, 0), (20, 100), (0, 100)],
+                "symbols": [("再", 0), ("構", 0), ("成", 0)],
+            }
+        ],
+    )
+
+    result = ocr_rectangle(FakeVisionClient(response), _make_image(), _make_rect())
+
+    assert result == "Vision既定順"
+
+
+def test_ocr_rectangle_falls_back_to_vision_text_when_vertical_blocks_are_missing():
+    """縦書き指定でも構造化 block がなければ Vision のテキストを失わない。"""
+    from nova_parser.regional_ocr.ocr_client import ocr_rectangle
+
+    result = ocr_rectangle(
+        FakeVisionClient(_FakeResponse(text="fallback")),
+        _make_image(),
+        _make_rect(reading_order="vertical"),
+    )
+
+    assert result == "fallback"
 
 
 # ---------------------------------------------------------------------------
