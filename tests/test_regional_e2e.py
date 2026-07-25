@@ -112,6 +112,23 @@ def test_existing_api_routes_still_work_with_static_mount(tmp_path):
     assert "a.png" in resp.json()["images"]
 
 
+def test_index_html_contains_manual_reading_order_selector(tmp_path):
+    """通常モード用の手描き読み順セレクタを横書き既定・縦書きの2択で配信する。"""
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    output_dir = tmp_path / "output"
+
+    client = _make_client(image_dir, output_dir, _simple_factory(FakeVisionClient()))
+    body = client.get("/").text
+
+    assert "手描き読み順" in body
+    assert 'x-show="!blockMode"' in body
+    assert 'x-model="manualReadingOrder"' in body
+    assert '<option value="vision">横書き（既定）</option>' in body
+    assert '<option value="vertical">縦書き</option>' in body
+    assert 'title="新しく手描きする矩形の OCR 読み順"' in body
+
+
 # ---------------------------------------------------------------------------
 # D-4: フル E2E（list → PUT → batch SSE → GET で結果反映）
 # ---------------------------------------------------------------------------

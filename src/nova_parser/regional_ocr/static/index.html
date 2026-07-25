@@ -47,6 +47,17 @@
             <button type="button" @click="zoomIn()" :disabled="!!dragMode" title="拡大">＋</button>
             <button type="button" @click="zoomReset()" :disabled="!!dragMode" title="100%">1:1</button>
             <button type="button" @click="zoomFitToggle()" :disabled="!!dragMode" title="ウィンドウに合わせる">fit</button>
+            <label
+              class="manual-reading-order"
+              x-show="!blockMode"
+              title="新しく手描きする矩形の OCR 読み順"
+            >
+              <span>手描き読み順</span>
+              <select x-model="manualReadingOrder" :disabled="!!dragMode">
+                <option value="vision">横書き（既定）</option>
+                <option value="vertical">縦書き</option>
+              </select>
+            </label>
             <button
               type="button"
               class="block-mode-btn"
