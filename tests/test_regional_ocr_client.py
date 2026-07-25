@@ -149,6 +149,193 @@ def test_ocr_rectangle_orders_vertical_blocks_from_right_to_left():
     assert result == "世界設定関連\n怪異\n怪異本文\n異世界\n異世界本文\n侵蝕\n侵蝕本文"
 
 
+def test_ocr_rectangle_keeps_top_to_bottom_within_a_split_column():
+    """同一列が上下 2 block に分割され、下段の右端が数 px 大きくても上→下を保つ。"""
+    from nova_parser.regional_ocr.ocr_client import ocr_rectangle
+
+    response = _FakeResponse(
+        text="Vision既定順",
+        structured_blocks=[
+            # 同一列（X 範囲がほぼ一致）。下段の右端だけ 2px 張り出している
+            {
+                "vertices": [(1021, 0), (1051, 0), (1051, 90), (1021, 90)],
+                "symbols": [(character, 0) for character in "上段"],
+            },
+            {
+                "vertices": [(1023, 100), (1053, 100), (1053, 190), (1023, 190)],
+                "symbols": [(character, 0) for character in "下段"],
+            },
+            # 別列
+            {
+                "vertices": [(870, 0), (900, 0), (900, 90), (870, 90)],
+                "symbols": [(character, 0) for character in "左列"],
+            },
+        ],
+    )
+
+    result = ocr_rectangle(
+        FakeVisionClient(response),
+        _make_image(),
+        _make_rect(reading_order="vertical"),
+    )
+
+    assert result == "上段\n下段\n左列"
+
+
+def test_ocr_rectangle_orders_columns_right_to_left_and_rows_top_to_bottom():
+    """2 列それぞれが上下に分割されていても、列は右→左・列内は上→下で読む。"""
+    from nova_parser.regional_ocr.ocr_client import ocr_rectangle
+
+    def block(left: int, right: int, top: int, text: str) -> dict[str, object]:
+        return {
+            "vertices": [(left, top), (right, top), (right, top + 90), (left, top + 90)],
+            "symbols": [(character, 0) for character in text],
+        }
+
+    response = _FakeResponse(
+        text="Vision既定順",
+        structured_blocks=[
+            block(70, 100, 0, "見出A"),
+            block(72, 102, 100, "本文A"),
+            block(20, 50, 0, "見出B"),
+            block(22, 52, 100, "本文B"),
+        ],
+    )
+
+    result = ocr_rectangle(
+        FakeVisionClient(response),
+        _make_image(),
+        _make_rect(reading_order="vertical"),
+    )
+
+    assert result == "見出A\n本文A\n見出B\n本文B"
+
+
+def test_ocr_rectangle_restores_hyphen_break_as_line_wrap():
+    """HYPHEN は行折り返しなので、ハイフンの後に改行を入れる。"""
+    from google.cloud import vision
+
+    from nova_parser.regional_ocr.ocr_client import ocr_rectangle
+
+    break_type = vision.TextAnnotation.DetectedBreak.BreakType
+    response = _FakeResponse(
+        text="Vision既定順",
+        structured_blocks=[
+            {
+                "vertices": [(0, 0), (20, 0), (20, 100), (0, 100)],
+                "symbols": [
+                    ("i", 0),
+                    ("n", 0),
+                    ("t", break_type.HYPHEN),
+                    ("e", 0),
+                    ("r", 0),
+                ],
+            }
+        ],
+    )
+
+    result = ocr_rectangle(
+        FakeVisionClient(response),
+        _make_image(),
+        _make_rect(reading_order="vertical"),
+    )
+
+    assert result == "int-\ner"
+
+
+@pytest.mark.parametrize(
+    ("break_type_name", "expected"),
+    [("SPACE", "甲 乙"), ("LINE_BREAK", "甲\n乙")],
+)
+def test_ocr_rectangle_prepends_prefix_breaks(break_type_name: str, expected: str):
+    """is_prefix=True の break は symbol の前へ挿入する。"""
+    from google.cloud import vision
+
+    from nova_parser.regional_ocr.ocr_client import ocr_rectangle
+
+    break_type = getattr(vision.TextAnnotation.DetectedBreak.BreakType, break_type_name)
+    response = _FakeResponse(
+        text="Vision既定順",
+        structured_blocks=[
+            {
+                "vertices": [(0, 0), (20, 0), (20, 100), (0, 100)],
+                "symbols": [("甲", 0), ("乙", break_type, True)],
+            }
+        ],
+    )
+
+    result = ocr_rectangle(
+        FakeVisionClient(response),
+        _make_image(),
+        _make_rect(reading_order="vertical"),
+    )
+
+    assert result == expected
+
+
+def test_ocr_rectangle_keeps_prefix_break_before_trailing_symbol():
+    """block 末尾 symbol に付いた prefix break は rstrip() で消えない。"""
+    from google.cloud import vision
+
+    from nova_parser.regional_ocr.ocr_client import ocr_rectangle
+
+    break_type = vision.TextAnnotation.DetectedBreak.BreakType
+    response = _FakeResponse(
+        text="Vision既定順",
+        structured_blocks=[
+            {
+                "vertices": [(0, 0), (20, 0), (20, 100), (0, 100)],
+                "symbols": [("甲", 0), ("乙", break_type.LINE_BREAK, True)],
+            }
+        ],
+    )
+
+    result = ocr_rectangle(
+        FakeVisionClient(response),
+        _make_image(),
+        _make_rect(reading_order="vertical"),
+    )
+
+    assert result == "甲\n乙"
+
+
+def test_vertical_text_orders_real_vision_proto_blocks():
+    """実 proto（vision.Block / vision.Symbol）でも列順・列内順が期待どおりになる。"""
+    from google.cloud import vision
+
+    from nova_parser.regional_ocr.ocr_client import _vertical_text
+
+    def block(left: int, right: int, top: int, text: str) -> vision.Block:
+        return vision.Block(
+            bounding_box=vision.BoundingPoly(
+                vertices=[
+                    vision.Vertex(x=left, y=top),
+                    vision.Vertex(x=right, y=top),
+                    vision.Vertex(x=right, y=top + 90),
+                    vision.Vertex(x=left, y=top + 90),
+                ]
+            ),
+            paragraphs=[
+                vision.Paragraph(words=[vision.Word(symbols=[vision.Symbol(text=c) for c in text])]),
+            ],
+        )
+
+    annotation = vision.TextAnnotation(
+        pages=[
+            vision.Page(
+                blocks=[
+                    block(1021, 1051, 0, "上段"),
+                    block(1023, 1053, 100, "下段"),
+                    block(870, 900, 0, "左列"),
+                ]
+            )
+        ],
+        text="Vision既定順",
+    )
+
+    assert _vertical_text(annotation) == "上段\n下段\n左列"
+
+
 def test_ocr_rectangle_restores_all_supported_symbol_breaks():
     """縦書き再構成では Vision の symbol break を文字列へ復元する。"""
     from google.cloud import vision

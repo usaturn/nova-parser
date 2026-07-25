@@ -50,12 +50,18 @@ def _make_pages(
     if structured_blocks is not None:
         page_blocks = []
         for block in structured_blocks:
+            # symbols は (text, break_type) か (text, break_type, is_prefix) で指定する
             symbols = [
                 SimpleNamespace(
-                    text=text,
-                    property=SimpleNamespace(detected_break=SimpleNamespace(type_=break_type)),
+                    text=symbol[0],
+                    property=SimpleNamespace(
+                        detected_break=SimpleNamespace(
+                            type_=symbol[1],
+                            is_prefix=symbol[2] if len(symbol) > 2 else False,
+                        )
+                    ),
                 )
-                for text, break_type in block["symbols"]
+                for symbol in block["symbols"]
             ]
             page_blocks.append(
                 SimpleNamespace(
