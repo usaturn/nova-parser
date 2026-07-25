@@ -5,7 +5,7 @@
       "id": 1,
       "name": "resume-latest-superpowers-work",
       "prompt": "Claude Code 側で進めた superpowers の結果を引き継いで、次に何をすべきか確認して。",
-      "expected_output": "A concise handoff summary based on docs_draft/claude_handoffs or a generated latest handoff.",
+      "expected_output": "A concise handoff summary based on tmp/docs_draft/claude_handoffs or a generated latest handoff.",
       "files": [],
       "expectations": [
         "The result checks or generates a Claude handoff before claiming the current phase.",

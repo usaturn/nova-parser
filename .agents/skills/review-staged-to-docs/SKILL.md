@@ -1,13 +1,13 @@
 ---
 name: review-staged-to-docs
-description: Use when the user asks Codex to review staged or commit-ready git changes, perform a /review-style code review, or create a Japanese Markdown review document under docs_draft/ from staged diffs. Do not use for unstaged-only or untracked-only review requests unless the user stages those changes or explicitly changes the scope.
+description: Use when the user asks Codex to review staged or commit-ready git changes, perform a /review-style code review, or create a Japanese Markdown review document under tmp/docs_draft/ from staged diffs. Do not use for unstaged-only or untracked-only review requests unless the user stages those changes or explicitly changes the scope.
 ---
 
 # Review Staged To Docs
 
 ## Overview
 
-Review only the staged git diff, then write a new Japanese Markdown review document under `docs_draft/`. Treat this as a code review: prioritize bugs, regressions, safety issues, and missing tests over summaries.
+Review only the staged git diff, then write a new Japanese Markdown review document under `tmp/docs_draft/`. Treat this as a code review: prioritize bugs, regressions, safety issues, and missing tests over summaries.
 
 ## Workflow
 
@@ -24,7 +24,7 @@ Review only the staged git diff, then write a new Japanese Markdown review docum
    - Use `git diff --staged` as the primary source.
    - Use `git show :path/to/file` for staged file content when full context is needed.
    - Avoid relying on plain file reads for files that also have unstaged edits, because they may include changes outside the review scope.
-4. Write a new file under `docs_draft/` named `staged-review-YYYYMMDD-HHMMSS.md`. If the name already exists, append a short numeric suffix; never overwrite an existing document.
+4. Write a new file under `tmp/docs_draft/` named `staged-review-YYYYMMDD-HHMMSS.md`. If the name already exists, append a short numeric suffix; never overwrite an existing document.
 5. Write the review in Japanese with this structure:
    ```markdown
    # Staged 差分レビュー結果

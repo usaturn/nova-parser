@@ -1,7 +1,7 @@
 # Claude Superpowers Handoff Schema
 
 `uv run nova-parser-claude-handoff --latest` writes paired files under
-`docs_draft/claude_handoffs/`:
+`tmp/docs_draft/claude_handoffs/`:
 
 - `<timestamp>-<session>.handoff.md`
 - `<timestamp>-<session>.handoff.json`

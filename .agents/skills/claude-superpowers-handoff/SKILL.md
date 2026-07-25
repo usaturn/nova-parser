@@ -1,6 +1,6 @@
 ---
 name: claude-superpowers-handoff
-description: Use when the user asks Codex to continue, inspect, resume, or take over work that was progressed in Claude Code using Superpowers, python-tdd-team, brainstorming, writing-plans, or other Claude Code skills. Reads or generates repo-local Claude handoff artifacts under docs_draft/claude_handoffs and summarizes current phase, completed work, pending tasks, reviewer findings, and next actions before implementation.
+description: Use when the user asks Codex to continue, inspect, resume, or take over work that was progressed in Claude Code using Superpowers, python-tdd-team, brainstorming, writing-plans, or other Claude Code skills. Reads or generates repo-local Claude handoff artifacts under tmp/docs_draft/claude_handoffs and summarizes current phase, completed work, pending tasks, reviewer findings, and next actions before implementation.
 ---
 
 # Claude Superpowers Handoff
@@ -13,7 +13,7 @@ Bridge Claude Code Superpowers work into Codex. Use the repo-local handoff CLI t
 
 1. Check for existing handoffs:
    ```bash
-   ls -t docs_draft/claude_handoffs/*.handoff.md 2>/dev/null | head
+   ls -t tmp/docs_draft/claude_handoffs/*.handoff.md 2>/dev/null | head
    ```
 2. If no suitable handoff exists, generate one:
    ```bash
