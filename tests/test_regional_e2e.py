@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from PIL import Image
@@ -113,7 +114,14 @@ def test_existing_api_routes_still_work_with_static_mount(tmp_path):
 
 
 def test_index_html_contains_manual_reading_order_selector(tmp_path):
-    """通常モード用の手描き読み順セレクタを横書き既定・縦書きの2択で配信する。"""
+    """通常モード用の手描き読み順セレクタが、同一 <label> ブロック内に
+    x-show/x-model/選択肢/title を揃えて配信されること。
+
+    独立した部分文字列一致だけだと、x-show="!blockMode" が別要素へ移動して
+    ブロック選択中もセレクタが表示されてしまう回帰を検出できない。
+    そのため「手描き読み順」を含む <label> ブロックを1つに絞り込み、
+    その内部だけを対象に各 assertion を行う。
+    """
     image_dir = tmp_path / "images"
     image_dir.mkdir()
     output_dir = tmp_path / "output"
@@ -121,12 +129,26 @@ def test_index_html_contains_manual_reading_order_selector(tmp_path):
     client = _make_client(image_dir, output_dir, _simple_factory(FakeVisionClient()))
     body = client.get("/").text
 
-    assert "手描き読み順" in body
-    assert 'x-show="!blockMode"' in body
-    assert 'x-model="manualReadingOrder"' in body
-    assert '<option value="vision">横書き（既定）</option>' in body
-    assert '<option value="vertical">縦書き</option>' in body
-    assert 'title="新しく手描きする矩形の OCR 読み順"' in body
+    label_blocks = re.findall(r"<label\b.*?</label>", body, re.DOTALL)
+    manual_blocks = [block for block in label_blocks if "手描き読み順" in block]
+    assert len(manual_blocks) == 1, (
+        "「手描き読み順」を含む <label> ブロックがちょうど1つ見つかること "
+        f"(found {len(manual_blocks)}): {manual_blocks}"
+    )
+    block = manual_blocks[0]
+
+    required_fragments = [
+        "手描き読み順",
+        'x-show="!blockMode"',
+        'x-model="manualReadingOrder"',
+        '<option value="vision">横書き（既定）</option>',
+        '<option value="vertical">縦書き</option>',
+        'title="新しく手描きする矩形の OCR 読み順"',
+    ]
+    missing = [fragment for fragment in required_fragments if fragment not in block]
+    assert not missing, (
+        f"手描き読み順の <label> ブロックに以下が欠けている（同一要素性が壊れている可能性）: {missing}\nblock={block}"
+    )
 
 
 # ---------------------------------------------------------------------------

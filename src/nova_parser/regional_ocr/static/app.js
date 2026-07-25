@@ -387,7 +387,7 @@ function regionalOcrApp() {
       const rect = {
         rect_id: generateRectId(),
         draw_order: nextDrawOrder(this.session.regions),
-        reading_order: this.manualReadingOrder,
+        reading_order: this.manualReadingOrder === "vertical" ? "vertical" : "vision",
         ...natural,
       };
       this.session.regions.push({

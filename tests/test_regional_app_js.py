@@ -756,6 +756,30 @@ dropAutosaveTimer(app);
     )
 
 
+def test_add_region_from_draft_falls_back_to_vision_for_unexpected_manual_reading_order() -> None:
+    """manualReadingOrder が allow-list 外の値のとき、reading_order は vision へフォールバックする。"""
+    _run_node_inline(
+        r"""
+const app = newApp({
+  session: sessionPayload("a.png", []),
+  currentImage: { name: "a.png", width: 100, height: 100 },
+  imgLoaded: true,
+  draftRect: { x: 10, y: 10, width: 20, height: 20 },
+  scaleX: 1,
+  scaleY: 1,
+  manualReadingOrder: "not-a-real-value",
+});
+app._addRegionFromDraft();
+assert.equal(
+  app.session.regions[0].rectangle.reading_order,
+  "vision",
+  "想定外の manualReadingOrder は vision にフォールバックする",
+);
+dropAutosaveTimer(app);
+"""
+    )
+
+
 def test_manual_reading_order_survives_image_switch_and_block_mode_exit() -> None:
     _run_node_inline(
         r"""
