@@ -70,6 +70,39 @@ function buni(){
 export EDITOR=code
 export LANG=ja_JP.utf8
 
+function select_devcontainer_workspace() {
+    local workspaces_root="${DEVCONTAINER_WORKSPACES_ROOT:-/workspaces}"
+    local -a candidates
+    local selected
+
+    candidates=("${workspaces_root}"/*(N/))
+    case "${#candidates[@]}" in
+        0)
+            print -u2 "warning: no workspace directories found under ${workspaces_root}; using current directory"
+            return 1
+            ;;
+        1)
+            print -r -- "${candidates[1]}"
+            return 0
+            ;;
+    esac
+
+    if ! command -v fzf >/dev/null 2>&1; then
+        print -u2 "warning: multiple workspace directories found but fzf not found; using current directory"
+        return 1
+    fi
+
+    selected="$(printf '%s\n' "${candidates[@]}" | fzf)" || {
+        print -u2 "warning: workspace selection cancelled; using current directory"
+        return 1
+    }
+    if [ -z "$selected" ]; then
+        print -u2 "warning: workspace selection cancelled; using current directory"
+        return 1
+    fi
+    print -r -- "$selected"
+}
+
 function herdrstart(){
     if [ "${HERDR_ENV:-}" = "1" ] || [ -n "${TMUX:-}" ] || [ ! -t 0 ] || [ ! -t 1 ]; then
         return 0
@@ -82,7 +115,20 @@ function herdrstart(){
     if command -v herdr-status-updater >/dev/null 2>&1; then
         herdr-status-updater --daemon || true
     fi
-    herdr
+    local project_dir
+    project_dir="$(select_devcontainer_workspace)" || project_dir=""
+    if [ -n "$project_dir" ]; then
+        (
+            if builtin cd -- "$project_dir"; then
+                herdr
+            else
+                print -u2 "warning: cannot enter ${project_dir}; using current directory"
+                herdr
+            fi
+        )
+    else
+        herdr
+    fi
 }
 
 function tmuxstart(){
