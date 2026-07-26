@@ -97,6 +97,11 @@ make_fzf_stub() {
     local test_home="$1"
     printf '%s\n' '#!/bin/sh' \
         'if [ "${FZF_TEST_CANCEL:-0}" = "1" ]; then exit 130; fi' \
+        'found=0' \
+        'while IFS= read -r candidate; do' \
+        '    [ "$candidate" = "$FZF_TEST_SELECTION" ] && found=1' \
+        'done' \
+        '[ "$found" -eq 1 ] || exit 3' \
         'if [ "${FZF_TEST_REMOVE_SELECTION:-0}" = "1" ]; then rm -rf -- "$FZF_TEST_SELECTION"; fi' \
         'printf "%s\\n" "$FZF_TEST_SELECTION"' \
         > "$test_home/bin/fzf"
@@ -169,8 +174,21 @@ test_launch_and_guards() {
 test_workspace_selection() {
     local test_home="${TEST_ROOT}/home-selection"
     make_stub_home "$test_home"
-    mkdir -p "$test_home/workspaces/repo-two"
+
+    mkdir -p "$test_home/linked-repo"
+    ln -s "$test_home/linked-repo" "$test_home/workspaces/repo-link"
     make_fzf_stub "$test_home"
+
+    run_zshrc_tty "$test_home" \
+        FZF_TEST_SELECTION="$test_home/workspaces/repo-link"
+    assert_contains "$test_home/herdr.log" \
+        "^called TZ=Asia/Tokyo cwd=${test_home}/linked-repo$"
+
+    rm "$test_home/workspaces/repo-link"
+    : > "$test_home/herdr.log"
+    : > "$test_home/stderr.log"
+
+    mkdir -p "$test_home/workspaces/repo-two"
 
     run_zshrc_tty "$test_home" \
         FZF_TEST_SELECTION="$test_home/workspaces/repo-two"

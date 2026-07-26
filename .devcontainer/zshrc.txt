@@ -75,7 +75,7 @@ function select_devcontainer_workspace() {
     local -a candidates
     local selected
 
-    candidates=("${workspaces_root}"/*(N/))
+    candidates=("${workspaces_root}"/*(N-/))
     case "${#candidates[@]}" in
         0)
             print -u2 "warning: no workspace directories found under ${workspaces_root}; using current directory"
