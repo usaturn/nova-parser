@@ -205,8 +205,6 @@ test_workspace_selection() {
     [ "$(wc -l < "$test_home/herdr.log")" -eq 1 ] || \
         fail 'herdr starts exactly once when selected workspace cannot be entered'
     assert_contains "$test_home/stderr.log" 'cannot enter'
-    [ "$(wc -l < "$test_home/herdr.log")" -eq 1 ] || \
-        fail 'herdr starts exactly once after selected workspace cannot be entered'
 
     rm -rf "$test_home/workspaces/repo-one" "$test_home/workspaces/repo-two"
     : > "$test_home/herdr.log"
@@ -245,10 +243,13 @@ test_tmux_workspace_selection() {
 
     rm -rf "$test_home/workspaces/repo-one"
     : > "$test_home/tmux.log"
+    : > "$test_home/stderr.log"
     run_zshrc_code "$test_home" \
-        'cd "$HOME"; source "$ZSHRC_TEMPLATE"; tmuxstart'
+        'cd "$HOME"; source "$ZSHRC_TEMPLATE"; tmuxstart' \
+        2>"$test_home/stderr.log"
     assert_contains "$test_home/tmux.log" \
         "args=-u new-session -A -s yamada -n yamada -c ${test_home} ; set-environment -g TZ Asia/Tokyo"
+    assert_contains "$test_home/stderr.log" 'no workspace directories found'
 }
 
 # herdr 内で status updater が死んだときの復旧経路（precmd）を検証する。
