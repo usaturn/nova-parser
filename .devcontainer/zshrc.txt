@@ -135,7 +135,8 @@ function tmuxstart(){
     if [ -n "${TMUX:-}" ] || [ "${HERDR_ENV:-}" = "1" ]; then
         return 0
     fi
-    local project_dir="/workspaces/$(ls /workspaces/)"
+    local project_dir
+    project_dir="$(select_devcontainer_workspace)" || project_dir="$PWD"
     export TZ="${TZ:-Asia/Tokyo}"
     tmux -u new-session -A -s yamada -n yamada -c "${project_dir}" \; \
         set-environment -g TZ "${TZ}"

@@ -34,6 +34,7 @@ run_zshrc_code() {
         PATH="$test_home/bin:/usr/bin:/bin" \
         DEVCONTAINER_WORKSPACES_ROOT="$test_home/workspaces" \
         HERDR_TEST_LOG="$test_home/herdr.log" \
+        HERDR_TEST_LOG_TMUX="$test_home/tmux.log" \
         ZSHRC_TEMPLATE="$ZSHRC_TEMPLATE" \
         "$@" /usr/bin/zsh -f -c "$zsh_code" </dev/null >/dev/null
 }
@@ -64,6 +65,7 @@ run_zshrc_tty() {
         PATH="$test_home/bin:/usr/bin:/bin" \
         DEVCONTAINER_WORKSPACES_ROOT="$test_home/workspaces" \
         HERDR_TEST_LOG="$test_home/herdr.log" \
+        HERDR_TEST_LOG_TMUX="$test_home/tmux.log" \
         HERDR_TEST_AFTER_LOG="$test_home/after.log" \
         HERDR_TEST_STDERR="$test_home/stderr.log" \
         ZSHRC_TEMPLATE="$ZSHRC_TEMPLATE" \
@@ -80,11 +82,15 @@ make_stub_home() {
     printf '%s\n' '#!/bin/sh' \
         'printf "updater %s\\n" "$*" >> "$HERDR_TEST_LOG.upd"' \
         > "$dir/bin/herdr-status-updater"
-    chmod +x "$dir/bin/starship" "$dir/bin/herdr" "$dir/bin/herdr-status-updater"
+    printf '%s\n' '#!/bin/sh' \
+        'printf "cwd=%s args=%s\\n" "$(pwd -P)" "$*" >> "$HERDR_TEST_LOG_TMUX"' \
+        > "$dir/bin/tmux"
+    chmod +x "$dir/bin/starship" "$dir/bin/herdr" "$dir/bin/herdr-status-updater" "$dir/bin/tmux"
     # set -e 下で `wc -l < 不在ファイル` が無言終了しないよう先に空で作る
     : > "$dir/herdr.log"
     : > "$dir/herdr.log.upd"
     : > "$dir/after.log"
+    : > "$dir/tmux.log"
 }
 
 make_fzf_stub() {
@@ -206,6 +212,23 @@ test_workspace_selection() {
     assert_contains "$test_home/stderr.log" 'workspace selection cancelled'
 }
 
+test_tmux_workspace_selection() {
+    local test_home="${TEST_ROOT}/home-tmux"
+    make_stub_home "$test_home"
+
+    run_zshrc_code "$test_home" \
+        'cd "$HOME"; source "$ZSHRC_TEMPLATE"; tmuxstart'
+    assert_contains "$test_home/tmux.log" \
+        "args=-u new-session -A -s yamada -n yamada -c ${test_home}/workspaces/repo-one ; set-environment -g TZ Asia/Tokyo"
+
+    rm -rf "$test_home/workspaces/repo-one"
+    : > "$test_home/tmux.log"
+    run_zshrc_code "$test_home" \
+        'cd "$HOME"; source "$ZSHRC_TEMPLATE"; tmuxstart'
+    assert_contains "$test_home/tmux.log" \
+        "args=-u new-session -A -s yamada -n yamada -c ${test_home} ; set-environment -g TZ Asia/Tokyo"
+}
+
 # herdr 内で status updater が死んだときの復旧経路（precmd）を検証する。
 # herdrstart 経路は test_launch_and_guards が担当。
 test_precmd_status_updater() {
@@ -269,5 +292,6 @@ test_config_and_syntax
 test_installer_wiring
 test_launch_and_guards
 test_workspace_selection
+test_tmux_workspace_selection
 test_precmd_status_updater
 printf 'PASS: herdr Dev Container migration\n'
