@@ -184,7 +184,11 @@ test_workspace_selection() {
         FZF_TEST_REMOVE_SELECTION=1
     assert_contains "$test_home/herdr.log" \
         "^called TZ=Asia/Tokyo cwd=${test_home}$"
+    [ "$(wc -l < "$test_home/herdr.log")" -eq 1 ] || \
+        fail 'herdr starts exactly once when selected workspace cannot be entered'
     assert_contains "$test_home/stderr.log" 'cannot enter'
+    [ "$(wc -l < "$test_home/herdr.log")" -eq 1 ] || \
+        fail 'herdr starts exactly once after selected workspace cannot be entered'
 
     rm -rf "$test_home/workspaces/repo-one" "$test_home/workspaces/repo-two"
     : > "$test_home/herdr.log"
