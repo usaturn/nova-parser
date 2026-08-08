@@ -93,6 +93,7 @@ make_stub_home() {
         'printf "updater %s\\n" "$*" >> "$HERDR_TEST_LOG.upd"' \
         > "$dir/bin/herdr-status-updater"
     printf '%s\n' '#!/bin/sh' \
+        'if [ "$1" = "has-session" ]; then exit "${TMUX_TEST_HAS_SESSION_RC:-1}"; fi' \
         'printf "cwd=%s args=%s\\n" "$(pwd -P)" "$*" >> "$HERDR_TEST_LOG_TMUX"' \
         > "$dir/bin/tmux"
     chmod +x "$dir/bin/starship" "$dir/bin/herdr" "$dir/bin/herdr-status-updater" "$dir/bin/tmux"
@@ -285,6 +286,26 @@ test_herdr_attach_skips_selection() {
         || fail 'attach must launch herdr exactly once'
 }
 
+# tmux new-session -A は既存セッションがあると attach 相当になり -c が無視されるため、
+# herdrstart と同じく選択をスキップする。
+test_tmux_attach_skips_selection() {
+    local test_home="${TEST_ROOT}/home-tmux-attach"
+    make_stub_home "$test_home"
+
+    mkdir -p "$test_home/workspaces/repo-two"
+    make_fzf_stub "$test_home"
+
+    run_zshrc_code "$test_home" \
+        'cd "$HOME"; source "$ZSHRC_TEMPLATE"; tmuxstart' \
+        TMUX_TEST_HAS_SESSION_RC=0 \
+        FZF_TEST_SELECTION="$test_home/workspaces/repo-two"
+
+    [ ! -s "$test_home/fzf.log" ] \
+        || fail 'fzf must not run while a tmux session already exists'
+    assert_contains "$test_home/tmux.log" \
+        "args=-u new-session -A -s yamada -n yamada -c ${test_home} ; set-environment -g TZ Asia/Tokyo"
+}
+
 # herdr 内で status updater が死んだときの復旧経路（precmd）を検証する。
 # herdrstart 経路は test_launch_and_guards が担当。
 test_precmd_status_updater() {
@@ -350,5 +371,6 @@ test_launch_and_guards
 test_workspace_selection
 test_tmux_workspace_selection
 test_herdr_attach_skips_selection
+test_tmux_attach_skips_selection
 test_precmd_status_updater
 printf 'PASS: herdr Dev Container migration\n'

@@ -145,8 +145,11 @@ function tmuxstart(){
     if [ -n "${TMUX:-}" ] || [ "${HERDR_ENV:-}" = "1" ]; then
         return 0
     fi
-    local project_dir
-    project_dir="$(select_devcontainer_workspace)" || project_dir="$PWD"
+    # 既存 yamada セッションがあると new-session -A は attach になり -c が無視される。
+    local project_dir="$PWD"
+    if ! tmux has-session -t yamada 2>/dev/null; then
+        project_dir="$(select_devcontainer_workspace)" || project_dir="$PWD"
+    fi
     export TZ="${TZ:-Asia/Tokyo}"
     tmux -u new-session -A -s yamada -n yamada -c "${project_dir}" \; \
         set-environment -g TZ "${TZ}"
