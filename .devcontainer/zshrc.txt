@@ -52,9 +52,17 @@ alias gitc="git branch -a| fzf | xargs git checkout"
 alias gitd="git branch | fzf | xargs git branch -D"
 alias gits="git stash list | fzf | awk -F '{|}' '{print $2}' | git stash apply"
 alias ccd="claude --dangerously-skip-permissions"
-alias cod="codex --dangerously-bypass-approvals-and-sandbox"
 alias agd="agy --dangerously-skip-permissions"
 alias grk="grok --minimal"
+
+function cod(){
+    if [[ -z "$CONTEXT7_API_KEY" ]]; then
+        read -rs "CONTEXT7_API_KEY?Context7 API key: "
+        export CONTEXT7_API_KEY
+        echo
+    fi
+    codex --dangerously-bypass-approvals-and-sandbox "$@"
+}
 
 # bun completions
 [ -s "/home/vscode/.bun/_bun" ] && source "/home/vscode/.bun/_bun"
