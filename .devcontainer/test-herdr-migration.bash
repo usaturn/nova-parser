@@ -109,6 +109,7 @@ make_fzf_stub() {
     local test_home="$1"
     printf '%s\n' '#!/bin/sh' \
         'printf "called %s\\n" "$*" >> "$HERDR_TEST_LOG_FZF"' \
+        'if [ -n "${FZF_TEST_EXIT:-}" ]; then exit "$FZF_TEST_EXIT"; fi' \
         'if [ "${FZF_TEST_CANCEL:-0}" = "1" ]; then exit 130; fi' \
         'found=0' \
         'while IFS= read -r candidate; do' \
@@ -244,6 +245,13 @@ test_workspace_selection() {
     assert_contains "$test_home/herdr.log" \
         "^called TZ=Asia/Tokyo cwd=${test_home}$"
     assert_contains "$test_home/stderr.log" 'workspace selection cancelled'
+
+    : > "$test_home/herdr.log"
+    : > "$test_home/stderr.log"
+    run_zshrc_tty "$test_home" FZF_TEST_EXIT=2
+    assert_contains "$test_home/herdr.log" \
+        "^called TZ=Asia/Tokyo cwd=${test_home}$"
+    assert_contains "$test_home/stderr.log" 'selection failed \(fzf exit 2\)'
 }
 
 test_tmux_workspace_selection() {

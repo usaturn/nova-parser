@@ -74,6 +74,7 @@ function select_devcontainer_workspace() {
     local workspaces_root="${DEVCONTAINER_WORKSPACES_ROOT:-/workspaces}"
     local -a candidates
     local selected
+    local fzf_status
 
     candidates=("${workspaces_root}"/*(N-/))
     case "${#candidates[@]}" in
@@ -92,10 +93,17 @@ function select_devcontainer_workspace() {
         return 1
     fi
 
-    selected="$(printf '%s\n' "${candidates[@]}" | fzf)" || {
+    selected="$(printf '%s\n' "${candidates[@]}" | fzf)"
+    fzf_status=$?
+    if [ "$fzf_status" -eq 130 ]; then
         print -u2 "warning: workspace selection cancelled; using current directory"
         return 1
-    }
+    fi
+    # 130 以外の非 0 は fzf の実行失敗（例: /dev/tty を開けない）。原因切り分けのため文言を分ける。
+    if [ "$fzf_status" -ne 0 ]; then
+        print -u2 "warning: workspace selection failed (fzf exit ${fzf_status}); using current directory"
+        return 1
+    fi
     if [ -z "$selected" ]; then
         print -u2 "warning: workspace selection cancelled; using current directory"
         return 1
