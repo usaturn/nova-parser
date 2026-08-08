@@ -70,6 +70,55 @@ function buni(){
 export EDITOR=code
 export LANG=ja_JP.utf8
 
+function select_devcontainer_workspace() {
+    local workspaces_root="${DEVCONTAINER_WORKSPACES_ROOT:-/workspaces}"
+    local -a candidates
+    local selected
+    local fzf_status
+
+    candidates=("${workspaces_root}"/*(N-/))
+    case "${#candidates[@]}" in
+        0)
+            print -u2 "warning: no workspace directories found under ${workspaces_root}; using current directory"
+            return 1
+            ;;
+        1)
+            print -r -- "${candidates[1]}"
+            return 0
+            ;;
+    esac
+
+    if ! command -v fzf >/dev/null 2>&1; then
+        print -u2 "warning: multiple workspace directories found but fzf not found; using current directory"
+        return 1
+    fi
+
+    selected="$(printf '%s\n' "${candidates[@]}" | fzf)"
+    fzf_status=$?
+    if [ "$fzf_status" -eq 130 ]; then
+        print -u2 "warning: workspace selection cancelled; using current directory"
+        return 1
+    fi
+    # 130 以外の非 0 は fzf の実行失敗（例: /dev/tty を開けない）。原因切り分けのため文言を分ける。
+    if [ "$fzf_status" -ne 0 ]; then
+        print -u2 "warning: workspace selection failed (fzf exit ${fzf_status}); using current directory"
+        return 1
+    fi
+    if [ -z "$selected" ]; then
+        print -u2 "warning: workspace selection cancelled; using current directory"
+        return 1
+    fi
+    print -r -- "$selected"
+}
+
+# 素の `herdr` は「起動 or 既存セッションへ attach」。attach では選択した cwd が
+# ワークスペースに反映されないため、サーバ稼働中は選択自体をスキップする。
+# stale socket に騙されないよう、ファイルの有無ではなく CLI の出力で判定する。
+function herdr_server_running() {
+    command -v herdr >/dev/null 2>&1 || return 1
+    herdr status server 2>/dev/null | grep -q '^status: running'
+}
+
 function herdrstart(){
     if [ "${HERDR_ENV:-}" = "1" ] || [ -n "${TMUX:-}" ] || [ ! -t 0 ] || [ ! -t 1 ]; then
         return 0
@@ -82,14 +131,33 @@ function herdrstart(){
     if command -v herdr-status-updater >/dev/null 2>&1; then
         herdr-status-updater --daemon || true
     fi
-    herdr
+    local project_dir=""
+    if ! herdr_server_running; then
+        project_dir="$(select_devcontainer_workspace)" || project_dir=""
+    fi
+    if [ -n "$project_dir" ]; then
+        (
+            if builtin cd -- "$project_dir"; then
+                herdr
+            else
+                print -u2 "warning: cannot enter ${project_dir}; using current directory"
+                herdr
+            fi
+        )
+    else
+        herdr
+    fi
 }
 
 function tmuxstart(){
     if [ -n "${TMUX:-}" ] || [ "${HERDR_ENV:-}" = "1" ]; then
         return 0
     fi
-    local project_dir="/workspaces/$(ls /workspaces/)"
+    # 既存 yamada セッションがあると new-session -A は attach になり -c が無視される。
+    local project_dir="$PWD"
+    if ! tmux has-session -t yamada 2>/dev/null; then
+        project_dir="$(select_devcontainer_workspace)" || project_dir="$PWD"
+    fi
     export TZ="${TZ:-Asia/Tokyo}"
     tmux -u new-session -A -s yamada -n yamada -c "${project_dir}" \; \
         set-environment -g TZ "${TZ}"
