@@ -35,6 +35,7 @@ run_zshrc_code() {
         DEVCONTAINER_WORKSPACES_ROOT="$test_home/workspaces" \
         HERDR_TEST_LOG="$test_home/herdr.log" \
         HERDR_TEST_LOG_TMUX="$test_home/tmux.log" \
+        HERDR_TEST_LOG_FZF="$test_home/fzf.log" \
         ZSHRC_TEMPLATE="$ZSHRC_TEMPLATE" \
         "$@" /usr/bin/zsh -f -c "$zsh_code" </dev/null >/dev/null
 }
@@ -66,6 +67,7 @@ run_zshrc_tty() {
         DEVCONTAINER_WORKSPACES_ROOT="$test_home/workspaces" \
         HERDR_TEST_LOG="$test_home/herdr.log" \
         HERDR_TEST_LOG_TMUX="$test_home/tmux.log" \
+        HERDR_TEST_LOG_FZF="$test_home/fzf.log" \
         HERDR_TEST_AFTER_LOG="$test_home/after.log" \
         HERDR_TEST_STDERR="$test_home/stderr.log" \
         ZSHRC_TEMPLATE="$ZSHRC_TEMPLATE" \
@@ -77,6 +79,14 @@ make_stub_home() {
     mkdir -p "$dir/bin" "$dir/workspaces/repo-one"
     printf '%s\n' '#!/bin/sh' 'exit 0' > "$dir/bin/starship"
     printf '%s\n' '#!/bin/sh' \
+        'if [ "$1" = "status" ]; then' \
+        '    if [ "${HERDR_TEST_SERVER_RUNNING:-0}" = "1" ]; then' \
+        '        printf "status: running\\n"' \
+        '    else' \
+        '        printf "status: not running\\n"' \
+        '    fi' \
+        '    exit 0' \
+        'fi' \
         'printf "called TZ=%s cwd=%s\\n" "${TZ:-}" "$(pwd -P)" >> "$HERDR_TEST_LOG"' \
         > "$dir/bin/herdr"
     printf '%s\n' '#!/bin/sh' \
@@ -91,11 +101,13 @@ make_stub_home() {
     : > "$dir/herdr.log.upd"
     : > "$dir/after.log"
     : > "$dir/tmux.log"
+    : > "$dir/fzf.log"
 }
 
 make_fzf_stub() {
     local test_home="$1"
     printf '%s\n' '#!/bin/sh' \
+        'printf "called %s\\n" "$*" >> "$HERDR_TEST_LOG_FZF"' \
         'if [ "${FZF_TEST_CANCEL:-0}" = "1" ]; then exit 130; fi' \
         'found=0' \
         'while IFS= read -r candidate; do' \
@@ -114,6 +126,7 @@ test_config_and_syntax() {
     assert_contains "$HERDR_CONFIG" '\$clock'
     assert_contains "$ZSHRC_TEMPLATE" '^function herdrstart\(\)\{$'
     assert_contains "$ZSHRC_TEMPLATE" 'herdr-status-updater'
+    assert_contains "$ZSHRC_TEMPLATE" '^function herdr_server_running\(\) \{'
 
     # 手動 tmuxstart: 関数は必須、末尾の単独呼び出しは禁止
     assert_contains "$ZSHRC_TEMPLATE" '^function tmuxstart\(\)\{$'
@@ -252,6 +265,26 @@ test_tmux_workspace_selection() {
     assert_contains "$test_home/stderr.log" 'no workspace directories found'
 }
 
+# herdr サーバ稼働中は attach になり選択した cwd が効かないため、fzf を出さない。
+test_herdr_attach_skips_selection() {
+    local test_home="${TEST_ROOT}/home-attach"
+    make_stub_home "$test_home"
+
+    mkdir -p "$test_home/workspaces/repo-two"
+    make_fzf_stub "$test_home"
+
+    run_zshrc_tty "$test_home" \
+        HERDR_TEST_SERVER_RUNNING=1 \
+        FZF_TEST_SELECTION="$test_home/workspaces/repo-two"
+
+    [ ! -s "$test_home/fzf.log" ] \
+        || fail 'fzf must not run while the herdr server is running'
+    assert_contains "$test_home/herdr.log" \
+        "^called TZ=Asia/Tokyo cwd=${test_home}$"
+    [ "$(wc -l < "$test_home/herdr.log")" -eq 1 ] \
+        || fail 'attach must launch herdr exactly once'
+}
+
 # herdr 内で status updater が死んだときの復旧経路（precmd）を検証する。
 # herdrstart 経路は test_launch_and_guards が担当。
 test_precmd_status_updater() {
@@ -316,5 +349,6 @@ test_installer_wiring
 test_launch_and_guards
 test_workspace_selection
 test_tmux_workspace_selection
+test_herdr_attach_skips_selection
 test_precmd_status_updater
 printf 'PASS: herdr Dev Container migration\n'

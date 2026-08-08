@@ -103,6 +103,14 @@ function select_devcontainer_workspace() {
     print -r -- "$selected"
 }
 
+# 素の `herdr` は「起動 or 既存セッションへ attach」。attach では選択した cwd が
+# ワークスペースに反映されないため、サーバ稼働中は選択自体をスキップする。
+# stale socket に騙されないよう、ファイルの有無ではなく CLI の出力で判定する。
+function herdr_server_running() {
+    command -v herdr >/dev/null 2>&1 || return 1
+    herdr status server 2>/dev/null | grep -q '^status: running'
+}
+
 function herdrstart(){
     if [ "${HERDR_ENV:-}" = "1" ] || [ -n "${TMUX:-}" ] || [ ! -t 0 ] || [ ! -t 1 ]; then
         return 0
@@ -115,8 +123,10 @@ function herdrstart(){
     if command -v herdr-status-updater >/dev/null 2>&1; then
         herdr-status-updater --daemon || true
     fi
-    local project_dir
-    project_dir="$(select_devcontainer_workspace)" || project_dir=""
+    local project_dir=""
+    if ! herdr_server_running; then
+        project_dir="$(select_devcontainer_workspace)" || project_dir=""
+    fi
     if [ -n "$project_dir" ]; then
         (
             if builtin cd -- "$project_dir"; then
