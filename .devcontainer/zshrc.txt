@@ -53,7 +53,7 @@ alias gitd="git branch | fzf | xargs git branch -D"
 alias gits="git stash list | fzf | awk -F '{|}' '{print $2}' | git stash apply"
 alias ccd="claude --dangerously-skip-permissions"
 alias agd="agy --dangerously-skip-permissions"
-alias grk="grok --minimal"
+alias oc="opencode --auto"
 
 function cod(){
     if [[ -z "$CONTEXT7_API_KEY" ]]; then
@@ -128,7 +128,8 @@ function herdr_server_running() {
 }
 
 function herdrstart(){
-    if [ "${HERDR_ENV:-}" = "1" ] || [ -n "${TMUX:-}" ] || [ ! -t 0 ] || [ ! -t 1 ]; then
+    if [ -n "${HERDR_SOCKET_PATH:-}" ] || [ "${HERDR_ENV:-}" = "1" ] \
+        || [ -n "${TMUX:-}" ] || [ ! -t 0 ] || [ ! -t 1 ]; then
         return 0
     fi
     export TZ="${TZ:-Asia/Tokyo}"
@@ -158,7 +159,7 @@ function herdrstart(){
 }
 
 function tmuxstart(){
-    if [ -n "${TMUX:-}" ] || [ "${HERDR_ENV:-}" = "1" ]; then
+    if [ -n "${TMUX:-}" ] || [ "${HERDR_ENV:-}" = "1" ] || [ -n "${HERDR_SOCKET_PATH:-}" ]; then
         return 0
     fi
     # 既存 yamada セッションがあると new-session -A は attach になり -c が無視される。
@@ -195,6 +196,9 @@ function update(){
     claude update
     yarn global add @openai/codex@latest
     grok update
+    agy update
+    curl -fsSL https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen.sh | bash
+    opencode upgrade
 }
 
 # Starship プロンプト

@@ -29,7 +29,7 @@ run_zshrc_code() {
     local test_home="$1"
     local zsh_code="$2"
     shift 2
-    env -u TMUX -u HERDR_ENV \
+    env -u TMUX -u HERDR_ENV -u HERDR_SOCKET_PATH \
         HOME="$test_home" \
         PATH="$test_home/bin:/usr/bin:/bin" \
         DEVCONTAINER_WORKSPACES_ROOT="$test_home/workspaces" \
@@ -61,7 +61,7 @@ run_zshrc_tty() {
     local test_home="$1"
     local zsh_command='/usr/bin/zsh -f -c '\''cd "$HOME"; source "$ZSHRC_TEMPLATE"; pwd -P > "$HERDR_TEST_AFTER_LOG"'\'' 2>"$HERDR_TEST_STDERR"'
     shift
-    env -u TMUX -u HERDR_ENV \
+    env -u TMUX -u HERDR_ENV -u HERDR_SOCKET_PATH \
         HOME="$test_home" \
         PATH="$test_home/bin:/usr/bin:/bin" \
         DEVCONTAINER_WORKSPACES_ROOT="$test_home/workspaces" \
@@ -179,6 +179,13 @@ test_launch_and_guards() {
     [ ! -s "$test_home/herdr.log" ] || fail 'TMUX guard'
     [ ! -s "$test_home/herdr.log.upd" ] || fail 'TMUX herdrstart updater guard'
 
+    # herdr ペイン内（HERDR_SOCKET_PATH 設定済み）では起動しない。
+    : > "$test_home/herdr.log"
+    : > "$test_home/herdr.log.upd"
+    run_zshrc_tty "$test_home" HERDR_SOCKET_PATH="$test_home/herdr.sock"
+    [ ! -s "$test_home/herdr.log" ] || fail 'HERDR_SOCKET_PATH guard'
+    [ ! -s "$test_home/herdr.log.upd" ] || fail 'HERDR_SOCKET_PATH herdrstart updater guard'
+
     mv "$test_home/bin/herdr" "$test_home/bin/herdr.disabled"
     : > "$test_home/herdr.log.upd"
     run_zshrc_tty "$test_home"
@@ -272,6 +279,13 @@ test_tmux_workspace_selection() {
     assert_contains "$test_home/tmux.log" \
         "args=-u new-session -A -s yamada -n yamada -c ${test_home} ; set-environment -g TZ Asia/Tokyo"
     assert_contains "$test_home/stderr.log" 'no workspace directories found'
+
+    # herdr ペイン内（HERDR_SOCKET_PATH 設定済み）では tmuxstart も no-op。
+    : > "$test_home/tmux.log"
+    run_zshrc_code "$test_home" \
+        'cd "$HOME"; source "$ZSHRC_TEMPLATE"; tmuxstart' \
+        HERDR_SOCKET_PATH="$test_home/herdr.sock"
+    [ ! -s "$test_home/tmux.log" ] || fail 'HERDR_SOCKET_PATH tmuxstart guard'
 }
 
 # herdr サーバ稼働中は attach になり選択した cwd が効かないため、fzf を出さない。
