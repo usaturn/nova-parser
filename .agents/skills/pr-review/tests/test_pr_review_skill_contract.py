@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+
 REPO_ROOT = Path(__file__).resolve().parents[4]
 AGENTS_SKILL = REPO_ROOT / ".agents/skills/pr-review/SKILL.md"
 CLAUDE_SKILL = REPO_ROOT / ".claude/skills/pr-review/SKILL.md"
@@ -30,6 +31,12 @@ def assert_review_contract(content: str) -> None:
     assert "不明（旧形式）" in content
     assert content.count("headRefOid") >= 3
     assert "他モデルのレビュー本文" in content
+    assert 'PR_URL=$(printf \'%s\' "$PR_JSON" | jq -r .url)' in content
+    assert 'if printf \'%s\' "$PR_URL" | grep -q devenv; then' in content
+    assert 'MAIN_ROOT="$TOPLEVEL/devenv"' in content
+    assert 'MAIN_ROOT="$(pwd)"' in content
+    assert "git remote get-url origin" not in content
+    assert "追跡パス" not in content
 
 
 @pytest.mark.parametrize("skill", [AGENTS_SKILL, CLAUDE_SKILL])

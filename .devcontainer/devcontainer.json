@@ -52,7 +52,7 @@
 
 	// Use 'postCreateCommand' to run commands after the container is created.
 	// "postCreateCommand": "uname -a",
-	"postCreateCommand": "sudo mkdir -p /home/vscode/.local/bin /home/vscode/.local/share/opencode && sudo chown vscode:vscode /home/vscode/.local /home/vscode/.local/bin /home/vscode/.local/share /home/vscode/.local/share/opencode && /bin/bash .devcontainer/install_beforehand.bash",
+	"postCreateCommand": "/bin/bash .devcontainer/install_beforehand.bash",
 	// Configure tool-specific properties.
 	// "customizations": {},
     "customizations": {

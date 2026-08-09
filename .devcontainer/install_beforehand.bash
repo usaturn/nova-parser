@@ -2,9 +2,12 @@
 
 set -u
 
+sudo mkdir -p /home/vscode/.local/bin /home/vscode/.local/share/opencode
+sudo chown -R vscode:vscode /home/vscode/.local
+
 cat .devcontainer/zshrc.txt >> ${HOME}/.zshrc
 cp .devcontainer/tmux.conf ${HOME}/.tmux.conf
-sudo perl -pi -e 's@http://archive\.ubuntu\.com@https://archive.ubuntu.com@g; s@http://security\.ubuntu\.com@https://security.ubuntu.com@g' /etc/apt/sources.list.d/ubuntu.sources && sudo apt update
+sudo perl -pi -e 's@http://archive\.ubuntu\.com@https://archive.ubuntu.com@g; s@http://security\.ubuntu\.com@https://security.ubuntu.com@g' /etc/apt/sources.list.d/ubuntu.sources
 sudo apt update && sudo apt install -y tmux vim tig ripgrep fzf bubblewrap
 echo "Setting up Japanese locale..."
 sudo perl -pi -e 's/# ja_JP\.UTF-8/ja_JP.UTF-8/' /etc/locale.gen
