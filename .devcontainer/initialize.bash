@@ -10,6 +10,7 @@ mkdir -p \
   "${HOME}/.config/glab-cli" \
   "${HOME}/.config/gcloud" \
   "${HOME}/.config/opencode" \
+  "${HOME}/.local/share/opencode" \
   "${HOME}/.qwen" \
   "${HOME}/.gemini/config"
 

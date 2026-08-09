@@ -50,10 +50,15 @@ export PATH
 alias gitm="git fetch -p && git checkout origin/main"
 alias gitc="git branch -a| fzf | xargs git checkout"
 alias gitd="git branch | fzf | xargs git branch -D"
-alias gits="git stash list | fzf | awk -F '{|}' '{print $2}' | git stash apply"
 alias ccd="claude --dangerously-skip-permissions"
 alias agd="agy --dangerously-skip-permissions"
 alias oc="opencode --auto"
+
+gits() {
+  local s
+  s=$(git stash list | fzf) || return
+  git stash apply "${s%%:*}"
+}
 
 function cod(){
     if [[ -z "$CONTEXT7_API_KEY" ]]; then

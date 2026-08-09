@@ -29,11 +29,6 @@ uv add --dev <package>
 uv run task ruff
 ```
 
-Headroom はプロジェクトの uv / Python 3.14 管理から完全に分離している。
-システムの Python 3.12 で作成した独立 venv (`~/.headroom-venv`) で管理し、`~/bin/headroom` wrapper 経由で `headroom` コマンドとして利用する。
-devcontainer の postCreate 時に自動セットアップされる。
-（以前は dev dep + `uv run` で管理していたが、PyO3 ビルド問題と重い依存の観点から分離した。）
-
 ## アーキテクチャ
 
 ### プロジェクト概要

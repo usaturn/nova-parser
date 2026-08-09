@@ -16,7 +16,7 @@ GitHub 上の指定された Pull Request（PR）に対して高品質なコー�
 - プロダクトコード・テストを編集しない
 - レビュー中は `git clean`、`git checkout -f`、`git reset --hard`、`git worktree remove --force` を実行しない。既存 worktree を再利用・初期化・自動削除しない
 - 独立したレビューを行うため、`reviews/<変換後ブランチ名>/` にある他モデルのレビュー本文は、候補の洗い出し・重点観点の収集・重複確認・自分の指摘の検証を含むいかなる目的でも読まない。レビュー完了後も読まない。メインリポジトリ側と `$WT` 側（PR に同梱された `reviews/`）のどちらも対象とする
-- `MAIN_ROOT` は、remote origin の URL に `devenv` が含まれる場合は手順 2 の追跡パス判定より先に toplevel 直下のパス `devenv` の submodule ルートへ確定する。含まれない場合は手順 2 の追跡パス判定で一意に決め、決まらない場合は推測せず停止してユーザに確認する
+- `MAIN_ROOT` は、指定された PR の URL に `devenv` が含まれる場合は toplevel 直下のパス `devenv` の submodule ルートへ確定する。含まれない場合はカレントディレクトリを `MAIN_ROOT` とする
 - 自モデルの既存レビューはライブの `$DESTINATION` ではなく、`create` が返した `$PREVIOUS_REVIEW`（セッション内 snapshot）だけを読む。`$PREVIOUS_REVIEW` が空なら既存レビューなしとして扱う
 - Claude Code ランタイムが提示する正確なモデル識別子を `MODEL_NAME` として記録し、`create --model-name "$MODEL_NAME"` に一度だけ渡す。モデル系列の説明、設定ファイル、既存レビューのファイル名から推測・短縮・一般化しない
 - 正確なモデル識別子を取得できない場合は、代替名・ファイル名からの推測で続行せず停止してユーザに確認する
@@ -56,27 +56,17 @@ GitHub 上の指定された Pull Request（PR）に対して高品質なコー�
    - gh が未認証・API エラーの場合はエラー内容をそのまま報告し、`gh auth login` を案内する。
 2. **worktree への展開**:
    - ユーザの作業ブランチ・working tree に触れないため、`gh pr checkout` は使わない。
-   - `MAIN_ROOT` は二段階で決める。まず remote origin の URL を確認し、`devenv` が含まれる場合は追跡パス判定をスキップして toplevel 直下のパス `devenv` の submodule ルートを `MAIN_ROOT` に確定する。`devenv` が含まれない場合のみ追跡パス判定で機械的に決める。追跡パス判定を使う場合、親リポジトリと submodule が同じ origin を指す構成ではどちらでも `$MAIN_ROOT/.claude/skills/pr-review` が成立して保存先 `reviews/` が二つのリポジトリに分裂し、互いの保存ロックも共有されないため、URL で親か submodule かを推測しない。
+   - `MAIN_ROOT` は、指定された PR の URL に `devenv` が含まれる場合は toplevel 直下のパス `devenv` の submodule ルートへ確定し、含まれない場合はカレントディレクトリを `MAIN_ROOT` とする。PR の URL は手順 1 で取得した `$PR_JSON` の `url` フィールドを使う。remote origin の URL では判定しない。
      ```bash
+     PR_URL=$(printf '%s' "$PR_JSON" | jq -r .url)
      TOPLEVEL=$(git rev-parse --show-toplevel)
-     # devenv 判定: origin URL に devenv が含まれる場合は追跡パス判定をスキップする
-     if git remote get-url origin 2>/dev/null | grep -q devenv; then
+     if printf '%s' "$PR_URL" | grep -q devenv; then
        MAIN_ROOT="$TOPLEVEL/devenv"
+     else
+       MAIN_ROOT="$(pwd)"
      fi
      ```
-   - devenv 判定で `MAIN_ROOT` を設定した場合、`git -C "$TOPLEVEL" submodule status -- devenv` が成功することを確認する。失敗した場合（toplevel 直下にパス `devenv` の submodule が登録されていない等）は推測せず停止してユーザに確認する。
-   - origin の URL に `devenv` が含まれない場合のみ、追跡パス判定を行う。
-     ```bash
-     PR_PATHS=$(mktemp)
-     gh pr view "$PR_NUMBER" --json files --jq '.files[].path' > "$PR_PATHS"
-     # 候補の列挙
-     git rev-parse --show-toplevel
-     git submodule --quiet foreach --recursive 'echo "$toplevel/$sm_path"'
-     # 候補 R ごとに、PR の変更パスをいくつ追跡しているか数える
-     xargs -a "$PR_PATHS" -d '\n' git -C "$R" ls-files -- | wc -l
-     ```
-   - シェルによっては変数の単語分割が働かないため、パス一覧は必ずファイル経由で `xargs -a ... -d '\n'` に渡す。変数を裸で展開しない。
-   - 追跡数が最大の候補が一意ならそれを `MAIN_ROOT` とする。全候補が 0（新規追加ファイルだけの PR 等）または最大値が同点の場合は推測せず停止してユーザに確認する。
+   - PR の URL に `devenv` が含まれ `MAIN_ROOT` を submodule ルートに確定した場合、`git -C "$TOPLEVEL" submodule status -- devenv` が成功することを確認する。失敗した場合（toplevel 直下にパス `devenv` の submodule が登録されていない等）は推測せず停止してユーザに確認する。
    - `HELPER="$MAIN_ROOT/.claude/skills/pr-review/scripts/pr_review_workspace.py"` を記録する。以降、メインリポジトリに対する Git コマンドには必ず `git -C "$MAIN_ROOT"` を使い、カレントディレクトリへ暗黙に作用させない。
    - Claude Code ランタイムが提示する正確なモデル識別子を `MODEL_NAME` に設定する（`/` を含む provider 形式もそのまま渡してよい。ヘルパーがファイル名用に `/` を `-` へ置換する）。取得できない場合は既存 filename や系列名から推測せず停止してユーザに確認する。
    - PR head は PR 番号ごとの専用 ref `PR_REF=refs/pr-review/<PR_NUMBER>` に固定する。`git -C "$MAIN_ROOT" fetch origin "+pull/<PR_NUMBER>/head:$PR_REF"` の後、`PR_HEAD=$(git -C "$MAIN_ROOT" rev-parse "$PR_REF")` で検証対象 SHA を確定する。共有の擬似参照 `FETCH_HEAD` は使わない。
@@ -289,7 +279,7 @@ Merge recommendation の判定基準:
 - 「コメントしないこと」に該当する指摘が紛れていないか
 - メインリポジトリ側と `$WT` 側の `reviews/<変換後ブランチ名>/` にある他モデルのレビュー本文を、自分でもサブエージェント経由でも開いたり検索対象に含めたりしていないか
 - Merge recommendation が判定基準と整合し、active findings のみから計算されているか
-- `MAIN_ROOT` は remote origin の URL に `devenv` が含まれる場合は toplevel 直下のパス `devenv` の submodule ルートに確定し、含まれない場合は追跡パス判定で一意に決めたか。`merge-base HEAD "$PR_REF"` の成功を確認したか
+- `MAIN_ROOT` は指定された PR の URL に `devenv` が含まれる場合は toplevel 直下のパス `devenv` の submodule ルートに確定し、含まれない場合はカレントディレクトリとしたか。`merge-base HEAD "$PR_REF"` の成功を確認したか
 - `create` が返した `model_name`、`draft`、`destination`、`previous_review` を変更・再構築せず使用したか
 - 正確な `$MODEL_NAME` を `--model-name "$MODEL_NAME"` で渡し、filename から推測していないか
 - `save` を `--state "$STATE_FILE"` だけで実行し、caller-selected path を渡していないか
