@@ -5,7 +5,7 @@ set -u
 cat .devcontainer/zshrc.txt >> ${HOME}/.zshrc
 cp .devcontainer/tmux.conf ${HOME}/.tmux.conf
 sudo perl -pi -e 's@http://archive\.ubuntu\.com@https://archive.ubuntu.com@g; s@http://security\.ubuntu\.com@https://security.ubuntu.com@g' /etc/apt/sources.list.d/ubuntu.sources && sudo apt update
-sudo apt update && sudo apt install -y tmux vim tig ripgrep fzf
+sudo apt update && sudo apt install -y tmux vim tig ripgrep fzf bubblewrap
 echo "Setting up Japanese locale..."
 sudo perl -pi -e 's/# ja_JP\.UTF-8/ja_JP.UTF-8/' /etc/locale.gen
 sudo locale-gen
@@ -19,11 +19,22 @@ echo "Installing Grok Build..."
 curl -fsSL https://x.ai/cli/install.sh | bash
 echo "Installing AntiGravity CLI..."
 curl -fsSL https://antigravity.google/cli/install.sh | bash
+echo "Installing OpenCode..."
+curl -fsSL https://opencode.ai/install | bash
+export PATH="${HOME}/.opencode/bin:$PATH"
+echo "Installing Qwen Code..."
+curl -fsSL https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen-standalone.sh | bash
 
-YARN_GLOBAL_BIN="$(yarn global bin)"
-export PATH="$YARN_GLOBAL_BIN:$HOME/.local/bin:$PATH"
+YARN_GLOBAL_BIN="$(yarn global bin 2>/dev/null || true)"
+if [ -n "$YARN_GLOBAL_BIN" ] && [ -d "$YARN_GLOBAL_BIN" ]; then
+    export PATH="$YARN_GLOBAL_BIN:$PATH"
+fi
+export PATH="$HOME/.local/bin:$PATH"
 
+# Install uv
 curl -LsSf https://astral.sh/uv/install.sh | sh
+
+echo "Installing bun..."
 curl -fsSL https://bun.com/install | bash
 
 echo "Installing Starship..."
@@ -43,53 +54,7 @@ cp .devcontainer/tmux-git-status.bash "${HOME}/bin/tmux-git-status.bash"
 chmod +x "${HOME}/bin/tmux-git-status.bash"
 cp .devcontainer/tmux-url-copy.zsh "${HOME}/bin/tmux-url-copy.zsh"
 chmod +x "${HOME}/bin/tmux-url-copy.zsh"
-
-# -------------------------------------------------------------------
-# Headroom 専用独立 venv のセットアップ（システム Python 3.12 使用）
-# 目的:
-# - プロジェクトの Python 3.14 + uv 管理から完全に分離
-# - PyO3 / maturin による 3.14 ビルドエラーを根本回避
-# - headroom-ai[all] の重い依存（torch 等）をプロジェクト .venv に混入させない
-# - uv を使わず古典的な venv + pip で管理（ユーザ指定の方式）
-# -------------------------------------------------------------------
-echo "Setting up isolated Headroom venv with system Python 3.12..."
-
-HEADROOM_VENV="${HOME}/.headroom-venv"
-HEADROOM_BIN="${HEADROOM_VENV}/bin/headroom"
-WRAPPER_BIN="${HOME}/bin/headroom"
-
-if [ ! -x "$HEADROOM_BIN" ]; then
-    echo "Creating fresh headroom venv at ${HEADROOM_VENV} using $(python3 --version) ..."
-    rm -rf "$HEADROOM_VENV"
-    python3 -m venv "$HEADROOM_VENV"
-
-    echo "Upgrading pip in headroom venv..."
-    "$HEADROOM_VENV/bin/pip" install --upgrade pip setuptools wheel
-
-    echo "Installing headroom-ai[all] (this may take several minutes and consume significant disk)..."
-    "$HEADROOM_VENV/bin/pip" install "headroom-ai[all]"
-
-    echo "Headroom venv created successfully."
-else
-    echo "Headroom venv already exists at ${HEADROOM_VENV}. Skipping creation."
-fi
-
-# ~/bin/headroom wrapper を作成（uv run headroom 時代と同じコマンド名で使えるようにする）
-if [ ! -x "$WRAPPER_BIN" ]; then
-    cat > "$WRAPPER_BIN" << 'EOF'
-#!/bin/bash
-# Wrapper for headroom (managed in ~/.headroom-venv with system Python 3.12)
-# This allows `headroom` command to work without uv or activating the venv.
-exec "$HOME/.headroom-venv/bin/headroom" "$@"
-EOF
-    chmod +x "$WRAPPER_BIN"
-    echo "Created wrapper: $WRAPPER_BIN"
-else
-    echo "Wrapper already exists: $WRAPPER_BIN"
-fi
-
-echo "Headroom setup complete. Try: headroom --version"
-# -------------------------------------------------------------------
+mkdir -p "${HOME}/.local/bin" && [ -d "${HOME}/.local/bin" ] && export PATH="${HOME}/.local/bin:${PATH}"
 
 echo "Installing Herdr..."
 if ! (set -o pipefail; curl -fsSL https://herdr.dev/install.sh | sh); then
