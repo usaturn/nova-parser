@@ -130,6 +130,7 @@ Output/
 *.skill
 trpg_data/
 trpg_rule/
+reviews/
 
 uv.lock
 

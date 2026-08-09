@@ -9,13 +9,19 @@
 		"source=${localEnv:HOME}/.grok,target=/home/vscode/.grok,type=bind,consistency=cached",
 		"source=${localEnv:HOME}/.config/gh,target=/home/vscode/.config/gh,type=bind,consistency=cached",
 		"source=${localEnv:HOME}/.config/glab-cli,target=/home/vscode/.config/glab-cli,type=bind,consistency=cached",
-		"source=${localEnv:HOME}/.config/gcloud,target=/home/vscode/.config/gcloud,type=bind,consistency=cached"
+		"source=${localEnv:HOME}/.config/gcloud,target=/home/vscode/.config/gcloud,type=bind,consistency=cached",
+		"source=${localEnv:HOME}/.config/opencode,target=/home/vscode/.config/opencode,type=bind,consistency=cached",
+		"source=${localEnv:HOME}/.local/share/opencode/auth.json,target=/home/vscode/.local/share/opencode/auth.json,type=bind,consistency=cached",
+		"source=${localEnv:HOME}/.qwen/settings.json,target=/home/vscode/.qwen/settings.json,type=bind,consistency=cached",
+		"source=${localEnv:HOME}/.qwen,target=/home/vscode/.qwen,type=bind,consistency=cached",
+		"source=${localEnv:HOME}/.gemini/config/,target=/home/vscode/.gemini/config/,type=bind,consistency=cached"
 	],
     "containerEnv": {
         "SHELL": "/usr/bin/zsh"
     },
+	"initializeCommand": "/bin/bash .devcontainer/initialize.bash",
 	// Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
-	"image": "mcr.microsoft.com/devcontainers/base:noble",
+	"image": "mcr.microsoft.com/devcontainers/base:ubuntu26.04",
 	"runArgs": [
 		"--env-file",
 		"${localWorkspaceFolder}/.env",
@@ -46,8 +52,7 @@
 
 	// Use 'postCreateCommand' to run commands after the container is created.
 	// "postCreateCommand": "uname -a",
-	"postCreateCommand": "/bin/bash .devcontainer/install_beforehand.bash",
-
+	"postCreateCommand": "sudo mkdir -p /home/vscode/.local/bin /home/vscode/.local/share/opencode && sudo chown vscode:vscode /home/vscode/.local /home/vscode/.local/bin /home/vscode/.local/share /home/vscode/.local/share/opencode && /bin/bash .devcontainer/install_beforehand.bash",
 	// Configure tool-specific properties.
 	// "customizations": {},
     "customizations": {
