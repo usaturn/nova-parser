@@ -32,7 +32,12 @@ class GeminiLayoutExample(BaseModel):
 
 
 def classify_layout(image_width: int, image_height: int, candidate_count: int) -> LayoutFamily:
-    """向きと候補密度から few-shot 用のレイアウト種別を返す。"""
+    """向きと段落密度から few-shot 用のレイアウト種別を返す。
+
+    ``candidate_count`` は縦ブロック統合前の Cloud Vision 段落／テキストブロック数
+    （fixture の ``paragraph_blocks`` 長）。統合後の縦ブロック候補数ではない。
+    横長かつこの値が 80 以上なら ``landscape_dense``、未満なら ``landscape_sparse``。
+    """
     if image_height >= image_width:
         return "portrait"
     if candidate_count >= 80:

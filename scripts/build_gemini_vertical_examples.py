@@ -39,7 +39,7 @@ def build_example_bank(fixture_dir: Path) -> dict[str, Any]:
         paragraphs = [BlockRect(**block) for block in fixture["paragraph_blocks"]]
         candidates = compute_vertical_blocks(image_width, image_height, paragraphs)
         expected = [BlockRect(**block) for block in fixture["expected_blocks"]]
-        # 密度は段落数で測る（縦ブロック統合後は数が少なく landscape_dense が消えるため）。
+        # classify_layout の密度入力は統合前段落数（閾値80）。candidates は縦ブロック。
         family = classify_layout(image_width, image_height, len(paragraphs))
         examples.append(
             {

@@ -93,3 +93,26 @@ def test_load_examples_filters_by_family() -> None:
     dense = load_examples("landscape_dense")
     assert [example.stem for example in dense] == ["warse_start_p20", "warse_start_p42"]
     assert all(example.candidates and example.groups for example in portrait + dense)
+
+
+def test_example_bank_families_match_paragraph_density_contract() -> None:
+    """bank の family は paragraph_blocks 長による classify_layout と一致する。"""
+    fixture_dir = Path("tests/fixtures/regional_layout_test")
+    bank = build_example_bank(fixture_dir)
+    expected_families = {
+        "WaresBrade_P034": "portrait",
+        "WaresBrade_P040": "portrait",
+        "WaresBrade_P053": "portrait",
+        "warse_rule_p18": "landscape_sparse",
+        "warse_rule_p42": "landscape_sparse",
+        "warse_start_p20": "landscape_dense",
+        "warse_start_p42": "landscape_dense",
+    }
+    assert {item["stem"]: item["family"] for item in bank["examples"]} == expected_families
+    for item in bank["examples"]:
+        fixture = json.loads((fixture_dir / f"{item['stem']}.json").read_text(encoding="utf-8"))
+        assert item["family"] == classify_layout(
+            int(fixture["image_width"]),
+            int(fixture["image_height"]),
+            len(fixture["paragraph_blocks"]),
+        )
