@@ -14,6 +14,7 @@ from typing import Callable, Sequence
 from google.genai import types
 
 from nova_parser.gemini_backend import get_client
+from nova_parser.regional_ocr import gemini_layout as _gemini_layout
 from nova_parser.regional_ocr.layout import compute_vertical_blocks
 from nova_parser.regional_ocr.models import BlockRect
 
@@ -200,45 +201,33 @@ def groups_from_expected(
     expected: Sequence[dict[str, int]],
 ) -> list[dict[str, list[int]]]:
     """正解矩形内に中心がある候補を、重複なしのfew-shot正解groupsへ変換する。"""
-    assigned: set[int] = set()
-    groups: list[dict[str, list[int]]] = []
-    for target in expected:
-        ids: list[int] = []
-        for index, candidate in enumerate(candidates):
-            if index in assigned:
-                continue
-            center_x = candidate["x"] + candidate["width"] / 2
-            center_y = candidate["y"] + candidate["height"] / 2
-            if (
-                target["x"] <= center_x <= target["x"] + target["width"]
-                and target["y"] <= center_y <= target["y"] + target["height"]
-            ):
-                ids.append(index)
-                assigned.add(index)
-        if ids:
-            groups.append({"candidate_ids": ids})
-    return groups
+    groups = _gemini_layout.groups_from_expected(
+        [BlockRect(**candidate) for candidate in candidates],
+        [BlockRect(**target) for target in expected],
+    )
+    return [{"candidate_ids": ids} for ids in groups]
 
 
 def merge_candidate_groups(
     candidates: Sequence[dict[str, int]],
     groups: Sequence[dict[str, Sequence[int]]],
 ) -> list[dict[str, int]]:
-    """モデルが選んだ候補groupを外接矩形へ変換し、重複IDを無視する。"""
+    """モデルが選んだ候補groupを外接矩形へ変換し、重複・範囲外IDを無視する。"""
     used: set[int] = set()
-    merged: list[dict[str, int]] = []
+    normalized: list[list[int]] = []
     for group in groups:
         ids = [index for index in group["candidate_ids"] if 0 <= index < len(candidates) and index not in used]
         if not ids:
             continue
         used.update(ids)
-        blocks = [candidates[index] for index in ids]
-        left = min(block["x"] for block in blocks)
-        top = min(block["y"] for block in blocks)
-        right = max(block["x"] + block["width"] for block in blocks)
-        bottom = max(block["y"] + block["height"] for block in blocks)
-        merged.append({"x": left, "y": top, "width": right - left, "height": bottom - top})
-    return merged
+        normalized.append(ids)
+    return [
+        block.model_dump()
+        for block in _gemini_layout.merge_candidate_groups(
+            [BlockRect(**candidate) for candidate in candidates],
+            normalized,
+        )
+    ]
 
 
 def _local_candidates(fixture: dict[str, object]) -> list[dict[str, int]]:
