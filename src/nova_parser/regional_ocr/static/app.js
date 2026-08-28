@@ -130,6 +130,7 @@ function regionalOcrApp() {
     _blocksEpoch: 0,
     _geminiRequestFor: null,
     _geminiRequestEpoch: null,
+    _imageSwitching: false,
     undoneItems: [],
     undoneLoading: false,
     undoneBlocked: false,
@@ -154,6 +155,9 @@ function regionalOcrApp() {
 
       await this._drainSaves();
 
+      // meta/session await 中は currentImage が旧画像のままなので、粒度変更からの
+      // Gemini POST を起こさない。await 後にブロック一覧を再クリアしてから解除する。
+      this._imageSwitching = true;
       this.selectedRectId = null;
       this.imgLoaded = false;
       this.draftRect = null;
@@ -175,13 +179,23 @@ function regionalOcrApp() {
           mime: meta.mime_type,
         };
         this.session = await api.getSession(name);
-        if (this.blockMode) this._ensureBlocks();
+        // await 中に旧画像名で着地した Gemini / 検出結果を捨ててから新画像を読む
+        this.paragraphBlocks = null;
+        this.verticalBlocks = null;
+        this.horizontalBlocks = null;
+        this.geminiVerticalBlocks = null;
+        this.geminiBlocksLoading = false;
+        this._geminiRequestFor = null;
+        this._geminiRequestEpoch = null;
       } catch (err) {
         console.error(err);
         this.currentImage = null;
         this.session = null;
         this.warnings = [`画像のロードに失敗: ${err.message}`];
+      } finally {
+        this._imageSwitching = false;
       }
+      if (this.blockMode) this._ensureBlocks();
     },
 
     async _drainSaves() {
@@ -459,6 +473,7 @@ function regionalOcrApp() {
         value !== "paragraph" &&
         value !== "vertical-gemini"
       ) return;
+      if (this._imageSwitching) return;
       this.blockGranularity = value;
       // 粒度変更でホバーをクリアし、次の mousemove から新しい当たり判定を使う
       this.hoverBlock = null;
@@ -527,6 +542,7 @@ function regionalOcrApp() {
     },
 
     async _ensureGeminiVerticalBlocks() {
+      if (this._imageSwitching) return;
       if (!this.currentImage || !this.blockMode) return;
       if (this.geminiVerticalBlocks !== null) return;
       const imageName = this.currentImage.name;

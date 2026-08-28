@@ -71,7 +71,7 @@
               x-show="blockMode"
               x-model="blockGranularity"
               @change="setGranularity(blockGranularity)"
-              :disabled="blocksLoading || geminiBlocksLoading || !!dragMode"
+              :disabled="blocksLoading || geminiBlocksLoading || _imageSwitching || !!dragMode"
               title="ブロック選択の粒度"
             >
               <option value="vertical">縦ブロック</option>

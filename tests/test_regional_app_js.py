@@ -2344,7 +2344,7 @@ def test_index_html_offers_four_granularity_options() -> None:
     assert '<option value="horizontal">横ブロック</option>' in html
     assert '<option value="paragraph">段落</option>' in html
     assert "Gemini統合中…" in html
-    assert ':disabled="blocksLoading || geminiBlocksLoading || !!dragMode"' in html
+    assert ':disabled="blocksLoading || geminiBlocksLoading || _imageSwitching || !!dragMode"' in html
 
 
 def test_ensure_blocks_stores_both_lists_and_warns_only_when_both_empty() -> None:
@@ -2638,6 +2638,126 @@ const app = newApp({
   );
   assert.equal(app.warnings.includes("STALE_GEMINI_WARNING"), false);
   assert.equal(app.geminiBlocksLoading, false);
+})().catch((err) => { console.error(err); process.exit(1); });
+"""
+    )
+
+
+def test_set_granularity_during_select_image_meta_await_does_not_keep_old_gemini_blocks() -> None:
+    """selectImage の meta await 中に vertical-gemini を選んでも、旧画像の Gemini 矩形は残さず新画像を POST する。"""
+    _run_node_inline(
+        _BLOCKS_PAYLOAD
+        + r"""
+let resolveBMeta;
+let resolveAGemini;
+let resolveBBlocks;
+const geminiPosts = [];
+global.fetch = (url, options = {}) => {
+  if (url === "/api/image/b.png") {
+    return new Promise((resolve) => {
+      resolveBMeta = () => resolve(fetchResponse({ image_width: 100, image_height: 100, mime_type: "image/png" }));
+    });
+  }
+  if (url === "/api/session/b.png") {
+    return Promise.resolve(fetchResponse(sessionPayload("b.png", [])));
+  }
+  if (url === "/api/blocks/a.png/vertical-gemini") {
+    geminiPosts.push("a.png");
+    return new Promise((resolve) => {
+      resolveAGemini = () => resolve(fetchResponse({
+        vertical_blocks: [{ x: 1, y: 1, width: 2, height: 2 }],
+        source: "gemini",
+        model: "gemini-3.5-flash-lite",
+        cache_hit: false,
+        warning: null,
+      }));
+    });
+  }
+  if (url === "/api/blocks/b.png/vertical-gemini") {
+    assert.equal(options.method, "POST");
+    geminiPosts.push("b.png");
+    return Promise.resolve(fetchResponse({
+      vertical_blocks: [{ x: 7, y: 7, width: 8, height: 8 }],
+      source: "gemini",
+      model: "gemini-3.5-flash-lite",
+      cache_hit: false,
+      warning: null,
+    }));
+  }
+  if (url === "/api/blocks/b.png") {
+    return new Promise((resolve) => {
+      resolveBBlocks = () => resolve(fetchResponse({
+        ...blocksPayload("b.png", [{ x: 5, y: 5, width: 10, height: 10 }]),
+        vertical_blocks: [{ x: 5, y: 5, width: 10, height: 10 }],
+        horizontal_blocks: [],
+      }));
+    });
+  }
+  if (url === "/api/blocks/a.png") {
+    return Promise.resolve(fetchResponse({
+      ...blocksPayload("a.png", [{ x: 1, y: 1, width: 2, height: 2 }]),
+      vertical_blocks: [{ x: 1, y: 1, width: 2, height: 2 }],
+      horizontal_blocks: [],
+    }));
+  }
+  throw new Error(`unexpected fetch: ${url}`);
+};
+const aGeminiRects = [{ x: 1, y: 1, width: 2, height: 2 }];
+const app = newApp({
+  currentImage: { name: "a.png", width: 100, height: 100, mime: "image/png" },
+  session: sessionPayload("a.png", []),
+  imgLoaded: true,
+  blockMode: true,
+  blockGranularity: "vertical-gemini",
+  paragraphBlocks: [{ x: 1, y: 1, width: 2, height: 2 }],
+  verticalBlocks: [{ x: 1, y: 1, width: 2, height: 2 }],
+  horizontalBlocks: [],
+  geminiVerticalBlocks: aGeminiRects,
+  warnings: [],
+});
+(async () => {
+  const selecting = app.selectImage("b.png");
+  await tick();
+  assert.equal(
+    app.currentImage.name,
+    "a.png",
+    "selectImage は meta fetch を await 中で、currentImage はまだ a.png のまま",
+  );
+  assert.equal(app.geminiVerticalBlocks, null, "切替開始で Gemini 矩形は一旦クリア");
+  assert.equal(app._imageSwitching, true);
+
+  await app.setGranularity("vertical-gemini");
+  await tick();
+  assert.equal(
+    geminiPosts.includes("a.png"),
+    false,
+    "画像切替中は outgoing 画像へ Gemini POST しない",
+  );
+
+  if (resolveAGemini) resolveAGemini();
+  await tick();
+  assert.notDeepEqual(
+    app.geminiVerticalBlocks,
+    aGeminiRects,
+    "遅延した a.png Gemini 応答を適用してはいけない",
+  );
+
+  resolveBMeta();
+  await selecting;
+  await tick();
+  assert.equal(app._imageSwitching, false);
+  assert.equal(geminiPosts.filter((name) => name === "b.png").length, 0, "local GET 完了前に Gemini POST しない");
+
+  resolveBBlocks();
+  await tick();
+
+  assert.deepEqual(
+    app.geminiVerticalBlocks,
+    [{ x: 7, y: 7, width: 8, height: 8 }],
+    "切替完了後は b.png の Gemini 矩形だけを持つ",
+  );
+  assert.equal(geminiPosts.filter((name) => name === "a.png").length, 0);
+  assert.equal(geminiPosts.filter((name) => name === "b.png").length, 1);
 })().catch((err) => { console.error(err); process.exit(1); });
 """
     )
