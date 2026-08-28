@@ -2,9 +2,6 @@
 
 set -u
 
-sudo mkdir -p /home/vscode/.local/bin /home/vscode/.local/share/opencode
-sudo chown -R vscode:vscode /home/vscode/.local
-
 cat .devcontainer/zshrc.txt >> ${HOME}/.zshrc
 cp .devcontainer/tmux.conf ${HOME}/.tmux.conf
 sudo perl -pi -e 's@http://archive\.ubuntu\.com@https://archive.ubuntu.com@g; s@http://security\.ubuntu\.com@https://security.ubuntu.com@g' /etc/apt/sources.list.d/ubuntu.sources

@@ -50,14 +50,47 @@ export PATH
 alias gitm="git fetch -p && git checkout origin/main"
 alias gitc="git branch -a| fzf | xargs git checkout"
 alias gitd="git branch | fzf | xargs git branch -D"
-alias ccd="claude --dangerously-skip-permissions"
-alias agd="agy --dangerously-skip-permissions"
-alias oc="opencode --auto"
-
-gits() {
+function gits() {
   local s
   s=$(git stash list | fzf) || return
   git stash apply "${s%%:*}"
+}
+
+alias ccd="claude --dangerously-skip-permissions"
+
+function claude-alibaba ccda () {
+  local flash=deepseek-v4-flash-0731
+  local -a opts
+  [[ $funcstack[1] == ccda ]] && opts=(--dangerously-skip-permissions)
+
+  env \
+    ANTHROPIC_BASE_URL="https://token-plan.ap-southeast-1.maas.aliyuncs.com/apps/anthropic" \
+    ANTHROPIC_AUTH_TOKEN="${MAAS_ANTHROPIC_TOKEN:?MAAS_ANTHROPIC_TOKEN is not set}" \
+    ANTHROPIC_DEFAULT_FABLE_MODEL=qwen3.8-max \
+    ANTHROPIC_DEFAULT_OPUS_MODEL=deepseek-v4-pro-0813 \
+    ANTHROPIC_DEFAULT_SONNET_MODEL=${flash} \
+    ANTHROPIC_DEFAULT_HAIKU_MODEL=qwen3.6-flash \
+    CLAUDE_CODE_SUBAGENT_MODEL=${flash} \
+    CLAUDE_CODE_EFFORT_LEVEL=max \
+    CLAUDE_CODE_MAX_OUTPUT_TOKENS=65536 \
+    claude "${opts[@]}" "$@"
+}
+
+function claude-deepinfra ccdd () {
+  local flash=deepseek-ai/DeepSeek-V4-Flash-0731
+  local -a opts
+  [[ $funcstack[1] == ccdd ]] && opts=(--dangerously-skip-permissions)
+
+  env \
+    ANTHROPIC_BASE_URL="https://api.deepinfra.com/anthropic" \
+    ANTHROPIC_AUTH_TOKEN="${DEEPINFRA_TOKEN:?DEEPINFRA_TOKEN is not set}" \
+    ANTHROPIC_DEFAULT_OPUS_MODEL=deepseek-ai/DeepSeek-V4-Pro-0813 \
+    ANTHROPIC_DEFAULT_SONNET_MODEL=${flash} \
+    ANTHROPIC_DEFAULT_HAIKU_MODEL=zai-org/GLM-4.7-Flash \
+    CLAUDE_CODE_SUBAGENT_MODEL=${flash} \
+    CLAUDE_CODE_EFFORT_LEVEL=max \
+    CLAUDE_CODE_MAX_OUTPUT_TOKENS=65536 \
+    claude "${opts[@]}" "$@"
 }
 
 function cod(){
