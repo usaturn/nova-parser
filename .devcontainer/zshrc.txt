@@ -201,9 +201,8 @@ function update(){
     claude update
     yarn global add @openai/codex@latest
     grok update
-    agy update
-    curl -fsSL https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen.sh | bash
-    opencode upgrade
+    pi update
+    pi update --extensions
 }
 
 # Starship プロンプト

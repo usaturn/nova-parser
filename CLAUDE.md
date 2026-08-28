@@ -42,7 +42,7 @@ uv run task ruff
 - 配置場所を指定せずにドキュメントを書けと言われた際は、 @tmp/docs_draft/ 配下にドキュメントを作成すること。 @tmp/docs_draft/ 配下のドキュメントはレビューした上で手動で @docs/ 配下に正式ドキュメントとして配置する
 - @tmp/docs_draft/ 配下のドキュメントは下書きレベルであり、誤りがある場合もあるので、あまり参考にしない。
 - スキル superpowers で Spec や Plan を作成した際に絶対 commit しない
-- スキル: superpowers:executing-plans, superpowers:subagent-driven-development でリポジトリを更新する際は、remote origin の HEAD からフォークし、worktree で作業し commit を許可する。その後 PR せよ
+- スキル: superpowers:executing-plans, superpowers:subagent-driven-development, superpowers:writing-skills などの superpower 系スキルでリポジトリを更新する際は、remote origin の HEAD からフォークし、worktree で作業し commit を許可する。その後 PR せよ
 - ローカルに `main` ブランチを作成しない
 - 正とするブランチは常に `origin/main`
 - `origin/main` を更新する変更は、`origin/main` から worktree を作成して feature ブランチ上で作業し、PR で取り込む。`main` 上では commit しない
