@@ -126,6 +126,16 @@ class BlockDetectionResponse(BlockDetectionResult):
     horizontal_blocks: list[BlockRect] = Field(default_factory=list)
 
 
+class GeminiVerticalBlockResponse(BaseModel):
+    """POST /api/blocks/{name}/vertical-gemini のレスポンス。"""
+
+    vertical_blocks: list[BlockRect]
+    source: Literal["gemini", "local_fallback"]
+    model: str
+    cache_hit: bool
+    warning: str | None = None
+
+
 class ImageListResponse(BaseModel):
     """画像一覧の取得結果を表すモデル。"""
 

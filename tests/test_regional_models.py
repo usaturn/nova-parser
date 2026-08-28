@@ -20,6 +20,7 @@ from nova_parser.regional_ocr.models import (
     BlockDetectionResponse,
     BlockDetectionResult,
     BlockRect,
+    GeminiVerticalBlockResponse,
     ImageSession,
     Rectangle,
     RegionRecord,
@@ -313,6 +314,45 @@ def test_block_detection_response_extends_cache_model_with_vertical_blocks():
     assert resp.schema_version == 1
     # キャッシュモデル側には vertical_blocks が存在しない（保存対象外の保証）
     assert "vertical_blocks" not in BlockDetectionResult.model_fields
+
+
+def test_gemini_vertical_block_response_accepts_gemini_source():
+    """GeminiVerticalBlockResponse は source='gemini' を受理し、warning は既定 None。"""
+    response = GeminiVerticalBlockResponse(
+        vertical_blocks=[BlockRect(x=1, y=2, width=3, height=4)],
+        source="gemini",
+        model="gemini-3.5-flash-lite",
+        cache_hit=False,
+    )
+    assert response.warning is None
+    assert response.source == "gemini"
+    assert response.model == "gemini-3.5-flash-lite"
+    assert response.cache_hit is False
+    assert response.vertical_blocks == [BlockRect(x=1, y=2, width=3, height=4)]
+
+
+def test_gemini_vertical_block_response_accepts_local_fallback_source():
+    """GeminiVerticalBlockResponse は source='local_fallback' と warning を受理する。"""
+    response = GeminiVerticalBlockResponse(
+        vertical_blocks=[BlockRect(x=1, y=2, width=3, height=4)],
+        source="local_fallback",
+        model="gemini-3.5-flash-lite",
+        cache_hit=False,
+        warning="Gemini縦ブロック生成に失敗したためローカル結果を使用しました",
+    )
+    assert response.source == "local_fallback"
+    assert response.warning == "Gemini縦ブロック生成に失敗したためローカル結果を使用しました"
+
+
+def test_gemini_vertical_block_response_rejects_unknown_source():
+    """GeminiVerticalBlockResponse は gemini / local_fallback 以外の source を拒否する。"""
+    with pytest.raises(ValidationError):
+        GeminiVerticalBlockResponse(
+            vertical_blocks=[],
+            source="unknown",
+            model="gemini-3.5-flash-lite",
+            cache_hit=False,
+        )
 
 
 # ---------------------------------------------------------------------------

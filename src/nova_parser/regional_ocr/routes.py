@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+import logging
 from collections import Counter
 from collections.abc import Iterator
 from pathlib import Path
@@ -19,6 +20,20 @@ from nova_parser.regional_ocr.errors import (
     RegionNotFoundError,
     StemCollisionError,
 )
+from nova_parser.regional_ocr.gemini_layout import (
+    MODEL as GEMINI_LAYOUT_MODEL,
+)
+from nova_parser.regional_ocr.gemini_layout import (
+    PROMPT_CONTRACT_VERSION,
+    GeminiLayoutError,
+    generate_vertical_blocks,
+)
+from nova_parser.regional_ocr.gemini_layout_cache import (
+    GeminiLayoutCacheEntry,
+    build_fingerprint,
+    load_cached_blocks,
+    save_cached_blocks,
+)
 from nova_parser.regional_ocr.images import (
     IMAGE_MIME_TYPES,
     list_images,
@@ -32,6 +47,7 @@ from nova_parser.regional_ocr.models import (
     BatchOcrItemResult,
     BlockDetectionResponse,
     BlockDetectionResult,
+    GeminiVerticalBlockResponse,
     ImageListResponse,
     ImageMetaResponse,
     ImageSession,
@@ -43,6 +59,8 @@ from nova_parser.regional_ocr.models import (
 from nova_parser.regional_ocr.ocr_client import detect_blocks, ocr_rectangle
 from nova_parser.regional_ocr.sessions import load_session, save_session, session_path, upsert_region
 from nova_parser.regional_ocr.state import AppState
+
+logger = logging.getLogger(__name__)
 
 
 def _same_geometry(a: Rectangle, b: Rectangle) -> bool:
@@ -62,6 +80,45 @@ def _to_blocks_response(result: BlockDetectionResult) -> BlockDetectionResponse:
     vertical = compute_vertical_blocks(result.image_width, result.image_height, result.blocks)
     horizontal = compute_horizontal_blocks(result.image_width, result.image_height, result.blocks)
     return BlockDetectionResponse(**result.model_dump(), vertical_blocks=vertical, horizontal_blocks=horizontal)
+
+
+def _resolve_unique_image(name: str, state: AppState) -> Path:
+    """画像を解決し、同 stem の別拡張子があれば 409 相当の StemCollisionError を raise する。"""
+    path = resolve_image(state.image_dir, name)
+    # {stem}.blocks.json キャッシュは stem 単位のため、foo.png と foo.webp のような
+    # stem 衝突があると別画像間でキャッシュを共有し誤った段組を返す。バッチ OCR と
+    # 同様に、要求画像の stem が衝突する場合は 409 で拒否する。
+    siblings = sorted(
+        p.name
+        for p in state.image_dir.iterdir()
+        if p.is_file() and p.suffix.lower() in IMAGE_MIME_TYPES and p.stem == path.stem
+    )
+    if len(siblings) >= 2:
+        raise StemCollisionError(f"stem collision: {', '.join(siblings)}")
+    return path
+
+
+def _load_or_detect_blocks(name: str, state: AppState) -> BlockDetectionResult:
+    """Cloud Vision 段落キャッシュを読み、不一致・欠損時だけ再検出して保存する。"""
+    path = _resolve_unique_image(name, state)
+    cached = load_blocks(state.output_dir, name)
+    # {stem}.blocks.json は stem 単位のため、a.png のキャッシュ生成後に a.png を削除して
+    # 同 stem・別拡張子の a.webp へ置き換えると、要求名と異なる画像のキャッシュがヒットしうる。
+    # image_name が一致する場合のみ再利用し、不一致は cache miss として再検出・上書きする。
+    if cached is not None and cached.image_name == name:
+        return cached
+    image = open_pil(path)
+    client = state.vision_client_factory()
+    blocks = detect_blocks(client, image, language_hints=state.language_hints)
+    result = BlockDetectionResult(
+        image_name=name,
+        image_width=image.width,
+        image_height=image.height,
+        blocks=blocks,
+        detected_at=datetime.datetime.now(datetime.UTC),
+    )
+    save_blocks(result, state.output_dir)
+    return result
 
 
 def build_router() -> APIRouter:
@@ -98,35 +155,64 @@ def build_router() -> APIRouter:
 
     @router.get("/api/blocks/{name}", response_model=BlockDetectionResponse)
     def api_get_blocks(name: str, state: AppStateDep) -> BlockDetectionResponse:
-        path = resolve_image(state.image_dir, name)
-        # {stem}.blocks.json キャッシュは stem 単位のため、foo.png と foo.webp のような
-        # stem 衝突があると別画像間でキャッシュを共有し誤った段組を返す。バッチ OCR と
-        # 同様に、要求画像の stem が衝突する場合は 409 で拒否する。
-        siblings = sorted(
-            p.name
-            for p in state.image_dir.iterdir()
-            if p.is_file() and p.suffix.lower() in IMAGE_MIME_TYPES and p.stem == path.stem
-        )
-        if len(siblings) >= 2:
-            raise StemCollisionError(f"stem collision: {', '.join(siblings)}")
-        cached = load_blocks(state.output_dir, name)
-        # {stem}.blocks.json は stem 単位のため、a.png のキャッシュ生成後に a.png を削除して
-        # 同 stem・別拡張子の a.webp へ置き換えると、要求名と異なる画像のキャッシュがヒットしうる。
-        # image_name が一致する場合のみ再利用し、不一致は cache miss として再検出・上書きする。
-        if cached is not None and cached.image_name == name:
-            return _to_blocks_response(cached)
-        image = open_pil(path)
-        client = state.vision_client_factory()
-        blocks = detect_blocks(client, image, language_hints=state.language_hints)
-        result = BlockDetectionResult(
-            image_name=name,
-            image_width=image.width,
-            image_height=image.height,
-            blocks=blocks,
-            detected_at=datetime.datetime.now(datetime.UTC),
-        )
-        save_blocks(result, state.output_dir)
+        result = _load_or_detect_blocks(name, state)
         return _to_blocks_response(result)
+
+    @router.post("/api/blocks/{name}/vertical-gemini", response_model=GeminiVerticalBlockResponse)
+    def api_post_vertical_gemini(name: str, state: AppStateDep) -> GeminiVerticalBlockResponse:
+        path = _resolve_unique_image(name, state)
+        result = _load_or_detect_blocks(name, state)
+        local_blocks = compute_vertical_blocks(result.image_width, result.image_height, result.blocks)
+        if not local_blocks:
+            return GeminiVerticalBlockResponse(
+                vertical_blocks=[],
+                source="local_fallback",
+                model=GEMINI_LAYOUT_MODEL,
+                cache_hit=False,
+                warning="Geminiへ渡せる縦ブロック候補がありませんでした",
+            )
+        fingerprint = build_fingerprint(path, result.image_width, result.image_height, local_blocks)
+        with state.gemini_layout_lock:
+            cached = load_cached_blocks(state.output_dir, name, fingerprint)
+            if cached is not None:
+                return GeminiVerticalBlockResponse(
+                    vertical_blocks=cached,
+                    source="gemini",
+                    model=GEMINI_LAYOUT_MODEL,
+                    cache_hit=True,
+                )
+            try:
+                generated = generate_vertical_blocks(
+                    path,
+                    local_blocks,
+                    source_block_count=len(result.blocks),
+                )
+            except GeminiLayoutError:
+                logger.exception("Gemini vertical layout generation failed for %s", name)
+                return GeminiVerticalBlockResponse(
+                    vertical_blocks=local_blocks,
+                    source="local_fallback",
+                    model=GEMINI_LAYOUT_MODEL,
+                    cache_hit=False,
+                    warning="Gemini縦ブロック生成に失敗したためローカル結果を使用しました",
+                )
+            save_cached_blocks(
+                state.output_dir,
+                GeminiLayoutCacheEntry(
+                    image_name=name,
+                    fingerprint=fingerprint,
+                    model=GEMINI_LAYOUT_MODEL,
+                    prompt_contract_version=PROMPT_CONTRACT_VERSION,
+                    vertical_blocks=generated,
+                    created_at=datetime.datetime.now(datetime.UTC),
+                ),
+            )
+            return GeminiVerticalBlockResponse(
+                vertical_blocks=generated,
+                source="gemini",
+                model=GEMINI_LAYOUT_MODEL,
+                cache_hit=False,
+            )
 
     @router.get("/api/regions/undone", response_model=UndoneRegionsResponse)
     def api_regions_undone(state: AppStateDep) -> UndoneRegionsResponse:

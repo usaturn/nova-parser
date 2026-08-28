@@ -45,6 +45,23 @@ def _simple_factory(client: FakeVisionClient):
     return _factory
 
 
+def _patch_generate_vertical_blocks(monkeypatch, *, result=None, error=None):
+    """routes.generate_vertical_blocks を差し替え、呼び出し記録リストを返す。"""
+    from nova_parser.regional_ocr.models import BlockRect
+
+    calls: list[dict] = []
+    generated = result if result is not None else [BlockRect(x=1, y=2, width=3, height=4)]
+
+    def fake(image_path, local_blocks, **kwargs):
+        calls.append({"image_path": image_path, "local_blocks": list(local_blocks), **kwargs})
+        if error is not None:
+            raise error
+        return list(generated)
+
+    monkeypatch.setattr("nova_parser.regional_ocr.routes.generate_vertical_blocks", fake)
+    return calls
+
+
 # ---------------------------------------------------------------------------
 # AC-C-01: GET /api/images — PNG 2 件存在時に 200 + images に 2 件
 # ---------------------------------------------------------------------------
@@ -1125,6 +1142,188 @@ def test_get_blocks_paragraph_mode_matches_fixture_order(tmp_path):
 
     assert resp.status_code == 200
     assert resp.json()["blocks"] == fixture["paragraph_blocks"], "段落矩形に変換・並び替えを適用してはいけない"
+
+
+# ---------------------------------------------------------------------------
+# POST /api/blocks/{name}/vertical-gemini — Gemini 縦ブロック（明示選択時のみ）
+# ---------------------------------------------------------------------------
+
+
+def test_get_blocks_does_not_call_gemini_generator_but_post_does(tmp_path, monkeypatch):
+    """GET /api/blocks は generator を呼ばず、専用 POST で 1 回だけ呼び source=gemini を返す。"""
+    from nova_parser.regional_ocr.models import BlockRect
+
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "a.png", (100, 100))
+    output_dir = tmp_path / "output"
+
+    fake = FakeVisionClient(
+        _FakeResponse(
+            blocks=[
+                [(10, 10), (60, 10), (60, 40), (10, 40)],
+                [(10, 45), (60, 45), (60, 75), (10, 75)],
+            ]
+        )
+    )
+    generated = [BlockRect(x=5, y=6, width=7, height=8)]
+    calls = _patch_generate_vertical_blocks(monkeypatch, result=generated)
+    client = _make_client(image_dir, output_dir, _simple_factory(fake))
+
+    get_resp = client.get("/api/blocks/a.png")
+    assert get_resp.status_code == 200
+    assert calls == []
+    assert get_resp.json()["vertical_blocks"] == [{"x": 9, "y": 9, "width": 52, "height": 67}]
+
+    post_resp = client.post("/api/blocks/a.png/vertical-gemini")
+    assert post_resp.status_code == 200
+    data = post_resp.json()
+    assert data["source"] == "gemini"
+    assert data["model"] == "gemini-3.5-flash-lite"
+    assert data["cache_hit"] is False
+    assert data["warning"] is None
+    assert data["vertical_blocks"] == [{"x": 5, "y": 6, "width": 7, "height": 8}]
+    assert len(calls) == 1
+    assert calls[0]["source_block_count"] == 2
+    assert len(calls[0]["local_blocks"]) == 1
+    raw = json.loads((output_dir / "a.blocks.json").read_text(encoding="utf-8"))
+    assert "vertical_blocks" not in raw
+
+
+def test_post_vertical_gemini_cache_hit_then_fingerprint_miss_on_image_rewrite(tmp_path, monkeypatch):
+    """同一画像の 2 回目 POST は cache_hit で generator を再呼せず、画像 bytes 変更後は再生成する。"""
+    from nova_parser.regional_ocr.models import BlockRect
+
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "a.png", (100, 100))
+    output_dir = tmp_path / "output"
+
+    fake = FakeVisionClient(_FakeResponse(blocks=[[(10, 10), (60, 10), (60, 40), (10, 40)]]))
+    generated = [BlockRect(x=5, y=6, width=7, height=8)]
+    calls = _patch_generate_vertical_blocks(monkeypatch, result=generated)
+    client = _make_client(image_dir, output_dir, _simple_factory(fake))
+
+    first = client.post("/api/blocks/a.png/vertical-gemini")
+    second = client.post("/api/blocks/a.png/vertical-gemini")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["cache_hit"] is False
+    assert first.json()["source"] == "gemini"
+    assert second.json()["cache_hit"] is True
+    assert second.json()["source"] == "gemini"
+    assert second.json()["vertical_blocks"] == first.json()["vertical_blocks"]
+    assert len(calls) == 1
+
+    Image.new("RGB", (100, 100), color=(10, 20, 30)).save(image_dir / "a.png")
+    third = client.post("/api/blocks/a.png/vertical-gemini")
+
+    assert third.status_code == 200
+    assert third.json()["cache_hit"] is False
+    assert third.json()["source"] == "gemini"
+    assert len(calls) == 2
+
+
+def test_post_vertical_gemini_falls_back_on_layout_error(tmp_path, monkeypatch):
+    """GeminiLayoutError 時は HTTP 200 でローカル縦ブロックへ fallback し、cache を書かない。"""
+    from nova_parser.regional_ocr.gemini_layout import GeminiLayoutError
+    from nova_parser.regional_ocr.layout import compute_vertical_blocks
+    from nova_parser.regional_ocr.models import BlockRect
+
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "a.png", (100, 100))
+    output_dir = tmp_path / "output"
+
+    fake = FakeVisionClient(_FakeResponse(blocks=[[(10, 10), (60, 10), (60, 40), (10, 40)]]))
+    calls = _patch_generate_vertical_blocks(monkeypatch, error=GeminiLayoutError("boom"))
+    client = _make_client(image_dir, output_dir, _simple_factory(fake))
+
+    resp = client.post("/api/blocks/a.png/vertical-gemini")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    expected = compute_vertical_blocks(100, 100, [BlockRect(x=10, y=10, width=50, height=30)])
+    assert data["source"] == "local_fallback"
+    assert data["model"] == "gemini-3.5-flash-lite"
+    assert data["cache_hit"] is False
+    assert data["warning"] == "Gemini縦ブロック生成に失敗したためローカル結果を使用しました"
+    assert data["vertical_blocks"] == [block.model_dump() for block in expected]
+    assert len(calls) == 1
+    assert not (output_dir / "gemini-layout-cache" / "a.json").exists()
+
+
+def test_post_vertical_gemini_returns_local_fallback_when_no_candidates(tmp_path, monkeypatch):
+    """ローカル縦ブロック候補が空なら generator を呼ばず local_fallback を返す。"""
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "a.png", (100, 100))
+    output_dir = tmp_path / "output"
+
+    calls = _patch_generate_vertical_blocks(monkeypatch)
+    client = _make_client(image_dir, output_dir, _simple_factory(FakeVisionClient()))
+
+    resp = client.post("/api/blocks/a.png/vertical-gemini")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["vertical_blocks"] == []
+    assert data["source"] == "local_fallback"
+    assert data["model"] == "gemini-3.5-flash-lite"
+    assert data["cache_hit"] is False
+    assert data["warning"] == "Geminiへ渡せる縦ブロック候補がありませんでした"
+    assert calls == []
+    assert not (output_dir / "gemini-layout-cache" / "a.json").exists()
+
+
+def test_post_vertical_gemini_returns_409_on_stem_collision(tmp_path, monkeypatch):
+    """同 stem・別拡張子が同居する場合、専用 POST は既存 GET と同じ 409 で generator を呼ばない。"""
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    _write_png(image_dir / "a.png")
+    Image.new("RGB", (200, 150), color=(10, 20, 30)).save(image_dir / "a.webp")
+    output_dir = tmp_path / "output"
+
+    fake = FakeVisionClient(_FakeResponse(blocks=[[(10, 10), (60, 10), (60, 40), (10, 40)]]))
+    calls = _patch_generate_vertical_blocks(monkeypatch)
+    client = _make_client(image_dir, output_dir, _simple_factory(fake))
+
+    resp = client.post("/api/blocks/a.png/vertical-gemini")
+
+    assert resp.status_code == 409
+    assert calls == []
+    assert not (output_dir / "a.blocks.json").exists()
+    assert not (output_dir / "gemini-layout-cache" / "a.json").exists()
+
+
+def test_post_vertical_gemini_returns_404_for_unknown_image(tmp_path, monkeypatch):
+    """存在しない画像への専用 POST は既存 exception handler の 404 を維持する。"""
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    output_dir = tmp_path / "output"
+
+    calls = _patch_generate_vertical_blocks(monkeypatch)
+    client = _make_client(image_dir, output_dir, _simple_factory(FakeVisionClient()))
+    resp = client.post("/api/blocks/missing.png/vertical-gemini")
+
+    assert resp.status_code == 404
+    assert "画像ファイルが見つかりません" in resp.json()["detail"]
+    assert calls == []
+
+
+def test_post_vertical_gemini_returns_400_for_path_traversal(tmp_path, monkeypatch):
+    """path traversal な name への専用 POST は既存 exception handler の 400 を維持する。"""
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    output_dir = tmp_path / "output"
+
+    calls = _patch_generate_vertical_blocks(monkeypatch)
+    client = _make_client(image_dir, output_dir, _simple_factory(FakeVisionClient()))
+    resp = client.post("/api/blocks/%2E%2E/vertical-gemini")
+
+    assert resp.status_code == 400
+    assert calls == []
 
 
 # ---------------------------------------------------------------------------
