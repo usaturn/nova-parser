@@ -47,6 +47,7 @@ uv run nova-parser-regional Images/ --output-dir Output --host 127.0.0.1 --port 
 3. **ブロック選択モード**: ズームツールバーの「ブロック選択」トグルを ON にすると、初回のみ Cloud Vision `document_text_detection` で段落矩形を検出する（画像ごとに 1 回課金）。以降はマウスを乗せたブロックが点線でハイライトされ、クリックするとそのブロックの矩形が `pending` 領域として作成される。検出した段落は `{stem}.blocks.json` にキャッシュされ、再起動後も再課金されない（再検出したい場合はこのファイルを削除する）
 4. **ブロック粒度**: ブロック選択 ON 時に表示されるセレクタで粒度を切り替える
    - **縦ブロック**（既定）: 段落からローカル生成した縦方向の結合矩形をハイライト対象にする。この粒度で作成した矩形には `reading_order="vertical"` が付き、OCR 時に Cloud Vision の集約済みテキストではなく block 座標から縦書きの読み順（列は右→左、列内は上→下）で組み立て直す
+   - **縦ブロック（Gemini）**: 選択時だけ Gemini（モデル `gemini-3.5-flash-lite`）を呼び、ローカル縦ブロック候補を統合した矩形をハイライト対象にする。`GEMINI_API_KEY` または `VERTEX_AI_API_KEY` が必要（通常のローカル粒度だけなら不要）。AI Studio が HTTP 429 を返した場合は既存どおり同一プロセス内 sticky に Vertex へ切り替える。成功結果は `{output_dir}/gemini-layout-cache/{stem}.json` に保存され、再選択時は再課金されない（再生成したい場合はこのキャッシュを削除する）。エラー時はローカル縦ブロックを使い、警告を表示する。この粒度で作成した矩形にも `reading_order="vertical"` が付く
    - **横ブロック**: 縦書きページ向け。段落からローカル生成した、読み順（バンド上→下・バンド内右→左）の結合矩形をハイライト対象にする
    - **段落**: Cloud Vision が返した段落矩形をそのままハイライト対象にする
 5. **矩形編集**:
@@ -63,6 +64,7 @@ uv run nova-parser-regional Images/ --output-dir Output --host 127.0.0.1 --port 
 - `{output_dir}/{stem}.regions.json` — セッション全体（`ImageSession`）。 `pending` / `done` / `error` の状態を含む
 - `{output_dir}/{stem}.regions.md` — `done` の領域を `draw_order` 順に書き出した Markdown
 - `{output_dir}/{stem}.blocks.json` — ブロック選択モードの段落検出キャッシュ（`BlockDetectionResult`）。段落矩形（`blocks`）のみを保存し、`vertical_blocks` / `horizontal_blocks` はキャッシュしない
+- `{output_dir}/gemini-layout-cache/{stem}.json` — 「縦ブロック（Gemini）」成功時のレイアウトキャッシュ。削除すると次回選択時に再生成する
 
 `done` 状態の領域は、その後の `PUT /api/session/{name}` でもサーバ側でテキストを保護してマージされます（再 OCR したい場合は領域を一旦削除してから再描画）。
 
@@ -73,7 +75,7 @@ uv run nova-parser-regional Images/ --output-dir Output --host 127.0.0.1 --port 
 | 値 | 付与される条件 | OCR 時の挙動 |
 |---|---|---|
 | `vision` | 手描き読み順「横書き」（既定）、横ブロック、段落ブロック | Cloud Vision の `full_text_annotation.text` をそのまま保存する |
-| `vertical` | 手描き読み順「縦書き」、縦ブロック | block 座標から列は右→左、列内は上→下に並べ替えてテキストを組み立てる。複数列を横断する幅広 block（帯見出しなど）はいずれの列にも吸収せず、Y 位置に応じて列群の前後へ挟み込む。構造化 block が返らない場合は `vision` と同じテキストへフォールバックする |
+| `vertical` | 手描き読み順「縦書き」、縦ブロック、縦ブロック（Gemini） | block 座標から列は右→左、列内は上→下に並べ替えてテキストを組み立てる。複数列を横断する幅広 block（帯見出しなど）はいずれの列にも吸収せず、Y 位置に応じて列群の前後へ挟み込む。構造化 block が返らない場合は `vision` と同じテキストへフォールバックする |
 
 ツールバーの「手描き読み順」で選んだ値は、選択した後に新しく手描きする矩形にのみ適用されます。`reading_order` は作成後に変更できないため、既に作成済みの矩形の読み順を変えたい場合は、その矩形を削除してから作り直してください。手描きの矩形は「手描き読み順」で選び直して再度ドラッグし、ブロック選択の矩形は目的の粒度で選択し直します。
 
@@ -89,6 +91,7 @@ uv run nova-parser-regional Images/ --output-dir Output --host 127.0.0.1 --port 
 | GET | `/api/image/{name}` | 画像メタ（width / height / mime_type） |
 | GET | `/api/image/{name}/raw` | 画像バイナリ |
 | GET | `/api/blocks/{name}` | ブロック検出。`blocks`（段落）と `vertical_blocks` / `horizontal_blocks`（リクエストごとにローカル再生成）を返す。段落は初回のみ Cloud Vision を呼び `{stem}.blocks.json` にキャッシュ |
+| POST | `/api/blocks/{name}/vertical-gemini` | 「縦ブロック（Gemini）」選択時のみ呼ぶ。モデル `gemini-3.5-flash-lite` で縦ブロック候補を統合し、成功時は `{output_dir}/gemini-layout-cache/{stem}.json` に保存。失敗時はローカル縦ブロックを `source=local_fallback` で返す |
 | GET | `/api/regions/undone` | 全画像の未 OCR 領域（`pending` / `error`）を集計して返す。Vision は呼ばない（課金なし）。stem 衝突画像は `items` から除外し `warnings` で警告 |
 | GET | `/api/session/{name}` | セッション取得（`pending` 領域含む） |
 | PUT | `/api/session/{name}` | セッション upsert。`done` レコードは保護 |
