@@ -1,0 +1,105 @@
+{
+  "image_name": "WaresBrade_P050.webp",
+  "image_width": 1950,
+  "image_height": 2627,
+  "paragraph_blocks": [
+    {
+      "x": 305,
+      "y": 96,
+      "width": 429,
+      "height": 144
+    },
+    {
+      "x": 152,
+      "y": 304,
+      "width": 827,
+      "height": 68
+    },
+    {
+      "x": 154,
+      "y": 390,
+      "width": 243,
+      "height": 24
+    },
+    {
+      "x": 92,
+      "y": 431,
+      "width": 890,
+      "height": 964
+    },
+    {
+      "x": 90,
+      "y": 1329,
+      "width": 33,
+      "height": 98
+    },
+    {
+      "x": 152,
+      "y": 1412,
+      "width": 840,
+      "height": 1044
+    },
+    {
+      "x": 1054,
+      "y": 301,
+      "width": 848,
+      "height": 1306
+    },
+    {
+      "x": 1059,
+      "y": 1661,
+      "width": 840,
+      "height": 123
+    },
+    {
+      "x": 1296,
+      "y": 1908,
+      "width": 354,
+      "height": 39
+    },
+    {
+      "x": 1058,
+      "y": 2008,
+      "width": 826,
+      "height": 108
+    },
+    {
+      "x": 1295,
+      "y": 2249,
+      "width": 356,
+      "height": 40
+    },
+    {
+      "x": 1058,
+      "y": 2346,
+      "width": 828,
+      "height": 117
+    },
+    {
+      "x": 148,
+      "y": 2558,
+      "width": 35,
+      "height": 21
+    },
+    {
+      "x": 149,
+      "y": 2547,
+      "width": 26,
+      "height": 49
+    }
+  ],
+  "expected_blocks": [
+    {
+      "x": 139,
+      "y": 289,
+      "width": 872,
+      "height": 2186
+    },
+    {
+      "x": 1025,
+      "y": 290,
+      "width": 891,
+      "height": 2224
+    }
+  ]
+}
