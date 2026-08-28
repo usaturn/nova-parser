@@ -256,6 +256,19 @@ def _parse_json_with_token_retry(generate: Callable[[int], object]) -> object:
     raise RuntimeError("unreachable")
 
 
+def _layout_family(
+    image_width: int,
+    image_height: int,
+    source_block_count: int | None,
+) -> LayoutFamily:
+    """few-shot family を決める。横長では段落数が必須で、縦ブロック数は使わない。"""
+    if source_block_count is not None:
+        return classify_layout(image_width, image_height, source_block_count)
+    if image_height >= image_width:
+        return classify_layout(image_width, image_height, 0)
+    raise ValueError("source_block_count (pre-merge paragraph count) is required for landscape pages")
+
+
 def generate_vertical_blocks(
     image_path: Path,
     candidates: Sequence[BlockRect],
@@ -267,15 +280,11 @@ def generate_vertical_blocks(
     """対象画像と縦ブロック候補を Gemini で group 化し、外接矩形を返す。
 
     ``source_block_count`` は ``classify_layout`` に渡す Cloud Vision 段落数。
-    省略時は ``len(candidates)`` を使う。
+    縦ブロック候補数は渡さない。portrait では省略可。横長では必須。
     """
     try:
         image_width, image_height = _image_size(image_path)
-        family = classify_layout(
-            image_width,
-            image_height,
-            source_block_count if source_block_count is not None else len(candidates),
-        )
+        family = _layout_family(image_width, image_height, source_block_count)
         contents = _build_contents(image_path, image_width, image_height, candidates, family)
         parsed = _parse_json_with_token_retry(
             lambda max_output_tokens: _generate_content(client_factory, model, contents, max_output_tokens)

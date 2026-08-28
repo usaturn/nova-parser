@@ -252,6 +252,20 @@ def test_generate_vertical_blocks_uses_source_block_count_for_family(
     assert seen == ["landscape_dense", "landscape_sparse"]
 
 
+def test_generate_vertical_blocks_requires_source_block_count_for_landscape(tmp_path: Path) -> None:
+    image_path = _write_rgb(tmp_path, "page.png", (200, 100))
+    fake = FakeGenaiClient('{"groups":[{"candidate_ids":[0]}]}')
+    candidates = [BlockRect(x=10, y=10, width=30, height=40)]
+
+    with pytest.raises(GeminiLayoutError, match="Gemini vertical layout generation failed") as exc_info:
+        generate_vertical_blocks(image_path, candidates, client_factory=lambda: fake)
+
+    assert fake.calls == []
+    assert isinstance(exc_info.value.__cause__, ValueError)
+    assert "source_block_count" in str(exc_info.value.__cause__)
+    assert "paragraph" in str(exc_info.value.__cause__)
+
+
 def test_generate_vertical_blocks_uses_text_few_shot_and_attaches_only_target_image(tmp_path: Path) -> None:
     image_path = _write_rgb(tmp_path, "page.png", (100, 200))
     fake = FakeGenaiClient('{"groups":[{"candidate_ids":[0,1]}]}')
