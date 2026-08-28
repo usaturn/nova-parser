@@ -148,7 +148,9 @@ def test_score_detections_maximizes_matches_above_threshold() -> None:
 
     # IoU降順の貪欲法では完全一致を先に選んでTP=1になるが、
     # D0→E1 (0.5385), D1→E0 (0.7) なら2件とも閾値を満たす。
+    assert score["matched"] == 2
     assert score["true_positive"] == 2
+    assert score["mean_iou"] == 0.6192
     assert score["precision"] == 1.0
     assert score["recall"] == 1.0
 
@@ -168,10 +170,11 @@ def test_generate_boxes_with_token_retry_retries_only_truncated_json() -> None:
             candidates=[SimpleNamespace(finish_reason=types.FinishReason.STOP)],
         )
 
-    boxes, _ = generate_boxes_with_token_retry(generate)
+    boxes, responses = generate_boxes_with_token_retry(generate)
 
     assert boxes == [[0, 0, 1000, 1000]]
     assert limits == [2048, 8192]
+    assert len(responses) == 2
 
 
 def test_generate_json_with_token_retry_supports_group_responses() -> None:
@@ -189,10 +192,11 @@ def test_generate_json_with_token_retry_supports_group_responses() -> None:
             candidates=[SimpleNamespace(finish_reason=types.FinishReason.STOP)],
         )
 
-    parsed, _ = generate_json_with_token_retry(generate)
+    parsed, responses = generate_json_with_token_retry(generate)
 
     assert parsed == {"groups": [{"candidate_ids": [0, 1]}]}
     assert limits == [2048, 8192]
+    assert len(responses) == 2
 
 
 def test_groups_from_expected_assigns_each_candidate_at_most_once_by_center() -> None:

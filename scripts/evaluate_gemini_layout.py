@@ -137,26 +137,6 @@ def _iou(a: dict[str, int], b: dict[str, int]) -> float:
     return intersection / union if union else 0.0
 
 
-def _greedy_matches(
-    detected: Sequence[dict[str, int]],
-    expected: Sequence[dict[str, int]],
-) -> list[float]:
-    pairs = sorted(
-        ((_iou(detection, target), i, j) for i, detection in enumerate(detected) for j, target in enumerate(expected)),
-        reverse=True,
-    )
-    used_detected: set[int] = set()
-    used_expected: set[int] = set()
-    matches: list[float] = []
-    for iou, detected_index, expected_index in pairs:
-        if iou <= 0 or detected_index in used_detected or expected_index in used_expected:
-            continue
-        used_detected.add(detected_index)
-        used_expected.add(expected_index)
-        matches.append(iou)
-    return matches
-
-
 def _maximum_threshold_matches(
     detected: Sequence[dict[str, int]],
     expected: Sequence[dict[str, int]],
@@ -202,8 +182,8 @@ def score_detections(
     threshold: float,
 ) -> dict[str, int | float]:
     """閾値を満たす最大数の1対1対応で矩形precision/recallを算出する。"""
-    matches = _greedy_matches(detected, expected)
-    true_positive = len(_maximum_threshold_matches(detected, expected, threshold))
+    matches = _maximum_threshold_matches(detected, expected, threshold)
+    true_positive = len(matches)
     return {
         "detected": len(detected),
         "expected": len(expected),
@@ -350,11 +330,13 @@ def _image_part(path: Path) -> types.Part:
 
 def generate_json_with_token_retry(
     generate: Callable[[int], object],
-) -> tuple[dict[str, object], object]:
+) -> tuple[dict[str, object], list[object]]:
     """出力上限でJSONが切れた場合だけ上限を増やして1回再試行する。"""
     limits = (2048, 8192)
+    responses: list[object] = []
     for index, max_output_tokens in enumerate(limits):
         response = generate(max_output_tokens)
+        responses.append(response)
         try:
             parsed = json.loads(response.text)  # type: ignore[attr-defined]
         except json.JSONDecodeError:
@@ -363,16 +345,24 @@ def generate_json_with_token_retry(
             if finish_reason == types.FinishReason.MAX_TOKENS and index + 1 < len(limits):
                 continue
             raise
-        return parsed, response
+        return parsed, responses
     raise RuntimeError("unreachable")
 
 
 def generate_boxes_with_token_retry(
     generate: Callable[[int], object],
-) -> tuple[list[list[int]], object]:
+) -> tuple[list[list[int]], list[object]]:
     """矩形レスポンスを、出力上限時の再試行付きで生成する。"""
-    parsed, response = generate_json_with_token_retry(generate)
-    return [item["box_2d"] for item in parsed["blocks"]], response  # type: ignore[index]
+    parsed, responses = generate_json_with_token_retry(generate)
+    return [item["box_2d"] for item in parsed["blocks"]], responses  # type: ignore[index]
+
+
+def _usage_attempts(responses: Sequence[object]) -> list[dict[str, object] | None]:
+    usages: list[dict[str, object] | None] = []
+    for response in responses:
+        usage_metadata = response.usage_metadata  # type: ignore[attr-defined]
+        usages.append(usage_metadata.model_dump(mode="json") if usage_metadata else None)
+    return usages
 
 
 def _predict(
@@ -426,12 +416,14 @@ def _predict(
             ),
         )
 
-    normalized, response = generate_boxes_with_token_retry(generate)
+    normalized, responses = generate_boxes_with_token_retry(generate)
     detected = denormalize_boxes(normalized, int(fixture["image_width"]), int(fixture["image_height"]))
+    usage_attempts = _usage_attempts(responses)
     metadata = {
         "elapsed_seconds": round(time.perf_counter() - start, 3),
         "normalized_blocks": normalized,
-        "usage": response.usage_metadata.model_dump(mode="json") if response.usage_metadata else None,
+        "usage": usage_attempts[-1],
+        "usage_attempts": usage_attempts,
     }
     return detected, metadata
 
@@ -492,14 +484,16 @@ def _predict_groups(
             ),
         )
 
-    parsed, response = generate_json_with_token_retry(generate)
+    parsed, responses = generate_json_with_token_retry(generate)
     groups = parsed["groups"]
     detected = merge_candidate_groups(candidates, groups)
+    usage_attempts = _usage_attempts(responses)
     metadata = {
         "elapsed_seconds": round(time.perf_counter() - start, 3),
         "examples": [stem for stem, _, _ in examples],
         "groups": groups,
-        "usage": response.usage_metadata.model_dump(mode="json") if response.usage_metadata else None,
+        "usage": usage_attempts[-1],
+        "usage_attempts": usage_attempts,
     }
     return detected, metadata
 
