@@ -71,14 +71,16 @@
               x-show="blockMode"
               x-model="blockGranularity"
               @change="setGranularity(blockGranularity)"
-              :disabled="!!dragMode"
+              :disabled="blocksLoading || geminiBlocksLoading || !!dragMode"
               title="ブロック選択の粒度"
             >
               <option value="vertical">縦ブロック</option>
+              <option value="vertical-gemini">縦ブロック（Gemini）</option>
               <option value="horizontal">横ブロック</option>
               <option value="paragraph">段落</option>
             </select>
             <span class="muted" x-show="blocksLoading">ブロック検出中…</span>
+            <span class="muted" x-show="geminiBlocksLoading">Gemini統合中…</span>
           </div>
 
           <template x-if="!currentImage">
