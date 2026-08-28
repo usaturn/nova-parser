@@ -25,12 +25,12 @@ uv sync
 
 | 変数名 | 用途 | 必要なモード |
 |--------|------|--------------|
-| `GEMINI_API_KEY` | Google AI Studio の API キー（優先利用） | `plain` / `structured` / `structured_tsv` / `gamedata` / `schema` / `docai` / `extract` / `crop` |
+| `GEMINI_API_KEY` | Google AI Studio の API キー（優先利用） | `plain` / `structured` / `structured_tsv` / `gamedata` / `schema` / `docai` / `extract` / `crop` / `nova-parser-regional`（「縦ブロック（Gemini）」選択時のみ） |
 | `VERTEX_AI_API_KEY` | Vertex AI Express モードの API キー（AI Studio が 429 を返した時のフォールバック先） | 同上 |
 | `DOCUMENT_AI_PROCESSOR` | Document AI OCR プロセッサのリソース名 | `docai` / `docai_plain` / `extract` / `crop` の Document AI フォールバック |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Document AI 用サービスアカウントキーのパス | 任意 |
 
-Gemini バックエンドは `GEMINI_API_KEY` が設定されていれば AI Studio を優先し、レート制限（HTTP 429）を観測した時点で **同一プロセス内 sticky** に Vertex AI へ切り替えます。AI Studio キーが未設定なら起動時から `VERTEX_AI_API_KEY` のみで動作します。両方未設定の場合は起動時にエラーで停止します。
+Gemini バックエンドは `GEMINI_API_KEY` が設定されていれば AI Studio を優先し、レート制限（HTTP 429）を観測した時点で **同一プロセス内 sticky** に Vertex AI へ切り替えます。AI Studio キーが未設定なら起動時から `VERTEX_AI_API_KEY` のみで動作します。CLI の Gemini 利用モードでは両方未設定の場合は起動時にエラーで停止します。`nova-parser-regional` は通常のローカルブロック選択（縦ブロック / 横ブロック / 段落）だけなら Gemini キーも課金も不要で、「縦ブロック（Gemini）」を選んだときだけキーが必要です。
 
 Document AI の認証は `GOOGLE_APPLICATION_CREDENTIALS`、`.secrets/docai-sa.json`、ADC の順で解決されます。
 
@@ -74,6 +74,7 @@ uv run nova-parser --mode extract --parallel-files 4 --schema Output/schema.json
 uv run nova-parser --mode crop --min-card-area 0.03 --max-card-area 0.60 --padding 20 Images/sample.png
 
 # 対話的領域 OCR ツール（Cloud Vision、ブラウザで矩形を描いて OCR）
+# ブロック粒度「縦ブロック（Gemini）」は任意。選んだときだけ Gemini キーが必要
 # --output-dir 未指定時は Output/<画像ディレクトリ名>/ が自動採用される
 uv run nova-parser-regional Images/ --port 8000
 ```
@@ -105,7 +106,7 @@ Gemini が不正な JSON や想定外形状を返した場合は、調査用の 
 
 詳細な CLI オプション、ログ、出力仕様は [docs/usage.md](docs/usage.md) を参照してください。
 
-対話的に画像へ矩形を描いて Cloud Vision で OCR する Web ツール（`nova-parser-regional`）の起動方法・UI 操作・API・ローカル E2E テストは [docs/regional-ocr.md](docs/regional-ocr.md) を参照してください。
+対話的に画像へ矩形を描いて Cloud Vision で OCR する Web ツール（`nova-parser-regional`）の起動方法・UI 操作・API・ローカル E2E テストは [docs/regional-ocr.md](docs/regional-ocr.md) を参照してください。ブロック選択の「縦ブロック（Gemini）」は任意の粒度で、選択時のみ Gemini（`gemini-3.5-flash-lite`）を使います。
 
 ## 開発
 

@@ -350,6 +350,8 @@ def test_index_html_contains_block_mode_toggle(tmp_path):
     assert "toggleBlockMode" in body
     assert "blockGranularity" in body
     assert "縦ブロック" in body
+    assert "縦ブロック（Gemini）" in body
+    assert "Gemini統合中…" in body
     assert "段落" in body
 
 

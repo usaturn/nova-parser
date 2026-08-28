@@ -14,6 +14,9 @@ from typing import Callable, Sequence
 from google.genai import types
 
 from nova_parser.gemini_backend import get_client
+from nova_parser.regional_ocr import gemini_layout as _gemini_layout
+from nova_parser.regional_ocr.gemini_layout import PROMPT_CONTRACT_VERSION, generate_vertical_blocks
+from nova_parser.regional_ocr.gemini_layout_cache import example_bank_sha256
 from nova_parser.regional_ocr.layout import compute_vertical_blocks
 from nova_parser.regional_ocr.models import BlockRect
 
@@ -83,6 +86,37 @@ def evaluation_cache_fingerprint(
             {"stem": stem, "fixture": example_fixture, "image_sha256": _sha256(example_path)}
             for stem, example_fixture, example_path in examples
         ],
+    }
+    encoded = json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def production_evaluation_cache_fingerprint(
+    *,
+    method: str,
+    model: str,
+    fixture: dict[str, object],
+    image_path: Path,
+    candidates: Sequence[BlockRect],
+    source_block_count: int | None = None,
+) -> str:
+    """本番 generator の入力とプロンプト契約を識別するキャッシュ指紋を返す。
+
+    ``source_block_count`` は few-shot family を決めるマージ前段落数。
+    省略時は fixture の ``paragraph_blocks`` 件数、それも無ければ ``None``
+    （JSON ``null``）。キーは常に含め ``0`` とは別指紋にする。
+    """
+    if source_block_count is None:
+        paragraph_blocks = fixture.get("paragraph_blocks")
+        source_block_count = len(paragraph_blocks) if isinstance(paragraph_blocks, list) else None
+    manifest = {
+        "candidates": [candidate.model_dump() for candidate in candidates],
+        "example_bank_sha256": example_bank_sha256(),
+        "method": method,
+        "model": model,
+        "prompt_contract_version": PROMPT_CONTRACT_VERSION,
+        "source_block_count": source_block_count,
+        "target": {"fixture": fixture, "image_sha256": _sha256(image_path)},
     }
     encoded = json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
@@ -200,45 +234,33 @@ def groups_from_expected(
     expected: Sequence[dict[str, int]],
 ) -> list[dict[str, list[int]]]:
     """正解矩形内に中心がある候補を、重複なしのfew-shot正解groupsへ変換する。"""
-    assigned: set[int] = set()
-    groups: list[dict[str, list[int]]] = []
-    for target in expected:
-        ids: list[int] = []
-        for index, candidate in enumerate(candidates):
-            if index in assigned:
-                continue
-            center_x = candidate["x"] + candidate["width"] / 2
-            center_y = candidate["y"] + candidate["height"] / 2
-            if (
-                target["x"] <= center_x <= target["x"] + target["width"]
-                and target["y"] <= center_y <= target["y"] + target["height"]
-            ):
-                ids.append(index)
-                assigned.add(index)
-        if ids:
-            groups.append({"candidate_ids": ids})
-    return groups
+    groups = _gemini_layout.groups_from_expected(
+        [BlockRect(**candidate) for candidate in candidates],
+        [BlockRect(**target) for target in expected],
+    )
+    return [{"candidate_ids": ids} for ids in groups]
 
 
 def merge_candidate_groups(
     candidates: Sequence[dict[str, int]],
     groups: Sequence[dict[str, Sequence[int]]],
 ) -> list[dict[str, int]]:
-    """モデルが選んだ候補groupを外接矩形へ変換し、重複IDを無視する。"""
+    """モデルが選んだ候補groupを外接矩形へ変換し、重複・範囲外IDを無視する。"""
     used: set[int] = set()
-    merged: list[dict[str, int]] = []
+    normalized: list[list[int]] = []
     for group in groups:
         ids = [index for index in group["candidate_ids"] if 0 <= index < len(candidates) and index not in used]
         if not ids:
             continue
         used.update(ids)
-        blocks = [candidates[index] for index in ids]
-        left = min(block["x"] for block in blocks)
-        top = min(block["y"] for block in blocks)
-        right = max(block["x"] + block["width"] for block in blocks)
-        bottom = max(block["y"] + block["height"] for block in blocks)
-        merged.append({"x": left, "y": top, "width": right - left, "height": bottom - top})
-    return merged
+        normalized.append(ids)
+    return [
+        block.model_dump()
+        for block in _gemini_layout.merge_candidate_groups(
+            [BlockRect(**candidate) for candidate in candidates],
+            normalized,
+        )
+    ]
 
 
 def _local_candidates(fixture: dict[str, object]) -> list[dict[str, int]]:
@@ -281,9 +303,9 @@ UIで1回クリックしてOCRするための大きな長方形cropの推定で�
 - 文字を欠かさず、余白は最小限にする。結果は読み順で返す。
 - box_2dは[ymin,xmin,ymax,xmax]をページ全体0〜1000に正規化した整数にする。
 
-画像寸法: {fixture['image_width']}x{fixture['image_height']}
+画像寸法: {fixture["image_width"]}x{fixture["image_height"]}
 Cloud Visionの段落矩形（不完全な補助情報）:
-{json.dumps(fixture['paragraph_blocks'], ensure_ascii=False)}"""
+{json.dumps(fixture["paragraph_blocks"], ensure_ascii=False)}"""
 
 
 def _group_instructions(fixture: dict[str, object], candidates: Sequence[dict[str, int]]) -> str:
@@ -297,7 +319,7 @@ def _group_instructions(fixture: dict[str, object], candidates: Sequence[dict[st
 - candidate IDは全groupsを通じて最大1回だけ使用する。
 - 正しいcropを作る最小限のgroupsを読み順で返す。
 
-画像寸法: {fixture['image_width']}x{fixture['image_height']}
+画像寸法: {fixture["image_width"]}x{fixture["image_height"]}
 候補: {json.dumps(listed, ensure_ascii=False)}"""
 
 
@@ -471,6 +493,7 @@ def _predict_groups(
         )
     )
     start = time.perf_counter()
+
     def generate(max_output_tokens: int) -> object:
         return get_client().models.generate_content(
             model=model,
@@ -498,6 +521,53 @@ def _predict_groups(
     return detected, metadata
 
 
+class _UsageRecordingClient:
+    """generate_content のレスポンスだけ記録する薄い client 代理。"""
+
+    def __init__(self, client: object, sink: list[object]) -> None:
+        self._client = client
+        self._sink = sink
+        self.models = self
+
+    def generate_content(self, **kwargs: object) -> object:
+        response = self._client.models.generate_content(**kwargs)  # type: ignore[attr-defined]
+        self._sink.append(response)
+        return response
+
+
+def _predict_production(
+    fixture: dict[str, object],
+    image_path: Path,
+    candidates: Sequence[BlockRect],
+    *,
+    model: str,
+) -> tuple[list[dict[str, int]], dict[str, object]]:
+    """本番 `generate_vertical_blocks` を呼び、矩形と計測メタデータを返す。"""
+    paragraph_blocks = fixture["paragraph_blocks"]
+    if not isinstance(paragraph_blocks, list):
+        raise TypeError("paragraph_blocks must be a list")
+    responses: list[object] = []
+
+    def client_factory() -> _UsageRecordingClient:
+        return _UsageRecordingClient(get_client(), responses)
+
+    start = time.perf_counter()
+    blocks = generate_vertical_blocks(
+        image_path,
+        candidates,
+        client_factory=client_factory,  # type: ignore[arg-type]
+        model=model,
+        source_block_count=len(paragraph_blocks),
+    )
+    usage_attempts = _usage_attempts(responses)
+    metadata = {
+        "elapsed_seconds": round(time.perf_counter() - start, 3),
+        "usage": usage_attempts[-1] if usage_attempts else None,
+        "usage_attempts": usage_attempts,
+    }
+    return [block.model_dump() for block in blocks], metadata
+
+
 def _load_fixtures(fixture_dir: Path) -> dict[str, dict[str, object]]:
     return {path.stem: json.loads(path.read_text(encoding="utf-8")) for path in sorted(fixture_dir.glob("*.json"))}
 
@@ -517,23 +587,23 @@ def _aggregate(rows: Sequence[dict[str, object]], threshold: float) -> dict[str,
     }
 
 
-def _parse_args() -> argparse.Namespace:
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("sample_dir", type=Path, nargs="?", default=Path("Images/TEST"))
     parser.add_argument("--fixture-dir", type=Path, default=Path("tests/fixtures/regional_layout_test"))
     parser.add_argument("--output-dir", type=Path, default=Path("Output/TEST/layout-eval"))
     parser.add_argument(
         "--method",
-        choices=("local", "gemini-zero", "gemini-one", "gemini-group-fewshot"),
+        choices=("local", "gemini-zero", "gemini-one", "gemini-group-fewshot", "gemini-production"),
         required=True,
     )
     parser.add_argument("--model", default=_MODEL)
     parser.add_argument("--iou-threshold", type=float, default=0.5)
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
-def main() -> None:
-    args = _parse_args()
+def main(argv: Sequence[str] | None = None) -> None:
+    args = parse_args(argv)
     fixtures = _load_fixtures(args.fixture_dir)
     result_dir = args.output_dir / args.method
     result_dir.mkdir(parents=True, exist_ok=True)
@@ -544,6 +614,40 @@ def main() -> None:
         if args.method == "local":
             detected = _local_candidates(fixture)
             metadata: dict[str, object] = {}
+        elif args.method == "gemini-production":
+            image_path = args.sample_dir / str(fixture["image_name"])
+            candidates = [BlockRect(**block) for block in _local_candidates(fixture)]
+            paragraph_blocks = fixture["paragraph_blocks"]
+            if not isinstance(paragraph_blocks, list):
+                raise TypeError("paragraph_blocks must be a list")
+            fingerprint = production_evaluation_cache_fingerprint(
+                method=args.method,
+                model=args.model,
+                fixture=fixture,
+                image_path=image_path,
+                candidates=candidates,
+                source_block_count=len(paragraph_blocks),
+            )
+            cached = json.loads(result_path.read_text(encoding="utf-8")) if result_path.exists() else None
+            cached_metadata = cached.get("metadata", {}) if cached else {}
+            if cached is not None and cached_metadata.get("cache_fingerprint") == fingerprint:
+                detected = cached["detected_blocks"]
+                metadata = cached_metadata
+            else:
+                detected, call_metadata = _predict_production(
+                    fixture,
+                    image_path,
+                    candidates,
+                    model=args.model,
+                )
+                metadata = {
+                    "cache_fingerprint": fingerprint,
+                    "method": args.method,
+                    "model": args.model,
+                    "prompt_contract_version": PROMPT_CONTRACT_VERSION,
+                    "example_bank_sha256": example_bank_sha256(),
+                }
+                metadata.update(call_metadata)
         else:
             image_path = args.sample_dir / str(fixture["image_name"])
             example = None
