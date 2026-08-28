@@ -45,6 +45,21 @@ def test_build_fingerprint_covers_image_candidates_model_dims_and_bank(
     assert original != build_fingerprint(image_path, 100, 200, candidates, model="model-a")
 
 
+def test_build_fingerprint_includes_source_block_count(tmp_path: Path) -> None:
+    """同一画像・候補・モデルでも段落数（few-shot family）が違えば指紋が変わる。"""
+    image_path = tmp_path / "page.png"
+    image_path.write_bytes(b"image-v1")
+    candidates = [BlockRect(x=1, y=2, width=3, height=4)]
+
+    fp79 = build_fingerprint(image_path, 200, 100, candidates, model="model-a", source_block_count=79)
+    fp80 = build_fingerprint(image_path, 200, 100, candidates, model="model-a", source_block_count=80)
+    assert fp79 != fp80
+
+    omitted = build_fingerprint(image_path, 200, 100, candidates, model="model-a")
+    zero = build_fingerprint(image_path, 200, 100, candidates, model="model-a", source_block_count=0)
+    assert omitted != zero, "省略時の JSON null と 0 は別指紋"
+
+
 def test_cache_reuses_only_matching_fingerprint(tmp_path: Path) -> None:
     entry = GeminiLayoutCacheEntry(
         image_name="page.png",

@@ -171,7 +171,13 @@ def build_router() -> APIRouter:
                 cache_hit=False,
                 warning="Geminiへ渡せる縦ブロック候補がありませんでした",
             )
-        fingerprint = build_fingerprint(path, result.image_width, result.image_height, local_blocks)
+        fingerprint = build_fingerprint(
+            path,
+            result.image_width,
+            result.image_height,
+            local_blocks,
+            source_block_count=len(result.blocks),
+        )
         with state.gemini_layout_lock:
             cached = load_cached_blocks(state.output_dir, name, fingerprint)
             if cached is not None:

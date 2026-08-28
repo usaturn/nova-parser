@@ -98,14 +98,24 @@ def production_evaluation_cache_fingerprint(
     fixture: dict[str, object],
     image_path: Path,
     candidates: Sequence[BlockRect],
+    source_block_count: int | None = None,
 ) -> str:
-    """本番 generator の入力とプロンプト契約を識別するキャッシュ指紋を返す。"""
+    """本番 generator の入力とプロンプト契約を識別するキャッシュ指紋を返す。
+
+    ``source_block_count`` は few-shot family を決めるマージ前段落数。
+    省略時は fixture の ``paragraph_blocks`` 件数、それも無ければ ``None``
+    （JSON ``null``）。キーは常に含め ``0`` とは別指紋にする。
+    """
+    if source_block_count is None:
+        paragraph_blocks = fixture.get("paragraph_blocks")
+        source_block_count = len(paragraph_blocks) if isinstance(paragraph_blocks, list) else None
     manifest = {
         "candidates": [candidate.model_dump() for candidate in candidates],
         "example_bank_sha256": example_bank_sha256(),
         "method": method,
         "model": model,
         "prompt_contract_version": PROMPT_CONTRACT_VERSION,
+        "source_block_count": source_block_count,
         "target": {"fixture": fixture, "image_sha256": _sha256(image_path)},
     }
     encoded = json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
@@ -607,12 +617,16 @@ def main(argv: Sequence[str] | None = None) -> None:
         elif args.method == "gemini-production":
             image_path = args.sample_dir / str(fixture["image_name"])
             candidates = [BlockRect(**block) for block in _local_candidates(fixture)]
+            paragraph_blocks = fixture["paragraph_blocks"]
+            if not isinstance(paragraph_blocks, list):
+                raise TypeError("paragraph_blocks must be a list")
             fingerprint = production_evaluation_cache_fingerprint(
                 method=args.method,
                 model=args.model,
                 fixture=fixture,
                 image_path=image_path,
                 candidates=candidates,
+                source_block_count=len(paragraph_blocks),
             )
             cached = json.loads(result_path.read_text(encoding="utf-8")) if result_path.exists() else None
             cached_metadata = cached.get("metadata", {}) if cached else {}

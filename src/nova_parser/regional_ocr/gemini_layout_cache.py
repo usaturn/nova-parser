@@ -45,8 +45,13 @@ def build_fingerprint(
     candidates: Sequence[BlockRect],
     *,
     model: str = MODEL,
+    source_block_count: int | None = None,
 ) -> str:
-    """モデル入力とプロンプト契約を識別する安定したキャッシュ指紋を返す。"""
+    """モデル入力とプロンプト契約を識別する安定したキャッシュ指紋を返す。
+
+    ``source_block_count`` は few-shot family を決めるマージ前段落数。
+    省略時は ``None``（JSON ``null``）で、キーは常に含め ``0`` とは別指紋にする。
+    """
     manifest = {
         "candidates": [candidate.model_dump() for candidate in candidates],
         "example_bank_sha256": example_bank_sha256(),
@@ -55,6 +60,7 @@ def build_fingerprint(
         "image_width": image_width,
         "model": model,
         "prompt_contract_version": PROMPT_CONTRACT_VERSION,
+        "source_block_count": source_block_count,
     }
     encoded = json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()

@@ -301,6 +301,28 @@ def test_production_evaluation_cache_fingerprint_includes_contract_and_example_b
     assert bank_changed != production_evaluation_cache_fingerprint(**kwargs)
 
 
+def test_production_evaluation_cache_fingerprint_includes_source_block_count(
+    tmp_path: Path,
+) -> None:
+    """同一画像・候補・モデルでも段落数が違えば本番評価キャッシュ指紋が変わる。"""
+    image_path = tmp_path / "page.webp"
+    image_path.write_bytes(b"target-v1")
+    kwargs = {
+        "method": "gemini-production",
+        "model": "gemini-3.5-flash-lite",
+        "fixture": _fixture(),
+        "image_path": image_path,
+        "candidates": [BlockRect(x=1, y=2, width=3, height=4)],
+    }
+
+    fp79 = production_evaluation_cache_fingerprint(**kwargs, source_block_count=79)
+    fp80 = production_evaluation_cache_fingerprint(**kwargs, source_block_count=80)
+    assert fp79 != fp80
+    omitted = production_evaluation_cache_fingerprint(**kwargs)
+    zero = production_evaluation_cache_fingerprint(**kwargs, source_block_count=0)
+    assert omitted != zero, "省略時（fixture 件数）と 0 は別指紋"
+
+
 def test_gemini_production_uses_generate_vertical_blocks_and_scores(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
