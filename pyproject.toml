@@ -30,6 +30,7 @@ nova-parser-semistructure = "nova_parser.semistructure.main:main"
 [dependency-groups]
 dev = [
     "httpx>=0.28.1",
+    "opencv-python-headless>=4.13.0.92",
     "pytest>=9.0.2",
     "taskipy",
 ]
