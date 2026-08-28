@@ -138,12 +138,14 @@ def load_or_detect_paragraphs(
     original_path: Path,
     cache_dir: Path,
     detector: Callable[[Image.Image], Sequence[Mapping[str, int] | BlockRect]],
+    *,
+    force: bool = False,
 ) -> list[dict[str, int]]:
     """寸法一致のVisionキャッシュを優先し、未採取ページだけ検出する。"""
     with Image.open(original_path) as original:
         original.load()
         cached = load_blocks(cache_dir, original_path.name)
-        if cached is not None and (cached.image_width, cached.image_height) == original.size:
+        if not force and cached is not None and (cached.image_width, cached.image_height) == original.size:
             return [block.model_dump() for block in cached.blocks]
         blocks = [_block_dict(block) for block in detector(original)]
         save_blocks(
@@ -164,12 +166,14 @@ def generate_fixtures(
     fixture_dir: Path,
     cache_dir: Path,
     detector: Callable[[Image.Image], Sequence[Mapping[str, int] | BlockRect]],
+    *,
+    force_vision: bool = False,
 ) -> list[Path]:
     """発見した全ページの縦ブロック評価fixtureを生成する。"""
     fixture_dir.mkdir(parents=True, exist_ok=True)
     generated: list[Path] = []
     for page in discover_sample_pages(sample_dir):
-        paragraphs = load_or_detect_paragraphs(page.original_path, cache_dir, detector)
+        paragraphs = load_or_detect_paragraphs(page.original_path, cache_dir, detector, force=force_vision)
         fixture = fixture_from_sample(page, paragraph_blocks=paragraphs)
         output_path = fixture_dir / f"{page.stem}.json"
         output_path.write_text(json.dumps(fixture, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -186,6 +190,11 @@ def _parse_args() -> argparse.Namespace:
         default=Path("tests/fixtures/regional_layout_test"),
     )
     parser.add_argument("--cache-dir", type=Path, default=Path("Output/TEST"))
+    parser.add_argument(
+        "--force-vision",
+        action="store_true",
+        help="寸法一致のVisionキャッシュも無視して再検出する",
+    )
     return parser.parse_args()
 
 
@@ -198,7 +207,13 @@ def main() -> None:
             holder["client"] = build_vision_client()
         return detect_blocks(holder["client"], image)  # type: ignore[arg-type]
 
-    for path in generate_fixtures(args.sample_dir, args.fixture_dir, args.cache_dir, detector):
+    for path in generate_fixtures(
+        args.sample_dir,
+        args.fixture_dir,
+        args.cache_dir,
+        detector,
+        force_vision=args.force_vision,
+    ):
         print(path)
 
 

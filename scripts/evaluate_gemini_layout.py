@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import tempfile
 import time
 from pathlib import Path
 from statistics import mean
@@ -16,6 +18,7 @@ from nova_parser.regional_ocr.layout import compute_vertical_blocks
 from nova_parser.regional_ocr.models import BlockRect
 
 _MODEL = "gemini-3.5-flash-lite"
+_PROMPT_CONTRACT_VERSION = "regional-layout-eval-v1"
 _SCHEMA = {
     "type": "OBJECT",
     "properties": {
@@ -56,6 +59,53 @@ _REFERENCE_STEMS = {
     "warse_rule": ("warse_rule_p18", "warse_rule_p42"),
     "warse_start": ("warse_start_p20", "warse_start_p42"),
 }
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def evaluation_cache_fingerprint(
+    *,
+    method: str,
+    model: str,
+    fixture: dict[str, object],
+    image_path: Path,
+    examples: Sequence[tuple[str, dict[str, object], Path]],
+) -> str:
+    """モデル入力とプロンプト契約を識別する安定したキャッシュ指紋を返す。"""
+    manifest = {
+        "prompt_contract_version": _PROMPT_CONTRACT_VERSION,
+        "method": method,
+        "model": model,
+        "target": {"fixture": fixture, "image_sha256": _sha256(image_path)},
+        "examples": [
+            {"stem": stem, "fixture": example_fixture, "image_sha256": _sha256(example_path)}
+            for stem, example_fixture, example_path in examples
+        ],
+    }
+    encoded = json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _write_json_atomic(path: Path, payload: object) -> None:
+    """同じdirectory内で置換し、途中までのJSONを残さない。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            delete=False,
+        ) as temporary:
+            temporary.write(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+            temporary_path = Path(temporary.name)
+        temporary_path.replace(path)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
 
 
 def denormalize_boxes(
@@ -107,15 +157,53 @@ def _greedy_matches(
     return matches
 
 
+def _maximum_threshold_matches(
+    detected: Sequence[dict[str, int]],
+    expected: Sequence[dict[str, int]],
+    threshold: float,
+) -> list[float]:
+    """閾値以上の辺について最大数の1対1対応を返す。"""
+    adjacency = [
+        sorted(
+            (
+                (_iou(detection, target), expected_index)
+                for expected_index, target in enumerate(expected)
+                if _iou(detection, target) >= threshold
+            ),
+            reverse=True,
+        )
+        for detection in detected
+    ]
+    expected_to_detected: dict[int, int] = {}
+
+    def augment(detected_index: int, visited: set[int]) -> bool:
+        for _, expected_index in adjacency[detected_index]:
+            if expected_index in visited:
+                continue
+            visited.add(expected_index)
+            previous = expected_to_detected.get(expected_index)
+            if previous is None or augment(previous, visited):
+                expected_to_detected[expected_index] = detected_index
+                return True
+        return False
+
+    for detected_index in range(len(detected)):
+        augment(detected_index, set())
+    return [
+        _iou(detected[detected_index], expected[expected_index])
+        for expected_index, detected_index in expected_to_detected.items()
+    ]
+
+
 def score_detections(
     detected: Sequence[dict[str, int]],
     expected: Sequence[dict[str, int]],
     *,
     threshold: float,
 ) -> dict[str, int | float]:
-    """IoU降順の1対1対応で矩形precision/recallを算出する。"""
+    """閾値を満たす最大数の1対1対応で矩形precision/recallを算出する。"""
     matches = _greedy_matches(detected, expected)
-    true_positive = sum(iou >= threshold for iou in matches)
+    true_positive = len(_maximum_threshold_matches(detected, expected, threshold))
     return {
         "detected": len(detected),
         "expected": len(expected),
@@ -252,13 +340,17 @@ def _example_for(stem: str, fixtures: dict[str, dict[str, object]]) -> tuple[str
 
 
 def _image_part(path: Path) -> types.Part:
-    mime_type = "image/png" if path.suffix.lower() == ".png" else "image/webp"
+    mime_types = {".png": "image/png", ".webp": "image/webp", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}
+    try:
+        mime_type = mime_types[path.suffix.lower()]
+    except KeyError as error:
+        raise ValueError(f"unsupported image type: {path.suffix}") from error
     return types.Part.from_bytes(data=path.read_bytes(), mime_type=mime_type)
 
 
-def generate_boxes_with_token_retry(
+def generate_json_with_token_retry(
     generate: Callable[[int], object],
-) -> tuple[list[list[int]], object]:
+) -> tuple[dict[str, object], object]:
     """出力上限でJSONが切れた場合だけ上限を増やして1回再試行する。"""
     limits = (2048, 8192)
     for index, max_output_tokens in enumerate(limits):
@@ -271,8 +363,16 @@ def generate_boxes_with_token_retry(
             if finish_reason == types.FinishReason.MAX_TOKENS and index + 1 < len(limits):
                 continue
             raise
-        return [item["box_2d"] for item in parsed["blocks"]], response
+        return parsed, response
     raise RuntimeError("unreachable")
+
+
+def generate_boxes_with_token_retry(
+    generate: Callable[[int], object],
+) -> tuple[list[list[int]], object]:
+    """矩形レスポンスを、出力上限時の再試行付きで生成する。"""
+    parsed, response = generate_json_with_token_retry(generate)
+    return [item["box_2d"] for item in parsed["blocks"]], response  # type: ignore[index]
 
 
 def _predict(
@@ -379,18 +479,21 @@ def _predict_groups(
         )
     )
     start = time.perf_counter()
-    response = get_client().models.generate_content(
-        model=model,
-        contents=contents,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_json_schema=_GROUP_SCHEMA,
-            thinking_config=types.ThinkingConfig(thinking_level="minimal"),
-            temperature=0,
-            max_output_tokens=2048,
-        ),
-    )
-    groups = json.loads(response.text)["groups"]
+    def generate(max_output_tokens: int) -> object:
+        return get_client().models.generate_content(
+            model=model,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_json_schema=_GROUP_SCHEMA,
+                thinking_config=types.ThinkingConfig(thinking_level="minimal"),
+                temperature=0,
+                max_output_tokens=max_output_tokens,
+            ),
+        )
+
+    parsed, response = generate_json_with_token_retry(generate)
+    groups = parsed["groups"]
     detected = merge_candidate_groups(candidates, groups)
     metadata = {
         "elapsed_seconds": round(time.perf_counter() - start, 3),
@@ -447,19 +550,16 @@ def main() -> None:
         if args.method == "local":
             detected = _local_candidates(fixture)
             metadata: dict[str, object] = {}
-        elif result_path.exists():
-            cached = json.loads(result_path.read_text(encoding="utf-8"))
-            detected = cached["detected_blocks"]
-            metadata = cached.get("metadata", {})
         else:
             image_path = args.sample_dir / str(fixture["image_name"])
             example = None
+            fingerprint_examples: list[tuple[str, dict[str, object], Path]] = []
             if args.method == "gemini-one":
                 example_stem, example_fixture = _example_for(stem, fixtures)
-                example = (example_fixture, args.sample_dir / str(example_fixture["image_name"]))
-                metadata = {"example": example_stem}
-            else:
-                metadata = {}
+                example_path = args.sample_dir / str(example_fixture["image_name"])
+                example = (example_fixture, example_path)
+                fingerprint_examples = [(example_stem, example_fixture, example_path)]
+            examples: list[tuple[str, dict[str, object], Path]] = []
             if args.method == "gemini-group-fewshot":
                 reference_stems = _REFERENCE_STEMS[_family(stem)]
                 examples = [
@@ -471,30 +571,50 @@ def main() -> None:
                     for reference_stem in reference_stems
                     if reference_stem != stem
                 ]
-                detected, call_metadata = _predict_groups(
-                    fixture,
-                    image_path,
-                    model=args.model,
-                    examples=examples,
-                )
+                fingerprint_examples = examples
+            fingerprint = evaluation_cache_fingerprint(
+                method=args.method,
+                model=args.model,
+                fixture=fixture,
+                image_path=image_path,
+                examples=fingerprint_examples,
+            )
+            cached = json.loads(result_path.read_text(encoding="utf-8")) if result_path.exists() else None
+            cached_metadata = cached.get("metadata", {}) if cached else {}
+            if cached is not None and cached_metadata.get("cache_fingerprint") == fingerprint:
+                detected = cached["detected_blocks"]
+                metadata = cached_metadata
             else:
-                detected, call_metadata = _predict(
-                    fixture,
-                    image_path,
-                    model=args.model,
-                    example=example,
-                )
-            metadata.update(call_metadata)
+                metadata = {
+                    "cache_fingerprint": fingerprint,
+                    "method": args.method,
+                    "model": args.model,
+                    "prompt_contract_version": _PROMPT_CONTRACT_VERSION,
+                }
+                if args.method == "gemini-one":
+                    metadata["example"] = fingerprint_examples[0][0]
+                if args.method == "gemini-group-fewshot":
+                    detected, call_metadata = _predict_groups(
+                        fixture,
+                        image_path,
+                        model=args.model,
+                        examples=examples,
+                    )
+                else:
+                    detected, call_metadata = _predict(
+                        fixture,
+                        image_path,
+                        model=args.model,
+                        example=example,
+                    )
+                metadata.update(call_metadata)
         score = score_detections(detected, expected, threshold=args.iou_threshold)
         row = {"stem": stem, **score, "detected_blocks": detected, "metadata": metadata}
-        result_path.write_text(json.dumps(row, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        _write_json_atomic(result_path, row)
         rows.append(row)
         print(f"{stem}: TP={score['true_positive']}/{score['expected']} detected={score['detected']}", flush=True)
     summary = {"method": args.method, "model": args.model, **_aggregate(rows, args.iou_threshold)}
-    (result_dir / "summary.json").write_text(
-        json.dumps(summary, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
+    _write_json_atomic(result_dir / "summary.json", summary)
     print(json.dumps(summary, ensure_ascii=False), flush=True)
 
 

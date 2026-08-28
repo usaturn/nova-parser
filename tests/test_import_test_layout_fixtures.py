@@ -104,6 +104,25 @@ def test_load_or_detect_paragraphs_reuses_dimension_matching_cache(tmp_path: Pat
     assert calls == 1
 
 
+def test_load_or_detect_paragraphs_can_force_vision_refresh(tmp_path: Path) -> None:
+    source = _make_source()
+    original_path = tmp_path / "page.png"
+    source.save(original_path)
+    calls = 0
+
+    def detector(image: Image.Image) -> list[dict[str, int]]:
+        nonlocal calls
+        calls += 1
+        return [{"x": calls, "y": 20, "width": 30, "height": 40}]
+
+    first = load_or_detect_paragraphs(original_path, tmp_path / "cache", detector)
+    refreshed = load_or_detect_paragraphs(original_path, tmp_path / "cache", detector, force=True)
+
+    assert first[0]["x"] == 1
+    assert refreshed[0]["x"] == 2
+    assert calls == 2
+
+
 def test_generate_fixtures_writes_one_json_per_discovered_page(tmp_path: Path) -> None:
     sample_dir = tmp_path / "samples"
     fixture_dir = tmp_path / "fixtures"
