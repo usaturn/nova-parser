@@ -1,16 +1,17 @@
-"""Gemini による縦ブロック候補グループ化の純粋ロジックと few-shot 例読込。
-
-Vision SDK・FastAPI・Gemini API へ依存しない。モデル呼び出しは後続タスクで追加する。
-"""
+"""Gemini による縦ブロック候補グループ化とモデル呼び出し。"""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Literal, Sequence
+from typing import Callable, Literal, Sequence
 
+from google import genai
+from google.genai import types
+from PIL import Image
 from pydantic import BaseModel
 
+from nova_parser import gemini_backend
 from nova_parser.regional_ocr.models import BlockRect
 
 MODEL = "gemini-3.5-flash-lite"
@@ -18,6 +19,32 @@ PROMPT_CONTRACT_VERSION = "regional-vertical-groups-v1"
 LayoutFamily = Literal["portrait", "landscape_sparse", "landscape_dense"]
 
 _EXAMPLES_PATH = Path(__file__).resolve().parent / "data" / "gemini_vertical_examples.json"
+_IMAGE_MIME_TYPES = {
+    ".png": "image/png",
+    ".webp": "image/webp",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+}
+GROUP_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "groups": {
+            "type": "ARRAY",
+            "items": {
+                "type": "OBJECT",
+                "properties": {"candidate_ids": {"type": "ARRAY", "items": {"type": "INTEGER"}}},
+                "required": ["candidate_ids"],
+            },
+        }
+    },
+    "required": ["groups"],
+}
+_OUTPUT_TOKEN_LIMITS = (2048, 8192)
+_GENERATION_FAILED = "Gemini vertical layout generation failed"
+
+
+class GeminiLayoutError(RuntimeError):
+    """Gemini 縦ブロック生成が失敗した場合の例外。"""
 
 
 class GeminiLayoutExample(BaseModel):
@@ -115,3 +142,145 @@ def load_examples(family: LayoutFamily) -> list[GeminiLayoutExample]:
     payload = json.loads(_EXAMPLES_PATH.read_text(encoding="utf-8"))
     examples = [GeminiLayoutExample.model_validate(item) for item in payload["examples"]]
     return [example for example in examples if example.family == family]
+
+
+def _candidate_payload(candidates: Sequence[BlockRect]) -> list[dict[str, int]]:
+    return [{"id": index, **candidate.model_dump()} for index, candidate in enumerate(candidates)]
+
+
+def _group_instructions(image_width: int, image_height: int, candidates: Sequence[BlockRect]) -> str:
+    listed = _candidate_payload(candidates)
+    return (
+        "日本語書籍ページのOCR用「縦ブロック」を作るため、ローカル候補を統合・除外してください。\n"
+        "これは段落抽出ではなく、UIで1回クリックしてOCRする大きな長方形cropです。\n"
+        "\n"
+        "- 同じ視覚列で縦に続く候補は、途中に空白や見出しがあっても同じgroupへ統合する。\n"
+        "- 左右の独立列、欄外注釈、別カード、上下段だけを分ける。\n"
+        "- ヘッダー、フッター、ページ番号、罫線、図だけの候補は除外する。\n"
+        "- candidate IDは全groupsを通じて最大1回だけ使用する。\n"
+        "- 正しいcropを作る最小限のgroupsを読み順で返す。\n"
+        "\n"
+        f"画像寸法: {image_width}x{image_height}\n"
+        f"候補: {json.dumps(listed, ensure_ascii=False)}"
+    )
+
+
+def _groups_json(groups: Sequence[Sequence[int]]) -> str:
+    return json.dumps({"groups": [{"candidate_ids": list(group)} for group in groups]}, ensure_ascii=False)
+
+
+def _image_size(path: Path) -> tuple[int, int]:
+    with Image.open(path) as image:
+        return image.size
+
+
+def _image_part(path: Path) -> types.Part:
+    mime_type = _IMAGE_MIME_TYPES[path.suffix.lower()]
+    return types.Part.from_bytes(data=path.read_bytes(), mime_type=mime_type)
+
+
+def _build_contents(
+    image_path: Path,
+    image_width: int,
+    image_height: int,
+    candidates: Sequence[BlockRect],
+    family: LayoutFamily,
+) -> list[types.Content]:
+    contents: list[types.Content] = []
+    for example in load_examples(family):
+        contents.append(
+            types.Content(
+                role="user",
+                parts=[
+                    types.Part.from_text(
+                        text="これは正解例です。この統合粒度を学習してください。\n"
+                        + _group_instructions(example.image_width, example.image_height, example.candidates)
+                    )
+                ],
+            )
+        )
+        contents.append(
+            types.Content(
+                role="model",
+                parts=[types.Part.from_text(text=_groups_json(example.groups))],
+            )
+        )
+    contents.append(
+        types.Content(
+            role="user",
+            parts=[
+                types.Part.from_text(
+                    text="上の正解例から最も近いレイアウトの粒度を適用してください。\n"
+                    + _group_instructions(image_width, image_height, candidates)
+                ),
+                _image_part(image_path),
+            ],
+        )
+    )
+    return contents
+
+
+def _generate_content(
+    client_factory: Callable[[], genai.Client],
+    model: str,
+    contents: list[types.Content],
+    max_output_tokens: int,
+) -> object:
+    return gemini_backend.call_with_backend_fallback(
+        lambda: client_factory().models.generate_content(
+            model=model,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_json_schema=GROUP_SCHEMA,
+                thinking_config=types.ThinkingConfig(thinking_level=types.ThinkingLevel.MINIMAL),
+                temperature=0,
+                max_output_tokens=max_output_tokens,
+            ),
+        )
+    )
+
+
+def _parse_json_with_token_retry(generate: Callable[[int], object]) -> object:
+    """JSON が MAX_TOKENS で切れた場合だけ出力上限を増やして1回再試行する。"""
+    for index, max_output_tokens in enumerate(_OUTPUT_TOKEN_LIMITS):
+        response = generate(max_output_tokens)
+        try:
+            return json.loads(response.text)  # type: ignore[attr-defined]
+        except json.JSONDecodeError:
+            finish_candidates = getattr(response, "candidates", None) or []
+            finish_reason = finish_candidates[0].finish_reason if finish_candidates else None
+            if finish_reason == types.FinishReason.MAX_TOKENS and index + 1 < len(_OUTPUT_TOKEN_LIMITS):
+                continue
+            raise
+    raise RuntimeError("unreachable")
+
+
+def generate_vertical_blocks(
+    image_path: Path,
+    candidates: Sequence[BlockRect],
+    *,
+    client_factory: Callable[[], genai.Client] = gemini_backend.get_client,
+    model: str = MODEL,
+    source_block_count: int | None = None,
+) -> list[BlockRect]:
+    """対象画像と縦ブロック候補を Gemini で group 化し、外接矩形を返す。
+
+    ``source_block_count`` は ``classify_layout`` に渡す Cloud Vision 段落数。
+    省略時は ``len(candidates)`` を使う。
+    """
+    try:
+        image_width, image_height = _image_size(image_path)
+        family = classify_layout(
+            image_width,
+            image_height,
+            source_block_count if source_block_count is not None else len(candidates),
+        )
+        contents = _build_contents(image_path, image_width, image_height, candidates, family)
+        parsed = _parse_json_with_token_retry(
+            lambda max_output_tokens: _generate_content(client_factory, model, contents, max_output_tokens)
+        )
+        groups = validate_candidate_groups(parsed, len(candidates))
+        return merge_candidate_groups(candidates, groups)
+    except Exception as error:
+        raise GeminiLayoutError(_GENERATION_FAILED) from error
