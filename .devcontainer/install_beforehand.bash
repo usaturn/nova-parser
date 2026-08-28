@@ -20,13 +20,13 @@ echo "Installing Codex CLI..."
 yarn global add @openai/codex@latest
 echo "Installing Grok Build..."
 curl -fsSL https://x.ai/cli/install.sh | bash
-echo "Installing AntiGravity CLI..."
-curl -fsSL https://antigravity.google/cli/install.sh | bash
-echo "Installing OpenCode..."
-curl -fsSL https://opencode.ai/install | bash
-export PATH="${HOME}/.opencode/bin:$PATH"
-echo "Installing Qwen Code..."
-curl -fsSL https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen-standalone.sh | bash
+echo "Installing pi..."
+npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+# --approve は project trust の確認を自動承認する（.agents/skills があると対話プロンプトで止まる）
+pi install --approve npm:pi-subagents
+pi install --approve git:github.com/obra/superpowers
+pi install --approve npm:pi-mcp-adapter
+uv run python scripts/add_pi_skills_setting.py
 
 YARN_GLOBAL_BIN="$(yarn global bin 2>/dev/null || true)"
 if [ -n "$YARN_GLOBAL_BIN" ] && [ -d "$YARN_GLOBAL_BIN" ]; then

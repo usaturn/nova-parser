@@ -7,17 +7,8 @@ mkdir -p \
   "${HOME}/.claude" \
   "${HOME}/.grok" \
   "${HOME}/.config/gh" \
-  "${HOME}/.config/glab-cli" \
-  "${HOME}/.config/gcloud" \
-  "${HOME}/.config/opencode" \
-  "${HOME}/.local/share/opencode" \
-  "${HOME}/.qwen" \
-  "${HOME}/.gemini/config"
-
+  "${HOME}/.config/gcloud"
 
 # Create required files
 touch \
-  "${HOME}/.claude.json" \
-  "${HOME}/.local/share/opencode/auth.json" \
-  "${HOME}/.qwen/settings.json" \
-  "${HOME}/.gemini/config/mcp_config.json"
+  "${HOME}/.claude.json"
