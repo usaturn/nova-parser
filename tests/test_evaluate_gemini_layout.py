@@ -1,18 +1,28 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from google.genai import types
 
+import nova_parser.regional_ocr.gemini_layout as gemini_layout
+from nova_parser.regional_ocr.gemini_layout import PROMPT_CONTRACT_VERSION
+from nova_parser.regional_ocr.models import BlockRect
 from scripts.evaluate_gemini_layout import (
+    _PROMPT_CONTRACT_VERSION,
     _image_part,
     denormalize_boxes,
     evaluation_cache_fingerprint,
     generate_boxes_with_token_retry,
     generate_json_with_token_retry,
+    generate_vertical_blocks,
     groups_from_expected,
+    main,
     merge_candidate_groups,
+    parse_args,
+    production_evaluation_cache_fingerprint,
     score_detections,
 )
 
@@ -228,3 +238,146 @@ def test_merge_candidate_groups_returns_group_bounding_boxes() -> None:
         {"x": 8, "y": 20, "width": 35, "height": 80},
         {"x": 200, "y": 10, "width": 50, "height": 60},
     ]
+
+
+def test_parse_args_accepts_gemini_production() -> None:
+    args = parse_args(["Images/TEST", "--method", "gemini-production"])
+
+    assert args.method == "gemini-production"
+    assert args.sample_dir == Path("Images/TEST")
+    assert args.iou_threshold == 0.5
+
+
+@pytest.mark.parametrize(
+    "method",
+    ("local", "gemini-zero", "gemini-one", "gemini-group-fewshot"),
+)
+def test_parse_args_keeps_comparison_methods(method: str) -> None:
+    args = parse_args(["Images/TEST", "--method", method])
+
+    assert args.method == method
+
+
+def test_gemini_production_binds_production_generate_vertical_blocks() -> None:
+    assert generate_vertical_blocks is gemini_layout.generate_vertical_blocks
+
+
+def test_production_evaluation_cache_fingerprint_includes_contract_and_example_bank(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import scripts.evaluate_gemini_layout as evaluator
+
+    image_path = tmp_path / "page.webp"
+    image_path.write_bytes(b"target-v1")
+    fixture = _fixture()
+    candidates = [BlockRect(x=1, y=2, width=3, height=4)]
+    kwargs = {
+        "method": "gemini-production",
+        "model": "gemini-3.5-flash-lite",
+        "fixture": fixture,
+        "image_path": image_path,
+        "candidates": candidates,
+    }
+
+    original = production_evaluation_cache_fingerprint(**kwargs)
+    eval_fingerprint = evaluation_cache_fingerprint(
+        method="gemini-production",
+        model="gemini-3.5-flash-lite",
+        fixture=fixture,
+        image_path=image_path,
+        examples=[],
+    )
+
+    assert original == production_evaluation_cache_fingerprint(**kwargs)
+    assert original != eval_fingerprint
+    assert PROMPT_CONTRACT_VERSION == "regional-vertical-groups-v1"
+    assert PROMPT_CONTRACT_VERSION != _PROMPT_CONTRACT_VERSION
+
+    monkeypatch.setattr(evaluator, "example_bank_sha256", lambda: "bank-changed")
+    bank_changed = production_evaluation_cache_fingerprint(**kwargs)
+    assert original != bank_changed
+    monkeypatch.setattr(evaluator, "PROMPT_CONTRACT_VERSION", "regional-layout-eval-v1")
+    assert bank_changed != production_evaluation_cache_fingerprint(**kwargs)
+
+
+def test_gemini_production_uses_generate_vertical_blocks_and_scores(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import scripts.evaluate_gemini_layout as evaluator
+
+    fixture_dir = tmp_path / "fixtures"
+    sample_dir = tmp_path / "images"
+    output_dir = tmp_path / "out"
+    fixture_dir.mkdir()
+    sample_dir.mkdir()
+    image_path = sample_dir / "page.webp"
+    image_path.write_bytes(b"webp-bytes")
+    fixture = {
+        "image_name": "page.webp",
+        "image_width": 100,
+        "image_height": 200,
+        "paragraph_blocks": [{"x": 10, "y": 20, "width": 30, "height": 40}],
+        "expected_blocks": [{"x": 5, "y": 5, "width": 50, "height": 80}],
+    }
+    (fixture_dir / "page.json").write_text(json.dumps(fixture), encoding="utf-8")
+    expected_candidates = [BlockRect(**block) for block in evaluator._local_candidates(fixture)]
+    returned = [BlockRect(x=5, y=5, width=50, height=80)]
+    calls: list[dict[str, object]] = []
+
+    def fake_generate(
+        image_path_arg: Path,
+        candidates: object,
+        **kwargs: object,
+    ) -> list[BlockRect]:
+        calls.append(
+            {
+                "image_path": image_path_arg,
+                "candidates": list(candidates),  # type: ignore[arg-type]
+                "source_block_count": kwargs.get("source_block_count"),
+            }
+        )
+        return returned
+
+    def reject_eval_rebuild(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("gemini-production must not rebuild evaluator prompts or merge")
+
+    monkeypatch.setattr(evaluator, "generate_vertical_blocks", fake_generate)
+    monkeypatch.setattr(evaluator, "_predict", reject_eval_rebuild)
+    monkeypatch.setattr(evaluator, "_predict_groups", reject_eval_rebuild)
+    monkeypatch.setattr(evaluator, "_instructions", reject_eval_rebuild)
+    monkeypatch.setattr(evaluator, "_group_instructions", reject_eval_rebuild)
+    monkeypatch.setattr(evaluator, "merge_candidate_groups", reject_eval_rebuild)
+
+    main(
+        [
+            str(sample_dir),
+            "--method",
+            "gemini-production",
+            "--fixture-dir",
+            str(fixture_dir),
+            "--output-dir",
+            str(output_dir),
+            "--iou-threshold",
+            "0.5",
+        ]
+    )
+
+    assert calls == [
+        {
+            "image_path": image_path,
+            "candidates": expected_candidates,
+            "source_block_count": len(fixture["paragraph_blocks"]),
+        }
+    ]
+    result = json.loads((output_dir / "gemini-production" / "page.json").read_text(encoding="utf-8"))
+    assert result["detected_blocks"] == [block.model_dump() for block in returned]
+    assert result["true_positive"] == 1
+    assert result["precision"] == 1.0
+    assert result["recall"] == 1.0
+    assert result["metadata"]["prompt_contract_version"] == PROMPT_CONTRACT_VERSION
+    assert result["metadata"]["prompt_contract_version"] != _PROMPT_CONTRACT_VERSION
+    summary = json.loads((output_dir / "gemini-production" / "summary.json").read_text(encoding="utf-8"))
+    assert summary["pages"] == 1
+    assert summary["true_positive"] == 1
