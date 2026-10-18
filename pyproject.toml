@@ -31,6 +31,7 @@ dev = [
     "httpx>=0.28.1",
     "opencv-python-headless>=4.13.0.92",
     "pytest>=9.0.2",
+    "ruff>=0.17.1",
     "taskipy",
 ]
 
@@ -62,4 +63,4 @@ fixable = ["ALL"]
 line-ending = "auto"
 
 [tool.taskipy.tasks]
-ruff = "uvx ruff check --fix --unsafe-fixes src/ tests/ && uvx ruff format src/ tests/"
+ruff = "ruff check --fix --unsafe-fixes src/ tests/ && ruff format src/ tests/"

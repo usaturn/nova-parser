@@ -131,8 +131,6 @@ trpg_data/
 trpg_rule/
 reviews/
 
-uv.lock
-
 *.pdf
 
 .secrets/
