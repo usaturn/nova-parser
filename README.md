@@ -110,10 +110,26 @@ Gemini が不正な JSON や想定外形状を返した場合は、調査用の 
 
 ## 開発
 
+依存は `uv.lock` で固定しています。開発用の依存（pytest・ruff など）も含めて、lock のとおりに入れます。
+
+```bash
+uv sync --locked --all-groups
+```
+
+次のコマンドは、lock の確認、依存の同期、ruff の lint と format の検査、tests、依存の脆弱性の検査を順に実行し、最初に失敗したところで止まります。追跡しているファイルは書き換えません。
+
+```bash
+./scripts/ci/verify.sh
+```
+
+個別に実行する場合:
+
 ```bash
 # tests
 uv run pytest -q
 
-# lint & format
+# lint & format（ファイルを書き換える）
 uv run task ruff
 ```
+
+依存を変えたら `uv.lock` も一緒に commit します。`uv add` は `uv.lock` も更新します。`pyproject.toml` を直接編集したときは `uv lock` を実行します。
