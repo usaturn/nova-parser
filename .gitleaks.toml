@@ -1,0 +1,7 @@
+# 公開 CI の secret-scan ジョブと、開発環境の push 前の検査が base ブランチから読む Gitleaks の設定。
+# PR から検査を緩められないよう、どちらも常に base の本ファイルを --config で渡す。
+# 組み込みの規則をそのまま使い、allowlist は足さない。.gitleaksignore も使わない。
+title = "nova-parser public"
+
+[extend]
+useDefault = true
