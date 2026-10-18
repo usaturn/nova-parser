@@ -1,6 +1,0 @@
-interface:
-  display_name: "Commit Detailed"
-  short_description: "ブランチとPRを確認してstaged changesだけを詳細commit"
-  default_prompt: "$commit-detailed を使い、ブランチとPRの安全条件を確認して、すでにstagedのファイルだけを詳細メッセージ付きでcommitしてください。"
-policy:
-  allow_implicit_invocation: true
