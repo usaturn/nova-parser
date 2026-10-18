@@ -1,0 +1,54 @@
+name: ci
+
+# PR と main で scripts/ci/verify.sh（lock の確認・依存の同期・ruff・pytest・uv audit）を実行する。
+# 検査の手順と順序は verify.sh だけで定め、ローカルと同じ検査にする。
+# テストは Fake のクライアントを使うので、secret は使わない。
+on:
+  # main 以外の branch（作業用の ref など）の作成・削除では動かさない
+  push:
+    branches: [main]
+  # base は絞らない。main 以外に向けた PR でも検証の結果を出す
+  pull_request:
+  workflow_dispatch:
+
+permissions: {}
+
+# PR は新しい push で古い実行を取り消す。main の push は取り消さず、commit ごとの結果を残す。
+# pull_request の github.ref は refs/pull/<番号>/merge なので、別の PR や main の実行とは group が分かれる
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  verify:
+    name: verify
+    runs-on: ubuntu-latest
+    # ローカルでは 1 分かからない。止まったときに既定の 6 時間を待たない
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # tests/test_regional_app_js.py は node が無いと skip する。CI でも skip させず、
+      # 開発環境と同じ主版で実行する
+      - name: Set up Node.js 24
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+
+      # verify.sh は Python を呼び出し元の環境で選ぶ。python-version は UV_PYTHON を設定する。
+      # uv の版は固定する。verify.sh が使う uv audit は experimental で、uv lock --check の結果も
+      # uv の版に左右されるため、最新に追従すると変更の無い main でも落ちうる。
+      # 版を上げるときは、このファイルを変える PR で確かめる
+      - name: Set up uv and Python 3.14
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.13.1"
+          python-version: "3.14"
+
+      - name: Run scripts/ci/verify.sh
+        run: ./scripts/ci/verify.sh
